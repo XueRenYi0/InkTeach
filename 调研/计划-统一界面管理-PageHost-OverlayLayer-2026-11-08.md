@@ -361,7 +361,7 @@ IOverlayLayer
 
 ### Phase 1：PageHost + 设置试点（2～3 周）
 
-> 适配补充：**A0（Action/ID/Focus/Popup）+ A1（PageHost + 设置 476/44/24）已于 2026-11-08 落地**；**A2.0 文字宿主**也已落地（`--textinputaudit` 6 项）。`--settingsaudit` 27 项、`--pageaudit` 16 项全绿；下一步 A2.1 `ApiSettingsPage`。
+> 适配补充：**A0+A1 已于 2026-11-08 落地；A2.0 文字宿主、A2.1 API 内嵌页也已落地**（`--settingsaudit` 37、`--pageaudit` 16、`--textinputaudit` 6 全绿）。下一步 A2.2：迁移日志备注/重命名，删旧 API 独立窗。
 
 - `PageHost` / `Page` / `PageFrame` / `LegacyPage`；
 - `SettingsPage` 包当前设置页（连续滚动/双指/滚轮/滚动条原样）；

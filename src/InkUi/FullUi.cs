@@ -464,6 +464,7 @@ public sealed partial class FullUi : IOverlayUi
             if (_moreH.Running) return true;         // 面板换页时的高度动画
             if (_ai.Running) return true;            // AI 面板开合
             if (_settingsFlingActive) return true;   // 设置页双指惯性
+            if (_apiFetching) return true;           // AI 服务页：等模型列表返回
             // 按住清空、或者刚按完那一下的闪光：都要继续给帧，否则进度条不走、
             // 也永远到不了 0.8 秒那个点（"按住不放"这条全靠帧在推进）。
             if (ActionHolding) return true;
@@ -710,6 +711,7 @@ public sealed partial class FullUi : IOverlayUi
         // 色带 / 取色器只是底部临时展开，**不影响收藏弹窗**。
         _host.Commands.SetUiOverlay(_moreOpen || _aiOpen || _more.Running || _ai.Running);
         StepSettingsFling();             // 设置页双指纵滑的惯性（和白板同一套衰减）
+        StepApiFetch();                  // AI 服务页：模型列表异步返回后回到 UI 线程
         UpdatePeek();                    // 贴边隐藏该不该收
         UpdateRail();                    // 色线该不该长成设置条
         UpdateBandAction();              // "按住清空"够 0.8 秒没有
@@ -4021,7 +4023,7 @@ public sealed partial class FullUi : IOverlayUi
                 break;
 
             case Row.AiApi:
-                _host.Commands.OpenAiApiSettings();
+                OpenApiSettingsPage();
                 break;
 
             // 墨迹三条偏好（原来在「墨迹」页）：只写 `ui.*`，
@@ -4146,7 +4148,7 @@ public sealed partial class FullUi : IOverlayUi
     private string _hubHint = "";         // 启动器状态行的临时提示（点置灰格/预留格时写）
 
     /// <summary>面板两页：启动器（主页）/ 设置子页。**没有页签**——底栏与返回箭头导航。</summary>
-    private enum MorePage { Home = 0, Settings = 1, Help = 2, Log = 3 }
+    private enum MorePage { Home = 0, Settings = 1, Help = 2, Log = 3, Api = 4 }
 
     // 尺度（逻辑像素）。tile 76、底栏同款；面板宽 = min(640, 55% 工作宽)。
     // 规矩见《规范-功能卡.md》§二/§3.4。
@@ -4243,6 +4245,7 @@ public sealed partial class FullUi : IOverlayUi
         MorePage.Settings => "more.settings",
         MorePage.Help => "more.help",
         MorePage.Log => "more.log",
+        MorePage.Api => "more.api",
         _ => "more.home",
     };
 
@@ -4254,6 +4257,7 @@ public sealed partial class FullUi : IOverlayUi
             MorePage.Settings => "设置",
             MorePage.Help => "使用说明",
             MorePage.Log => "日志与反馈",
+            MorePage.Api => "AI 服务",
             _ => "更多",
         },
         PreferredSize = new PageSize(0f, page switch
@@ -4261,6 +4265,7 @@ public sealed partial class FullUi : IOverlayUi
             MorePage.Settings => MoreSettingsH(),
             MorePage.Help => MoreHelpH(),
             MorePage.Log => MoreLogH(),
+            MorePage.Api => MoreApiH(),
             _ => MoreHomeH(),
         }),
         CanBack = page != MorePage.Home,
@@ -4293,18 +4298,28 @@ public sealed partial class FullUi : IOverlayUi
 
         LegacyPage next = CreateLegacyPage(page);
         if (current == null) _pageHost.Open(next, animate: false);
-        else if (current == "more.home" && push) _pageHost.Push(next);
+        else if (push) _pageHost.Push(next);
         else _pageHost.Replace(next);
     }
+
+    private static MorePage MorePageFromId(string id) => id switch
+    {
+        "more.settings" => MorePage.Settings,
+        "more.help" => MorePage.Help,
+        "more.log" => MorePage.Log,
+        "more.api" => MorePage.Api,
+        _ => MorePage.Home,
+    };
 
     private void GoBackMorePage()
     {
         EnsurePageHost();
+        _host?.TextInput?.Commit();       // 返回前先把正在编辑的字段提交
         if (_pageHost != null && _pageHost.Count > 1)
             _pageHost.Pop();
         else
             _pageHost?.Open(CreateLegacyPage(MorePage.Home), animate: false);
-        _morePage = MorePage.Home;
+        _morePage = MorePageFromId(_pageHost?.Current?.Id);
     }
 
     // ---- 日志与反馈页 --------------------------------------------------------
@@ -4998,6 +5013,9 @@ public sealed partial class FullUi : IOverlayUi
             return MoreHitInside;
         }
 
+        if (_morePage == MorePage.Api)
+            return ApiHitAt(x, y);
+
         if (_morePage == MorePage.Settings)
         {
             int nav = SettingsNavAt(x, y);
@@ -5178,6 +5196,7 @@ public sealed partial class FullUi : IOverlayUi
     private void CloseMore()
     {
         if (!_moreOpen) return;
+        _host?.TextInput?.Commit();
         if (_host?.State.LogNoteEditing == true) _host.Commands.EndLogNoteEdit(true);
         _moreOpen = false;
         _pageHost?.Close(animate: false);
@@ -5236,6 +5255,7 @@ public sealed partial class FullUi : IOverlayUi
             MorePage.Home => "更多",
             MorePage.Settings => "设置",
             MorePage.Log => "日志与反馈",
+            MorePage.Api => "AI 服务",
             _ => "使用说明",
         };
         bool showBack = _morePage != MorePage.Home;
@@ -5254,6 +5274,7 @@ public sealed partial class FullUi : IOverlayUi
         if (_morePage == MorePage.Home) DrawMoreHome(ctx);
         else if (_morePage == MorePage.Settings) DrawMoreSettings(ctx);
         else if (_morePage == MorePage.Log) DrawLogPage(ctx);
+        else if (_morePage == MorePage.Api) DrawApiPage(ctx);
         else DrawHelpPage(ctx);
     }
 
@@ -6078,6 +6099,11 @@ public sealed partial class FullUi : IOverlayUi
                 Invalidate();
                 return true;
             }
+            if (_morePage == MorePage.Api)
+            {
+                ApiPointerDown(hit, p.X, p.Y);
+                return true;
+            }
             if (hit >= MoreHitSettingsNav && hit < MoreHitSettingsNav + SettingsCatNames.Length)
             {
                 var cat = (SettingsCategory)(hit - MoreHitSettingsNav);
@@ -6290,6 +6316,11 @@ public sealed partial class FullUi : IOverlayUi
         if (_moreOpen)
         {
             if (SettingsTouchMove(e, p)) return true;
+            if (_morePage == MorePage.Api)
+            {
+                ApiPointerMove(p.X, p.Y);
+                return true;
+            }
             if (_settingsScrollDrag && _morePage == MorePage.Settings)
             {
                 DragSettingsScrollbar(p.Y);
@@ -6494,6 +6525,7 @@ public sealed partial class FullUi : IOverlayUi
         if (_moreOpen)
         {
             if (SettingsTouchUp(e)) return true;
+            if (_morePage == MorePage.Api) { _morePress = -1; return true; }
             if (_settingsScrollDrag)
             {
                 _settingsScrollDrag = false;

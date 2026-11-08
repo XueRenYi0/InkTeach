@@ -242,6 +242,50 @@ internal static class SettingsAudit
             Check("指针级双指纵滑", moved > 1f, $"scroll={moved:F0}");
         }
 
+        // 8) AI 服务页：假数据打开、字段/按钮命中、离屏出图（不写 ai.json、不联网）
+        {
+            ui.OpenApiPageForTest();
+            Check("AI 服务页打开",
+                  ui.MorePageIdForTest == "more.api" && ui.ApiProviderNameForTest == "DeepSeek 官方",
+                  $"page={ui.MorePageIdForTest} provider={ui.ApiProviderNameForTest}");
+            var baseRect = ui.ApiFieldRectForTest(1);
+            int baseHit = ui.ApiHitAtForTest(
+                (baseRect.MinX + baseRect.MaxX) * 0.5f, (baseRect.MinY + baseRect.MaxY) * 0.5f);
+            var saveRect = ui.ApiBottomRectForTest(0);
+            int saveHit = ui.ApiHitAtForTest(
+                (saveRect.MinX + saveRect.MaxX) * 0.5f, (saveRect.MinY + saveRect.MaxY) * 0.5f);
+            Check("AI 服务字段/按钮可命中", baseHit == 401 && saveHit == 405,
+                  $"base={baseHit} save={saveHit}");
+
+            ui.ApiClickForTest(400);            // 打开服务商菜单
+            var itemRect = ui.ApiProviderItemRectForTest(1);
+            int itemHit = ui.ApiHitAtForTest(
+                (itemRect.MinX + itemRect.MaxX) * 0.5f, (itemRect.MinY + itemRect.MaxY) * 0.5f);
+            Check("AI 服务菜单可命中", itemHit == 421, $"item={itemHit}");
+            Check("AI 服务菜单离屏绘制", RenderSettingsPng(ui, "settings-api-menu.png"),
+                  "reports/settings-api-menu.png");
+            ui.ApiClickForTest(421);            // 选第二个服务商（自定义）
+            Check("AI 服务切换服务商",
+                  ui.ApiSelectedProviderIdForTest == "custom" && ui.ApiProviderNameForTest == "自定义",
+                  $"id={ui.ApiSelectedProviderIdForTest} name={ui.ApiProviderNameForTest}");
+
+            ui.ApiClickForTest(405);            // 保存
+            Check("AI 服务保存", ui.ApiStatusForTest.Contains("已保存"), ui.ApiStatusForTest);
+            ui.ApiClickForTest(404);            // 获取模型
+            ui.PrepareFrame();
+            Check("AI 服务获取模型", ui.ApiStatusForTest.Contains("已获取"), ui.ApiStatusForTest);
+            ui.ApiClickForTest(407);            // 删除：第一次只确认
+            ui.ApiClickForTest(407);            // 第二次真删
+            Check("AI 服务删除", ui.ApiStatusForTest.Contains("已删除"), ui.ApiStatusForTest);
+
+            Check("AI 服务页离屏绘制", RenderSettingsPng(ui, "settings-api.png"),
+                  "reports/settings-api.png");
+            ui.BackMorePageForTest();
+            Check("AI 服务返回设置", ui.MorePageIdForTest == "more.settings",
+                  $"page={ui.MorePageIdForTest}");
+            ui.OpenSettingsPageForTest();
+        }
+
         // 5) 每一行都能执行一次（不弹窗：命令全走 no-op 代理）
         // 先出两张图（顶部/底部），放在执行之前——执行会切深色主题，图会变。
         ui.SettingsScrollToForTest(0);
@@ -330,6 +374,7 @@ internal static class SettingsAudit
         public Vortice.Direct2D1.ID2D1Factory1 PathFactory => Gfx.D2DFactory;
         public double NowMs { get; set; }
         public int DocumentVersion => 0;
+        public IAiApiUiService AiApi { get; } = new AuditAiApi();
         public void InvalidateUi() { }
         public string GetPref(string key) => _prefs.TryGetValue(key, out var v) ? v : null;
         public void SetPref(string key, string value)
@@ -339,6 +384,50 @@ internal static class SettingsAudit
         }
         public string KeyText(KeyAction action) => null;
         public void SetFloatingTheme(UiTheme theme) { }
+    }
+
+    /// <summary>API 页自检用的假数据；不写 ai.json、不联网。</summary>
+    private sealed class AuditAiApi : IAiApiUiService
+    {
+        private readonly AiApiSettingsSnapshot _snapshot = new()
+        {
+            ActiveId = "deepseek-official",
+            Providers =
+            {
+                new AiApiProviderInfo
+                {
+                    Id = "deepseek-official", Name = "DeepSeek 官方",
+                    BaseUrl = "https://api.deepseek.com", Key = "sk-audit",
+                    Model = "deepseek-flash", Builtin = true,
+                },
+                new AiApiProviderInfo
+                {
+                    Id = "custom", Name = "自定义",
+                    BaseUrl = "https://example.com/v1", Key = "sk-custom",
+                    Model = "vl-model", Builtin = false,
+                },
+            },
+        };
+
+        public AiApiSettingsSnapshot Load() => _snapshot;
+
+        public bool Save(AiApiSaveRequest request, out string error, out string activeId)
+        {
+            error = "";
+            activeId = request?.Id ?? "";
+            return true;
+        }
+
+        public bool Delete(string id, out string error)
+        {
+            error = "";
+            return true;
+        }
+
+        public Task<AiApiModelsResult> FetchModelsAsync(string baseUrl, string key)
+            => Task.FromResult(new AiApiModelsResult { Ok = true, Models = { "vl-model", "deepseek-flash" } });
+
+        public void OpenKeyUrl(string id) { }
     }
 
     /// <summary>IEngineCommands 太大，用反射代理全部返回默认值；只为让 ActivateRow 不碰真引擎。</summary>

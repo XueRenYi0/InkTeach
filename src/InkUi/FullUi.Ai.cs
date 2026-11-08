@@ -80,7 +80,12 @@ public sealed partial class FullUi
     {
         if (_aiMenuOpen) { CloseAiMenu(); return true; }
         if (_aiOpen) { CloseAiPanel(); return true; }
-        if (_moreOpen) { CloseMore(); return true; }
+        if (_moreOpen)
+        {
+            if (_morePage == MorePage.Api) { GoBackMorePage(); return true; }
+            CloseMore();
+            return true;
+        }
         if (_penPickerOpen) { ClosePenColorPicker(); return true; }
         return false;
     }

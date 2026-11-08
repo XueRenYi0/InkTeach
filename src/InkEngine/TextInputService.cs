@@ -80,8 +80,11 @@ public partial class InkEngine
     {
         private readonly InkEngine _engine;
         private IntPtr _hwnd;
+        private IntPtr _hostHwnd;
         private IntPtr _oldProc;
+        private IntPtr _hostOldProc;
         private Native.WndProcDelegate _wndProc;
+        private Native.WndProcDelegate _hostWndProc;
         private IntPtr _font;
         private IntPtr _brush;
         private uint _brushColor;
@@ -126,7 +129,7 @@ public partial class InkEngine
 
             if (request.Visible)
             {
-                Native.ShowWindow(_hwnd, Native.SW_SHOW);
+                Native.ShowWindow(_hostHwnd, Native.SW_SHOW);
                 if (request.Activate) FocusHost();
             }
         }
@@ -168,14 +171,15 @@ public partial class InkEngine
 
         public void Dispose()
         {
-            if (_hwnd != IntPtr.Zero)
+            if (_hostHwnd != IntPtr.Zero)
             {
                 bool oldHiding = _hiding;
                 _hiding = true;
-                Native.DestroyWindow(_hwnd);
+                Native.DestroyWindow(_hostHwnd);   // 会连同 EDIT 子窗一起销毁
                 _hiding = oldHiding;
             }
             _hwnd = IntPtr.Zero;
+            _hostHwnd = IntPtr.Zero;
             _editing = false;
             _request = null;
             if (_font != IntPtr.Zero) Native.DeleteObject(_font);
@@ -186,7 +190,7 @@ public partial class InkEngine
 
         private void EnsureWindow(TextInputMode mode)
         {
-            if (_hwnd != IntPtr.Zero)
+            if (_hostHwnd != IntPtr.Zero)
             {
                 // EDIT 的 ES_MULTILINE 不能运行时切换；模式变了就重建。
                 bool wantMulti = (_style & 0x0004L /*ES_MULTILINE*/) != 0;
@@ -194,26 +198,42 @@ public partial class InkEngine
                 // DestroyWindow 会发 WM_KILLFOCUS；先挡住，否则会把新请求当成“失焦提交”。
                 bool oldHiding = _hiding;
                 _hiding = true;
-                Native.DestroyWindow(_hwnd);
+                Native.DestroyWindow(_hostHwnd);
                 _hwnd = IntPtr.Zero;
+                _hostHwnd = IntPtr.Zero;
                 _hiding = oldHiding;
             }
 
-            long style = 0x80000000L /*WS_POPUP*/;
+            long style = 0L;
             if (mode == TextInputMode.MultiLine)
-                style |= 0x0004L /*ES_MULTILINE*/ | 0x0010L /*ES_WANTRETURN*/
-                         | 0x00200000L /*WS_VSCROLL*/;
+                style |= 0x0004L /*ES_MULTILINE*/ | 0x0010L /*ES_WANTRETURN*/ | 0x00200000L /*WS_VSCROLL*/;
             else
                 style |= 0x0080L /*ES_AUTOHSCROLL*/;
 
             _style = style;
-            _hwnd = Native.CreateWindowEx(
+            _hostWndProc = HostWndProc;
+            _hostHwnd = Native.CreateWindowEx(
                 Native.WS_EX_TOPMOST | Native.WS_EX_TOOLWINDOW,
-                "EDIT", "InkTeachTextInput", style, 0, 0, 1, 1,
-                IntPtr.Zero, IntPtr.Zero, _engine._hInstance, IntPtr.Zero);
+                "STATIC", "InkTeachTextInputHost", 0x80000000L /*WS_POPUP*/,
+                0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, _engine._hInstance, IntPtr.Zero);
+            if (_hostHwnd == IntPtr.Zero)
+            {
+                Console.WriteLine("文字输入容器创建失败: " + Marshal.GetLastWin32Error());
+                return;
+            }
+            _hostOldProc = Native.SetWindowLongPtr(
+                _hostHwnd, Native.GWLP_WNDPROC,
+                Marshal.GetFunctionPointerForDelegate(_hostWndProc));
+
+            _hwnd = Native.CreateWindowEx(
+                0, "EDIT", "InkTeachTextInput",
+                style | 0x40000000L /*WS_CHILD*/ | 0x10000000L /*WS_VISIBLE*/,
+                0, 0, 1, 1, _hostHwnd, IntPtr.Zero, _engine._hInstance, IntPtr.Zero);
             if (_hwnd == IntPtr.Zero)
             {
-                Console.WriteLine("文字输入宿主创建失败: " + Marshal.GetLastWin32Error());
+                Console.WriteLine("文字输入 EDIT 创建失败: " + Marshal.GetLastWin32Error());
+                Native.DestroyWindow(_hostHwnd);
+                _hostHwnd = IntPtr.Zero;
                 return;
             }
 
@@ -258,13 +278,14 @@ public partial class InkEngine
 
         private void Position(RectF logical)
         {
-            if (_hwnd == IntPtr.Zero) return;
+            if (_hostHwnd == IntPtr.Zero || _hwnd == IntPtr.Zero) return;
             float u = _engine.UiUnit;
             int x = (int)MathF.Floor(logical.MinX * u);
             int y = (int)MathF.Floor(logical.MinY * u);
             int w = Math.Max(24, (int)MathF.Ceiling((logical.MaxX - logical.MinX) * u));
             int h = Math.Max(24, (int)MathF.Ceiling((logical.MaxY - logical.MinY) * u));
-            Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, x, y, w, h, 0);
+            Native.SetWindowPos(_hostHwnd, Native.HWND_TOPMOST, x, y, w, h, 0);
+            Native.SetWindowPos(_hwnd, IntPtr.Zero, 0, 0, w, h, Native.SWP_NOZORDER);
         }
 
         private string ReadText()
@@ -282,13 +303,14 @@ public partial class InkEngine
             _hiding = true;
             _editing = false;
             _request = null;
-            if (_hwnd != IntPtr.Zero) Native.ShowWindow(_hwnd, Native.SW_HIDE);
+            if (_hostHwnd != IntPtr.Zero) Native.ShowWindow(_hostHwnd, Native.SW_HIDE);
             RestoreFocus();
             _hiding = false;
         }
 
         private void FocusHost()
         {
+            if (_hostHwnd == IntPtr.Zero) return;
             IntPtr main = _engine._windows.Count > 0 ? _engine._windows[0].Hwnd : IntPtr.Zero;
             _mainNoActivate = false;
             if (main != IntPtr.Zero)
@@ -310,16 +332,16 @@ public partial class InkEngine
             if (fgTid != 0 && fgTid != myTid)
             {
                 Native.AttachThreadInput(myTid, fgTid, true);
-                Native.SetForegroundWindow(_hwnd);
+                Native.SetForegroundWindow(_hostHwnd);
                 Native.SetFocus(_hwnd);
                 Native.AttachThreadInput(myTid, fgTid, false);
             }
             else
             {
-                Native.SetForegroundWindow(_hwnd);
+                Native.SetForegroundWindow(_hostHwnd);
                 Native.SetFocus(_hwnd);
             }
-            Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
+            Native.SetWindowPos(_hostHwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
         }
 
@@ -338,6 +360,38 @@ public partial class InkEngine
             }
             if (_engine.KeyboardMode && _engine._windows.Count > 0)
                 Native.SetFocus(_engine._windows[0].Hwnd);
+        }
+
+        private IntPtr HostWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+        {
+            switch (msg)
+            {
+                case Native.WM_CTLCOLOREDIT:
+                {
+                    IntPtr hdc = wParam;
+                    Native.SetTextColor(hdc, _textColor);
+                    Native.SetBkColor(hdc, _brushColor);
+                    return _brush != IntPtr.Zero ? _brush : Native.GetStockObject(0 /*WHITE_BRUSH*/);
+                }
+                case Native.WM_ERASEBKGND:
+                    return new IntPtr(1);
+                case Native.WM_SIZE:
+                {
+                    int w = (int)(lParam.ToInt64() & 0xFFFF);
+                    int h = (int)((lParam.ToInt64() >> 16) & 0xFFFF);
+                    if (_hwnd != IntPtr.Zero)
+                        Native.SetWindowPos(_hwnd, IntPtr.Zero, 0, 0,
+                            Math.Max(1, w), Math.Max(1, h), Native.SWP_NOZORDER);
+                    return IntPtr.Zero;
+                }
+                case 0x0007 /*WM_SETFOCUS*/:
+                    if (_hwnd != IntPtr.Zero) Native.SetFocus(_hwnd);
+                    return IntPtr.Zero;
+                case Native.WM_CLOSE:
+                    Cancel();
+                    return IntPtr.Zero;
+            }
+            return Native.CallWindowProc(_hostOldProc, hWnd, msg, wParam, lParam);
         }
 
         private IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)

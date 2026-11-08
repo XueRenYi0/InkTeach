@@ -232,6 +232,12 @@ public interface IUiHost
     /// </summary>
     ITextInputService TextInput => null;
 
+    /// <summary>
+    /// 设置页「AI 服务」的数据入口。默认 null；新页面通过它 Load/Save/Delete/Fetch，
+    /// 不直接碰 OcrProviders/OcrClient 内部类型。
+    /// </summary>
+    IAiApiUiService AiApi => null;
+
     /// <summary>引擎的单调时钟（毫秒）。动画与"几秒后自动隐藏"用这个。</summary>
     double NowMs { get; }
 

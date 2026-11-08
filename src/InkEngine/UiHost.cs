@@ -84,6 +84,8 @@ internal sealed class UiHost : IUiHost, IEngineCommands
 
     public ITextInputService TextInput => _engine.TextInput;
 
+    public IAiApiUiService AiApi => _engine.AiApi;
+
     public double NowMs => _engine.NowMs;
 
     public int DocumentVersion => _engine.Doc.Version;
