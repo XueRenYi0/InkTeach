@@ -364,6 +364,63 @@ public partial class InkEngine
         Doc.CommitInteractive(act);
     }
 
+    /// <summary>下面板的「背景」档：透明 / 白纸 / 板色 / 浅色。</summary>
+    internal void SetSelectedTextBackgroundFromUi(int preset)
+    {
+        if (Doc.Selected.Count != 1) { NotifyUiStateChanged(); return; }
+        var s = Doc.Selected[0];
+        var box = s.TextBox;
+        if (s.Kind != StrokeKind.TextBox || box == null) { NotifyUiStateChanged(); return; }
+
+        bool card = box.Rich || box.Role == TextBoxRole.AiQuestion;
+        var board = BoardColor;
+        var fill = TextBoxBackground.Fill(preset, board, card);
+        var border = TextBoxBackground.Border(preset, board, card);
+        if (TextBoxBackground.Same(fill, box.Fill) && TextBoxBackground.Same(border, box.Border))
+        {
+            NotifyUiStateChanged();
+            return;
+        }
+
+        var oldBounds = s.PaddedBounds;
+        var beforeFill = box.Fill;
+        var beforeBorder = box.Border;
+        float beforeRadius = box.Radius;
+        var beforeInk = box.Ink;
+        var beforeColor = s.Color;
+
+        box.Fill = fill;
+        box.Border = border;
+        if (!card)
+        {
+            // 底色和字色太接近时自动换字色；透明背景按下面的板色/纸色算。
+            Color4 under = box.Paper
+                ? new Color4(1f, 1f, 1f, 1f)
+                : (Doc.PageKey == InkDocument.BoardPageKey ? BoardColor : DocPaperColor);
+            Color4 effective = fill.A > 0.01f ? TextBoxBackground.Over(fill, under) : under;
+            float bl = TextBoxBackground.Luma(effective);
+            float il = TextBoxBackground.Luma(box.Ink);
+            if (MathF.Abs(bl - il) < 0.35f)
+            {
+                var ink = TextBoxBackground.InkFor(effective);
+                box.Ink = ink;
+                s.Color = ink;
+            }
+        }
+        box.InvalidateLayout();
+        s.SyncTextBoxBounds();
+        Doc.RefreshStrokeGrid(s);
+        Doc.Dirty.Add(oldBounds);
+        Doc.Dirty.Add(s.PaddedBounds);
+        Doc.StructureChangedSinceRender = true;
+        Doc.Version++;
+        _dirty = true;
+        NotifyUiStateChanged();
+
+        Doc.CommitInteractive(new TextBoxBackgroundAction(
+            s, beforeFill, beforeBorder, beforeRadius, beforeInk, beforeColor, oldBounds));
+    }
+
     internal void CommitTextEditFromUi()
     {
         if (_textBoxEditing) EndTextBoxEditFromUi(true);
@@ -578,6 +635,8 @@ public partial class InkEngine
         data.LineSpacing = TextBoxFaces.ClampSpacing(lineSpacing);
         data.Ink = ink;
         data.Paper = true;
+        data.Fill = TextBoxBackground.Fill(1, BoardColor, card: true);
+        data.Border = TextBoxBackground.Border(1, BoardColor, card: true);
         data.AutoWidth = false;
         data.AutoHeight = true;
         if (lineColors != null)
@@ -1449,7 +1508,7 @@ public partial class InkEngine
                     new IntPtr(Native.ECOOP_AND), new IntPtr(~Native.ECO_AUTOHSCROLL));
             }
         }
-        if (_windowlessText == null)
+        if (UseWindowlessTextBox && _windowlessText == null)
             Console.WriteLine("[文本框] 无窗口 RichEdit 失败，回退 RichEdit 窗口：" + WindowlessTextControl.LastError);
         _textBoxEditOwner = this;
         _textBoxEditWndProc = TextBoxEditWndProc;
@@ -1640,9 +1699,16 @@ public partial class InkEngine
         float textLuma = 0.299f * c.R + 0.587f * c.G + 0.114f * c.B;
         // 纸面文本框就是白纸；透明文本框才融进板色/页色。
         // 这样 PPT/PDF/图片上不再突然出现一块 0.44 灰/0.95 白灰。
-        Color4 basis = s.TextBox.Paper
-            ? new Color4(1f, 1f, 1f, 0.98f)
+        Color4 under = s.TextBox.Paper
+            ? new Color4(1f, 1f, 1f, 1f)
             : (Doc.PageKey == InkDocument.BoardPageKey ? BoardColor : DocPaperColor);
+        Color4 basis;
+        if (s.TextBox.Fill.A >= 0.999f)
+            basis = s.TextBox.Fill;
+        else if (s.TextBox.Fill.A > 0.01f)
+            basis = TextBoxBackground.Over(s.TextBox.Fill, under);
+        else
+            basis = under;
         float basisLuma = 0.299f * basis.R + 0.587f * basis.G + 0.114f * basis.B;
         // 字和底几乎同色才临时换一块高对比底，否则连字都看不见。
         Color4 bg = MathF.Abs(textLuma - basisLuma) < 0.28f

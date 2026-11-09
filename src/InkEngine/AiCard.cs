@@ -56,6 +56,12 @@ internal sealed class TextBoxData
     public bool ReadOnly;
     /// <summary>纸面背景：识别结果放到文本框时打开，避免叠在原板书上看不清。</summary>
     public bool Paper;
+    /// <summary>背景填充（含 alpha，0 = 透明）。</summary>
+    public Color4 Fill = new(0f, 0f, 0f, 0f);
+    /// <summary>边框（含 alpha，0 = 无边框）。</summary>
+    public Color4 Border = new(0f, 0f, 0f, 0f);
+    /// <summary>圆角（逻辑像素，乘 Unit 后是画布像素）。</summary>
+    public float Radius = 12f;
     public string Title = "";
     public string Meta = "";
     public string Text = "";
@@ -427,6 +433,8 @@ internal sealed class TextBoxData
             ShowAnswers = ShowAnswers, Width = Width, Height = Height,
             AutoHeight = AutoHeight, AutoWidth = AutoWidth, FontSize = FontSize,
             Face = Face, LineSpacing = LineSpacing, Paper = Paper,
+            Rich = Rich, ReadOnly = ReadOnly,
+            Fill = Fill, Border = Border, Radius = Radius,
             Unit = Unit, Ink = Ink, ScrollY = ScrollY,
         };
         foreach (var color in LineColors) c.LineColors.Add(color);
@@ -460,6 +468,8 @@ internal sealed class TextBoxData
             Width = 560f * MathF.Max(0.5f, unit),
             AutoHeight = true,
             FontSize = 14.5f,
+            Fill = new Color4(1f, 1f, 1f, 0.98f),
+            Border = new Color4(0.86f, 0.88f, 0.91f, 1f),
         };
         c.Questions.Add(new TextBoxQuestion
         {

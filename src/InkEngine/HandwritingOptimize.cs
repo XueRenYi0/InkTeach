@@ -437,6 +437,8 @@ public partial class InkEngine
             card.TextBox.Rich = true;
             card.TextBox.ReadOnly = true;
             card.TextBox.Paper = true;
+            card.TextBox.Fill = TextBoxBackground.Fill(1, BoardColor, card: true);
+            card.TextBox.Border = TextBoxBackground.Border(1, BoardColor, card: true);
             card.TextBox.FitToContent(card.TextBox.Width, 0f, fitWidth: false);
             card.SyncTextBoxBounds();
         }

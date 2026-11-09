@@ -1,4 +1,5 @@
 using System.Numerics;
+using Vortice.Mathematics;
 
 namespace InkEngine;
 
@@ -407,6 +408,58 @@ internal sealed class TextBoxStyleAction : EditAction
         box.InvalidateLayout();
         _stroke.SetTextBoxRect(origin, w, h);
         if (auto) _stroke.SyncTextBoxBounds();
+        doc.RefreshStrokeGrid(_stroke);
+    }
+}
+
+/// <summary>背景样式（Fill / Border / 圆角）+ 自动字色的撤销动作。</summary>
+internal sealed class TextBoxBackgroundAction : EditAction
+{
+    private readonly Stroke _stroke;
+    private readonly Color4 _beforeFill, _beforeBorder, _beforeInk, _beforeColor;
+    private readonly Color4 _afterFill, _afterBorder, _afterInk, _afterColor;
+    private readonly float _beforeRadius, _afterRadius;
+    private readonly RectF _beforeBounds, _afterBounds;
+
+    public TextBoxBackgroundAction(Stroke s, Color4 beforeFill, Color4 beforeBorder,
+                                   float beforeRadius, Color4 beforeInk, Color4 beforeColor,
+                                   RectF beforeBounds)
+    {
+        _stroke = s;
+        _beforeFill = beforeFill; _beforeBorder = beforeBorder;
+        _beforeRadius = beforeRadius; _beforeInk = beforeInk; _beforeColor = beforeColor;
+        _beforeBounds = beforeBounds;
+        var box = s.TextBox;
+        _afterFill = box?.Fill ?? beforeFill;
+        _afterBorder = box?.Border ?? beforeBorder;
+        _afterRadius = box?.Radius ?? beforeRadius;
+        _afterInk = box?.Ink ?? beforeInk;
+        _afterColor = s.Color;
+        _afterBounds = s.PaddedBounds;
+    }
+
+    public override int HeldStrokes => 1;
+    public override RectF AffectedBefore => _beforeBounds;
+    public override RectF AffectedAfter => _afterBounds;
+
+    public override void Undo(InkDocument doc) => Apply(doc, _beforeFill, _beforeBorder,
+        _beforeRadius, _beforeInk, _beforeColor);
+
+    public override void Redo(InkDocument doc) => Apply(doc, _afterFill, _afterBorder,
+        _afterRadius, _afterInk, _afterColor);
+
+    private void Apply(InkDocument doc, Color4 fill, Color4 border, float radius,
+                       Color4 ink, Color4 color)
+    {
+        var box = _stroke.TextBox;
+        if (box == null) return;
+        box.Fill = fill;
+        box.Border = border;
+        box.Radius = radius;
+        box.Ink = ink;
+        _stroke.Color = color;
+        box.InvalidateLayout();
+        _stroke.SyncTextBoxBounds();
         doc.RefreshStrokeGrid(_stroke);
     }
 }

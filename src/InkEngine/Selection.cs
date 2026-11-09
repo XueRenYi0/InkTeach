@@ -2819,8 +2819,8 @@ internal static class SelectionHandles
         float w = (FloatPadLogical * 2 + StyleLabelWidthLogical
                  + StyleColumns * StyleCellWidthLogical
                  + (StyleColumns - 1) * FloatGapLogical) * dpi;
-        float h = (FloatPadLogical * 2 + 3 * StyleRowHeightLogical
-                 + 2 * FloatGapLogical) * dpi;
+        float h = (FloatPadLogical * 2 + 4 * StyleRowHeightLogical
+                 + 3 * FloatGapLogical) * dpi;
         var bar = BarRect(sel, dpi, visible, TextBarButtonCount);
         var btn = BarButtonRectIn(bar, BarIndexOf(SelBarButton.FontSize, true), dpi);
 
@@ -2868,6 +2868,10 @@ internal static class SelectionHandles
     /// <summary>行距档（第三行，5 格）。</summary>
     public static RectF FontPanelSpacingRect(int i, in RectF sel, float dpi, in RectF visible)
         => StyleCellRect(2, i, sel, dpi, visible);
+
+    /// <summary>背景档（第四行：透明 / 白纸 / 板色 / 浅色）。</summary>
+    public static RectF FontPanelBackgroundRect(int i, in RectF sel, float dpi, in RectF visible)
+        => StyleCellRect(3, i, sel, dpi, visible);
 
     /// <summary>
     /// "挂在操作条某个按钮下面的小面板"——层级和导出共用这一份几何：
@@ -3000,6 +3004,8 @@ internal static class SelectionHandles
         FaceBase = 40,
         /// <summary>行距档（+ i，0..4）。</summary>
         SpacingBase = 60,
+        /// <summary>背景档（+ i，0..3）。</summary>
+        BackgroundBase = 80,
     }
 
     /// <summary>
@@ -3047,6 +3053,9 @@ internal static class SelectionHandles
             for (int i = 0; i < FontSpacingCount; i++)
                 if (FontPanelSpacingRect(i, sel, dpi, visible).Contains(x, y))
                     return (PanelPart)((int)PanelPart.SpacingBase + i);
+            for (int i = 0; i < TextBoxBackground.PresetCount; i++)
+                if (FontPanelBackgroundRect(i, sel, dpi, visible).Contains(x, y))
+                    return (PanelPart)((int)PanelPart.BackgroundBase + i);
         }
         return PanelPart.None;
     }

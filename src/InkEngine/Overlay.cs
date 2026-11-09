@@ -565,8 +565,6 @@ internal sealed partial class OverlayWindow : IDisposable
     private readonly Dictionary<(int Px, bool Bold, bool Center, bool Italic, string Family), IDWriteTextFormat> _aiFormats = new();
 
     /// <summary>题卡配色（纸面始终浅色，保证黑题/红解析在深色主题下也读得清）。</summary>
-    private static readonly Color4 AiPaper = new(0.999f, 0.995f, 0.972f, 0.985f);
-    private static readonly Color4 AiBorder = new(0.83f, 0.85f, 0.89f, 1f);
     private static readonly Color4 AiBlack = new(0.12f, 0.14f, 0.18f, 1f);
     private static readonly Color4 AiRed = new(0.72f, 0.16f, 0.16f, 1f);
     private static readonly Color4 AiMuted = new(0.42f, 0.45f, 0.50f, 1f);
@@ -2498,17 +2496,12 @@ internal sealed partial class OverlayWindow : IDisposable
         float u = MathF.Max(0.5f, card.Unit);
         Vector2 o = new(s.Points[0].X, s.Points[0].Y);
         var rect = new Vortice.RawRectF(o.X, o.Y, o.X + card.Width, o.Y + card.LayoutHeight);
-        float r = 12f * u;
+        Color4 fill = card.Fill;
+        Color4 border = card.Border;
+        float r = Math.Clamp(card.Radius, 0f, 40f) * u;
         var rr = new RoundedRectangle(rect, r, r);
-
-        // 纸面 + 细边。普通文本框默认**透明**，直接融进白板/PPT；
-        // AI 题卡默认浅色纸面，保证黑题红解析在任何背景上都读得清。
-        if (card.Role == TextBoxRole.AiQuestion || card.Paper)
-        {
-            _ctx.FillRoundedRectangle(rr, Brush(card.Paper && card.Role != TextBoxRole.AiQuestion
-                ? new Color4(1f, 1f, 1f, 0.98f) : AiPaper));
-            _ctx.DrawRoundedRectangle(rr, Brush(AiBorder), 1f);
-        }
+        if (fill.A > 0.001f) _ctx.FillRoundedRectangle(rr, Brush(fill));
+        if (border.A > 0.001f) _ctx.DrawRoundedRectangle(rr, Brush(border), 1f);
 
         // 卡片内容裁剪在里面：公式/长英文万一超宽也不会画到卡片外。
         _ctx.PushAxisAlignedClip(rect, AntialiasMode.Aliased);
@@ -6538,14 +6531,15 @@ internal sealed partial class OverlayWindow : IDisposable
 
         float pad = SelectionHandles.FloatPadLogical * dpi;
         var labelFmt = AiTextFormat(12f * dpi, false, false);
-        string[] rowLabels = { "字体", "字号", "行距" };
-        for (int row = 0; row < 3; row++)
+        string[] rowLabels = { "字体", "字号", "行距", "背景" };
+        for (int row = 0; row < 4; row++)
         {
             var first = row switch
             {
                 0 => SelectionHandles.FontPanelFaceRect(0, sel, dpi, app.FurnitureViewport),
                 1 => SelectionHandles.FontPanelCellRect(0, sel, dpi, app.FurnitureViewport),
-                _ => SelectionHandles.FontPanelSpacingRect(0, sel, dpi, app.FurnitureViewport),
+                2 => SelectionHandles.FontPanelSpacingRect(0, sel, dpi, app.FurnitureViewport),
+                _ => SelectionHandles.FontPanelBackgroundRect(0, sel, dpi, app.FurnitureViewport),
             };
             _ctx.DrawText(rowLabels[row], labelFmt,
                 new Rect(p.MinX + pad, first.MinY, SelectionHandles.StyleLabelWidthLogical * dpi,
@@ -6587,6 +6581,55 @@ internal sealed partial class OverlayWindow : IDisposable
             bool active = MathF.Abs(currentSpacing - TextBoxFaces.LineSpacings[i]) < 0.01f;
             Chip(cell, TextBoxFaces.LineSpacings[i].ToString("0.0"), active,
                  AiTextFormat(14f * dpi, true, true));
+        }
+
+        // 背景：透明 / 白纸 / 板色 / 浅色。填色块直接画出来，文字颜色按底色反差。
+        bool card = box != null && (box.Rich || box.Role == TextBoxRole.AiQuestion);
+        var board = app.BoardColor;
+        var bgFmt = AiTextFormat(12f * dpi, true, true);
+        for (int i = 0; i < TextBoxBackground.PresetCount; i++)
+        {
+            var cell = SelectionHandles.FontPanelBackgroundRect(i, sel, dpi, app.FurnitureViewport);
+            var fill = TextBoxBackground.Fill(i, board, card);
+            var border = TextBoxBackground.Border(i, board, card);
+            bool active = box != null
+                          && TextBoxBackground.Same(fill, box.Fill)
+                          && TextBoxBackground.Same(border, box.Border);
+            float cr = 8f * dpi;
+            var rf = new Vortice.RawRectF(cell.MinX, cell.MinY, cell.MaxX, cell.MaxY);
+            if (fill.A > 0.01f)
+            {
+                _scratch.Color = fill;
+                _ctx.FillRoundedRectangle(new RoundedRectangle(rf, cr, cr), _scratch);
+            }
+            else
+            {
+                _scratch.Color = th.Hover;
+                _ctx.FillRoundedRectangle(new RoundedRectangle(rf, cr, cr), _scratch);
+                _scratch.Color = new Color4(th.TextMuted.R, th.TextMuted.G, th.TextMuted.B, 0.55f);
+                _ctx.DrawLine(new Vector2(cell.MinX + 6f * dpi, cell.MaxY - 6f * dpi),
+                              new Vector2(cell.MaxX - 6f * dpi, cell.MinY + 6f * dpi),
+                              _scratch, 1.2f * dpi);
+            }
+            _scratch.Color = border.A > 0.01f
+                ? border
+                : new Color4(th.TextMuted.R, th.TextMuted.G, th.TextMuted.B, 0.35f);
+            _ctx.DrawRoundedRectangle(new RoundedRectangle(rf, cr, cr), _scratch, 1f * dpi);
+            if (active)
+            {
+                _scratch.Color = th.ActiveBg;
+                _ctx.DrawRoundedRectangle(new RoundedRectangle(
+                    new Vortice.RawRectF(cell.MinX - 1.5f * dpi, cell.MinY - 1.5f * dpi,
+                                         cell.MaxX + 1.5f * dpi, cell.MaxY + 1.5f * dpi),
+                    cr + 1.5f * dpi, cr + 1.5f * dpi), _scratch, 2f * dpi);
+            }
+            Color4 label = fill.A > 0.01f
+                ? (TextBoxBackground.Luma(fill) > 0.55f
+                    ? new Color4(0.12f, 0.14f, 0.18f, 1f)
+                    : new Color4(0.98f, 0.98f, 0.98f, 1f))
+                : th.Text;
+            _ctx.DrawText(TextBoxBackground.Names[i], bgFmt,
+                new Rect(cell.MinX, cell.MinY, cell.MaxX - cell.MinX, cell.MaxY - cell.MinY), Brush(label));
         }
     }
 

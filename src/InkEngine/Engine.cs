@@ -16812,6 +16812,14 @@ public partial class InkEngine
             // 导出格式：0 = PNG（透明底）、1 = JPG（白底）。
         }
 
+        if (part >= SelectionHandles.PanelPart.BackgroundBase)
+        {
+            int i = part - SelectionHandles.PanelPart.BackgroundBase;
+            if (i >= 0 && i < TextBoxBackground.PresetCount)
+                SetSelectedTextBackgroundFromUi(i);
+            return true;
+        }
+
         if (part >= SelectionHandles.PanelPart.SpacingBase)
         {
             int i = part - SelectionHandles.PanelPart.SpacingBase;

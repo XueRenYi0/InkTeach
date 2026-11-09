@@ -183,7 +183,7 @@ internal static class InkSerializer
     /// v29（2026-11-06）：再追加 **字体档 / 行距 / 逐行墨色**（识别结果按行保留红蓝）。
     /// v30（2026-11-06）：再追加 **逐字墨色 span**（编辑时选中一段改色）。
     /// </summary>
-    public const int FormatVersion = 31;
+    public const int FormatVersion = 32;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -400,6 +400,10 @@ internal static class InkSerializer
             // v31：只读富文本卡（OCR）：是否按 Markdown/公式排版、是否禁止编辑。
             w.Write((byte)(c.Rich ? 1 : 0));
             w.Write((byte)(c.ReadOnly ? 1 : 0));
+            // v32：背景样式（Fill/Border 含 alpha、圆角）。
+            w.Write(c.Fill.R); w.Write(c.Fill.G); w.Write(c.Fill.B); w.Write(c.Fill.A);
+            w.Write(c.Border.R); w.Write(c.Border.G); w.Write(c.Border.B); w.Write(c.Border.A);
+            w.Write(c.Radius);
         }
     }
 
@@ -727,6 +731,25 @@ internal static class InkSerializer
                 {
                     c.Rich = r.ReadByte() != 0;
                     c.ReadOnly = r.ReadByte() != 0;
+                }
+                if (version >= 32)
+                {
+                    float fr = r.ReadSingle(), fg = r.ReadSingle();
+                    float fb = r.ReadSingle(), fa = r.ReadSingle();
+                    float br = r.ReadSingle(), bgc = r.ReadSingle();
+                    float bb = r.ReadSingle(), ba = r.ReadSingle();
+                    c.Fill = new Color4(
+                        float.IsFinite(fr) ? Math.Clamp(fr, 0f, 1f) : 0f,
+                        float.IsFinite(fg) ? Math.Clamp(fg, 0f, 1f) : 0f,
+                        float.IsFinite(fb) ? Math.Clamp(fb, 0f, 1f) : 0f,
+                        float.IsFinite(fa) ? Math.Clamp(fa, 0f, 1f) : 0f);
+                    c.Border = new Color4(
+                        float.IsFinite(br) ? Math.Clamp(br, 0f, 1f) : 0f,
+                        float.IsFinite(bgc) ? Math.Clamp(bgc, 0f, 1f) : 0f,
+                        float.IsFinite(bb) ? Math.Clamp(bb, 0f, 1f) : 0f,
+                        float.IsFinite(ba) ? Math.Clamp(ba, 0f, 1f) : 0f);
+                    float rad = r.ReadSingle();
+                    c.Radius = float.IsFinite(rad) ? Math.Clamp(rad, 0f, 40f) : 12f;
                 }
             }
             s.TextBox = c;
