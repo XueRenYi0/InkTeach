@@ -519,6 +519,13 @@ internal sealed partial class App : InkEngine.InkEngine
             FigureTest();
             _quit = true;
         }
+        else if (mode == "--aiplot")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            AiPlotTest();
+            _quit = true;
+        }
         else if (mode == "--figurelive")
         {
             _autoExitAt = double.MaxValue;
@@ -6272,6 +6279,99 @@ internal sealed partial class App : InkEngine.InkEngine
         ScreenProbe.SaveBmp("reports/figure-ocr-card.bmp",
             (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
         Console.WriteLine("出图：reports/figure-ai-card.bmp / figure-ocr-card.bmp");
+    }
+
+    /// <summary>AI 作图 v1：自然语言 → 一条解析式 → 静态函数图 → Image 对象。</summary>
+    private void AiPlotTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== AI 作图 v1：单解析式 ===");
+        SetUiFactory(() => new InkUi.FullUi());
+        PassThrough = false;
+        BoardOn = true;
+        SetBoardFromUi(true);
+        Tool = Tool.Marquee;
+        ShowHud = false;
+
+        var cfg = OcrClient.LoadConfig();
+        var ai = cfg.IsConfigured
+            ? Task.Run(() => AiPlotClient.ParseAsync(
+                "画一个对数函数 y=ln(x) 的图象，定义域取 (0, 6]，标题写“对数函数”。",
+                cfg, CancellationToken.None)).GetAwaiter().GetResult()
+            : new AiPlotClient.Result { Error = "AI 未配置" };
+
+        Console.WriteLine($"AI 解析：ok={ai.Ok} {ai.Seconds:F1}s " +
+                          $"expr={(ai.Spec?.Series.Count > 0 ? ai.Spec.Series[0].Expr : "none")} " +
+                          $"domain={(ai.Spec != null ? $"{ai.Spec.XMin}..{ai.Spec.XMax}" : "-")} " +
+                          $"error={ai.Error}");
+
+        var spec = ai.Spec ?? new PlotSpec
+        {
+            Title = "对数函数",
+            XMin = 0.01f,
+            XMax = 6f,
+        };
+        if (spec.Series.Count == 0)
+            spec.Series.Add(new PlotSeries { Expr = "ln(x)", Label = "y=ln(x)" });
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var img = PlotRenderer.Render(spec);
+        sw.Stop();
+        if (img == null)
+        {
+            Console.WriteLine("作图失败：没有可渲染的数据");
+            return;
+        }
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        var stroke = new Stroke
+        {
+            Tool = Tool.Capture,
+            Kind = StrokeKind.Image,
+            Color = new Color4(1f, 1f, 1f, 1f),
+            Width = 0f,
+            Image = img,
+        };
+        stroke.SetPoints(new[]
+        {
+            new Vector2(0f, 0f),
+            new Vector2(img.Width, img.Height),
+        });
+        float x = _virtualX + (_virtualW - img.Width) * 0.5f;
+        float y = _virtualY + (_virtualH - img.Height) * 0.5f;
+        stroke.Transform = Matrix3x2.CreateTranslation(x, y);
+        Doc.AddStroke(stroke);
+        Doc.SelectOnly(new[] { stroke });
+        SettleFrames(300);
+        ScreenProbe.SaveBmp("reports/aiplot.bmp",
+            (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+        Console.WriteLine($"作图：{img.Width}×{img.Height}px，采样/绘制 {sw.Elapsed.TotalMilliseconds:F1}ms，" +
+                          $"内存 {img.ByteSize / 1024 / 1024.0:F1}MB");
+
+        // 性能：首次包含字体加载；再测 5 次热渲染，给后续缓存/批量做参考。
+        var warm = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < 5; i++)
+        {
+            var tmp = PlotRenderer.Render(spec);
+            tmp?.Release();
+        }
+        warm.Stop();
+        Console.WriteLine($"热渲染 5 次：平均 {warm.Elapsed.TotalMilliseconds / 5:F1}ms");
+        Console.WriteLine("出图：reports/aiplot.bmp");
+
+        // 产品路径：AI 面板异步入口（不阻塞 UI），完成后再插 Image。
+        Doc.Clear();
+        Doc.ClearHistory();
+        InsertAiPlotFromUi("画一个指数函数 y=2^x，定义域 [-4,4]，标题写“指数函数”。");
+        int wait = 0;
+        while (Doc.Strokes.Count == 0 && wait++ < 80)
+            SettleFrames(32);
+        SettleFrames(160);
+        ScreenProbe.SaveBmp("reports/aiplot-ui.bmp",
+            (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+        Console.WriteLine($"AI 作图异步入口：strokes={Doc.Strokes.Count} waitFrames={wait}");
+        Console.WriteLine("出图：reports/aiplot-ui.bmp");
     }
 
     /// <summary>二次函数：AI 给 a/b/c，本地创建可缩放的抛物线对象。</summary>

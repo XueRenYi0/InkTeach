@@ -402,6 +402,8 @@ public interface IEngineCommands
     /// 不联网、不调模型；接模型以后只换这个方法里的数据源。
     /// </summary>
     void InsertMockTextBox();
+    /// <summary>AI 作图：把自然语言/解析式在后台解析并插入一张函数图。</summary>
+    void InsertAiPlot(string prompt);
 
     /// <summary>
     /// 插入一个**普通文本框**并直接进入输入（中文/输入法交给系统 EDIT）。

@@ -128,6 +128,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void EndLogNoteEdit(bool accept) => _engine.EndLogNoteEditFromUi(accept);
     internal void SetLogNoteTextForTest(string text) => _engine.SetLogNoteTextForTest(text);
     public void InsertMockTextBox() => _engine.InsertMockTextBoxFromUi();
+    public void InsertAiPlot(string prompt) => _engine.InsertAiPlotFromUi(prompt);
     public void InsertTextBox() => _engine.InsertTextBoxFromUi();
     public void AdjustTextFont(float delta) => _engine.AdjustTextFontFromUi(delta);
     public void SetTextFont(float size) => _engine.SetTextFontFromUi(size);

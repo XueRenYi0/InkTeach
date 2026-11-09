@@ -1512,6 +1512,103 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
+    private sealed class AiPlotDone
+    {
+        public bool Ok;
+        public string Error = "";
+        public ImageData Image;
+        public PlotSpec Spec;
+        public double Seconds;
+    }
+
+    private volatile AiPlotDone _aiPlotDone;
+    private volatile bool _aiPlotBusy;
+
+    /// <summary>
+    /// AI 作图（单解析式 v1）：后台调用模型解析表达式 + 离屏画图，
+    /// 完成后再在主线程插入 Image 对象；不在笔迹路径上做任何工作。
+    /// </summary>
+    internal void InsertAiPlotFromUi(string prompt)
+    {
+        HideAiPromptEdit();
+        if (_textBoxEditing) EndTextBoxEditFromUi(true);
+        if (_aiPlotBusy)
+        {
+            ShowToast("AI 正在作图，请稍等");
+            return;
+        }
+        var cfg = OcrClient.LoadConfig();
+        if (!cfg.IsConfigured)
+        {
+            ShowToast("AI 未配置：先设置 API Key/模型");
+            return;
+        }
+        _aiPlotBusy = true;
+        ShowToast("AI 作图中…", 3000);
+        _ = Task.Run(async () =>
+        {
+            var r = await AiPlotClient.ParseAsync(prompt, cfg, CancellationToken.None)
+                                 .ConfigureAwait(false);
+            ImageData img = null;
+            if (r.Ok && r.Spec != null) img = PlotRenderer.Render(r.Spec);
+            var done = new AiPlotDone
+            {
+                Ok = r.Ok && img != null,
+                Error = r.Ok ? (img == null ? "没有可渲染的数据" : "") : r.Error,
+                Image = img,
+                Spec = r.Spec,
+                Seconds = r.Seconds,
+            };
+            Interlocked.Exchange(ref _aiPlotDone, done);
+        });
+    }
+
+    /// <summary>主循环调用：把后台作好的图插到画布（只在主线程做一次 AddStroke）。</summary>
+    internal void StepAiPlot()
+    {
+        var done = Interlocked.Exchange(ref _aiPlotDone, null);
+        if (done == null) return;
+        _aiPlotBusy = false;
+        if (!done.Ok || done.Image == null)
+        {
+            ShowToast("AI 作图失败：" + ClipAiPlot(done.Error, 40), 3500);
+            return;
+        }
+
+        var img = done.Image;
+        var screen = ScreenRectPhysical();
+        float u = MathF.Max(0.75f, DpiScale);
+        float maxW = MathF.Max(320f * u, (screen.MaxX - screen.MinX) * 0.82f);
+        float maxH = MathF.Max(240f * u, (screen.MaxY - screen.MinY) * 0.82f);
+        float scale = MathF.Min(1f, MathF.Min(maxW / img.Width, maxH / img.Height));
+        var s = new Stroke
+        {
+            Tool = Tool.Capture,
+            Kind = StrokeKind.Image,
+            Color = new Color4(1f, 1f, 1f, 1f),
+            Width = 0f,
+            Image = img,
+        };
+        s.SetPoints(new[]
+        {
+            new Vector2(0f, 0f),
+            new Vector2(img.Width, img.Height),
+        });
+        float w = img.Width * scale, h = img.Height * scale;
+        float x = screen.MinX + (screen.MaxX - screen.MinX - w) * 0.5f;
+        float y = screen.MinY + (screen.MaxY - screen.MinY - h) * 0.5f - ViewOffsetY;
+        s.Transform = Matrix3x2.CreateScale(scale) * Matrix3x2.CreateTranslation(x, y);
+        Doc.AddStroke(s);
+        Doc.SelectOnly(new[] { s });
+        SetInkStatus($"AI 作图完成：{done.Spec?.Title ?? ""}");
+        ShowToast($"AI 作图完成（{done.Seconds:F1}s）");
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    private static string ClipAiPlot(string s, int n)
+        => string.IsNullOrEmpty(s) ? "" : s.Length <= n ? s : s[..n] + "…";
+
     // ---- 命中 / 拖动 --------------------------------------------------------
 
     private Stroke TextBoxAt(float screenX, float screenY)

@@ -3939,7 +3939,7 @@ public partial class InkEngine
             // RenderAll 那条负责自检驱动；函数自己幂等（每天最多传一次）。
             MaybeDeviceCardUpload();
             StepLogUpload();                  // 日志上传结果轮询（后台线程传，界面不卡）
-            StepHandwritingOcr();             // 手写优化：把后台识别结果搬回文档
+            StepHandwritingOcr(); StepAiPlot();             // 手写优化：把后台识别结果搬回文档
             StepAppDataJob();                 // 全局备份/恢复结果轮询（后台线程，界面不卡）
             if (NeedsFrame())
             {
@@ -4032,7 +4032,7 @@ public partial class InkEngine
         // 运行日志的设备卡（2026-10-17）：每天最多传一次（台数 / 型号统计；自检不传）。
         MaybeDeviceCardUpload();
         StepLogUpload();
-        StepHandwritingOcr();
+        StepHandwritingOcr(); StepAiPlot();
         StepAppDataJob();
 
         // PPT 状态机。**为什么两处都调**（这里 + 主循环 Loop 里）：主循环那条路

@@ -245,7 +245,11 @@ public sealed partial class FullUi
         if (hit == AiHitGenerate)
         {
             _host.Commands.EndAiPromptEdit(true);
-            _host.Commands.InsertMockTextBox();
+            string prompt = _host.State.AiPrompt ?? _aiPrompt;
+            if (LooksLikePlotPrompt(prompt))
+                _host.Commands.InsertAiPlot(prompt);
+            else
+                _host.Commands.InsertMockTextBox();
             CloseAiPanel();
             return;
         }
@@ -357,5 +361,21 @@ public sealed partial class FullUi
         _host?.Commands.InsertMockTextBox();
         CloseAiPanel();
         _ai.Jump(0f);
+    }
+
+    /// <summary>提示词像“画函数图”就走向 AI 作图；否则走 AI 出题。</summary>
+    private static bool LooksLikePlotPrompt(string p)
+    {
+        if (string.IsNullOrWhiteSpace(p)) return false;
+        string s = p.Trim();
+        if (s.StartsWith("y=", StringComparison.OrdinalIgnoreCase)
+            || s.StartsWith("y =", StringComparison.OrdinalIgnoreCase)) return true;
+        bool draw = s.Contains("画", StringComparison.Ordinal)
+                    || s.Contains("作图", StringComparison.Ordinal)
+                    || s.Contains("图象", StringComparison.Ordinal)
+                    || s.Contains("图像", StringComparison.Ordinal);
+        bool math = s.Contains("函数", StringComparison.Ordinal)
+                    || s.Contains("曲线", StringComparison.Ordinal);
+        return draw && math;
     }
 }
