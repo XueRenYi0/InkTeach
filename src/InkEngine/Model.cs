@@ -690,6 +690,15 @@ internal enum StrokeKind
     /// 不带网格、不写字母。
     /// </summary>
     SpaceCoordinate = 31,
+
+    /// <summary>
+    /// **交互矢量图**（2026-11-09，AI 作图 v2）：
+    /// `Points[0]` = 图卡左上角，`Points[1]` = 右下角（局部坐标 1100×760）；
+    /// 表达式 / 参数 / 圆锥参数存在 <see cref="Stroke.Figure"/>，渲染走 D2D。
+    /// 和 Image 一样可选中/移动/缩放/擦除/撤销/存档；区别是缩放不糊、参数可改。
+    /// 值只能追加在末尾。
+    /// </summary>
+    Figure = 33,
 }
 
 /// <summary>
@@ -998,6 +1007,12 @@ internal sealed class Stroke
     /// 结构化数据，不是位图；宽/高、折叠状态、题目段落都跟着对象走，进存档/复制/撤销。
     /// </summary>
     public TextBoxData TextBox;
+
+    /// <summary>
+    /// **交互矢量图**（只有 <see cref="StrokeKind.Figure"/> 有）：
+    /// 表达式/参数/圆锥参数；渲染走 <c>Overlay.DrawFigure</c>，不进位图。
+    /// </summary>
+    public PlotSpec Figure;
 
     /// <summary>是不是图像对象。渲染、命中测试、顶点编辑三处都要按它分流。</summary>
     public bool IsImage => Kind == StrokeKind.Image;
@@ -3308,7 +3323,7 @@ internal sealed class Stroke
     /// 于是描边发生在画布空间、宽度恒等于 <see cref="Width"/>。
     /// </summary>
     public bool KeepsWidth => Kind != StrokeKind.Freehand && Kind != StrokeKind.Image
-                              && Kind != StrokeKind.TextBox;
+                              && Kind != StrokeKind.TextBox && Kind != StrokeKind.Figure;
 
     /// <summary>
     /// **画布空间**几何（"线宽不变"那条路，见 <see cref="KeepsWidth"/>）。
@@ -4220,6 +4235,14 @@ internal sealed class Stroke
         if (Kind == StrokeKind.TextBox && TextBox != null && Points.Count >= 1)
         {
             var b = TextBoxWorldRect();
+            return canvasX >= b.MinX - tolerance && canvasX <= b.MaxX + tolerance
+                && canvasY >= b.MinY - tolerance && canvasY <= b.MaxY + tolerance;
+        }
+
+        // 交互矢量图：整张卡片都算命中（和 Image 一样），不像几何图形只认描边。
+        if (Kind == StrokeKind.Figure && Points.Count >= 2)
+        {
+            var b = WorldBounds;
             return canvasX >= b.MinX - tolerance && canvasX <= b.MaxX + tolerance
                 && canvasY >= b.MinY - tolerance && canvasY <= b.MaxY + tolerance;
         }
@@ -7167,6 +7190,42 @@ internal sealed class SetStrokeGeometryAction : EditAction
         var pts = new Vector2[s.Points.Count];
         for (int i = 0; i < pts.Length; i++) pts[i] = new Vector2(s.Points[i].X, s.Points[i].Y);
         return pts;
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// 交互矢量图参数拖动（一次拖动 = 一步撤销）。只改 <see cref="Stroke.Figure"/> 的
+/// 参数默认值，不碰曲线采样/点坐标；Undo/Redo 用旧/新 JSON 整份换回。
+/// </summary>
+internal sealed class SetFigureParamsAction : EditAction
+{
+    private readonly Stroke _target;
+    private readonly string _oldJson;
+    private readonly string _newJson;
+    private readonly RectF _bounds;
+
+    public override bool SelfManagesDirty => true;
+
+    public SetFigureParamsAction(Stroke target, string oldJson, string newJson)
+    {
+        _target = target;
+        _oldJson = oldJson ?? "";
+        _newJson = newJson ?? "";
+        _bounds = target.PaddedBounds;
+    }
+
+    public override void Undo(InkDocument doc) => Apply(doc, _oldJson);
+    public override void Redo(InkDocument doc) => Apply(doc, _newJson);
+
+    private void Apply(InkDocument doc, string json)
+    {
+        _target.Figure = PlotSpecJson.Read(json);
+        _target.InvalidateMetrics();
+        doc.Dirty.Add(_bounds);
+        doc.StructureChangedSinceRender = true;
+        doc.Version++;
     }
 }
 

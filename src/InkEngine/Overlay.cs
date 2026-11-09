@@ -2401,6 +2401,14 @@ internal sealed partial class OverlayWindow : IDisposable
             return;
         }
 
+        // 交互矢量图（AI 作图 v2）：D2D 直接画曲线/文字，不生成位图。
+        // 和 TextBox 一样必须在几何分支之前分流：它没有可描边的中心线。
+        if (s.Kind == StrokeKind.Figure)
+        {
+            DrawFigure(s, extra);
+            return;
+        }
+
         // 图像对象：画的是位图，不是几何。**必须放在最前面**——它和图形一样
         // 属于"非自由笔迹"，走到下面那条 DrawGeometry 分支就会被描一个矩形边框。
         if (s.IsImage)
@@ -2478,6 +2486,337 @@ internal sealed partial class OverlayWindow : IDisposable
         // **圆心点是墨迹本身**（2026-10-18 用户定）：只有圆要，一直存在，
         // 选中不消失、导出/存档都带着。画在主几何之后，颜色同笔迹；大小固定。
         DrawShapeCenterInk(s, extra);
+    }
+
+    /// <summary>
+    /// 画交互矢量图（AI 作图 v2）：白卡 + 坐标轴/网格/刻度 + 曲线 + 标题/图例/参数。
+    /// 坐标系是**局部 1100×760**，`s.Transform` 负责放置/缩放；字号和线宽跟着缩放
+    /// （像图片，不像几何图形）。不生成位图、不进额外缓存。
+    /// </summary>
+    private void DrawFigure(Stroke s, Matrix3x2? extra)
+    {
+        var spec = s.Figure;
+        if (spec == null || s.Points.Count < 2) return;
+
+        var p0 = new Vector2(s.Points[0].X, s.Points[0].Y);
+        var p1 = new Vector2(s.Points[1].X, s.Points[1].Y);
+        float w = MathF.Abs(p1.X - p0.X);
+        float h = MathF.Abs(p1.Y - p0.Y);
+        if (w < 20f || h < 20f) return;
+        float ox = MathF.Min(p0.X, p1.X), oy = MathF.Min(p0.Y, p1.Y);
+
+        var saved = _ctx.Transform;
+        // DrawStroke 已经在外面把 s.Transform × extra 放进 ctx 了；
+        // 这里直接用局部坐标画，不能再乘一次（会双重缩放/偏移）。
+        _ctx.PushAxisAlignedClip(new Vortice.RawRectF(ox, oy, ox + w, oy + h),
+                                 AntialiasMode.Aliased);
+        try
+        {
+            var bg = new RoundedRectangle(new Vortice.RawRectF(ox, oy, ox + w, oy + h), 26f, 26f);
+            _ctx.FillRoundedRectangle(bg, Brush(new Color4(1f, 1f, 1f, 1f)));
+
+            float top = spec.Params.Count > 0 ? 94f : 64f;
+            float left = 92f, right = 44f, bottom = 74f;
+            float pw = w - left - right;
+            float ph = h - top - bottom;
+            if (pw < 50f || ph < 50f) return;
+
+            float xMin = spec.XMin, xMax = spec.XMax;
+            int samples = Math.Clamp((int)(pw * 1.4f), 600, 1800);
+            var curves = PlotSampling.Build(spec, samples, out float yMin, out float yMax);
+            PlotSampling.FitConicAspect(spec, ref xMin, ref xMax, ref yMin, ref yMax, pw, ph);
+
+            float X(float x) => ox + left + (x - xMin) / (xMax - xMin) * pw;
+            float Y(float y) => oy + top + (yMax - y) / (yMax - yMin) * ph;
+
+            var gridColor = new Color4(0.91f, 0.92f, 0.94f, 1f);
+            var axisColor = new Color4(0.27f, 0.29f, 0.32f, 1f);
+            var tickColor = new Color4(0.35f, 0.37f, 0.40f, 1f);
+            var labelColor = new Color4(0.32f, 0.34f, 0.37f, 1f);
+            var faint = new Color4(0.48f, 0.50f, 0.55f, 0.82f);
+
+            float xStep = NiceStep(xMax - xMin, 8);
+            float yStep = NiceStep(yMax - yMin, 7);
+            for (float x = MathF.Ceiling(xMin / xStep) * xStep;
+                 x <= xMax + 1e-4f; x += xStep)
+                _ctx.DrawLine(new Vector2(X(x), oy + top),
+                              new Vector2(X(x), oy + top + ph),
+                              Brush(gridColor), 1f);
+            for (float y = MathF.Ceiling(yMin / yStep) * yStep;
+                 y <= yMax + 1e-4f; y += yStep)
+                _ctx.DrawLine(new Vector2(ox + left, Y(y)),
+                              new Vector2(ox + left + pw, Y(y)),
+                              Brush(gridColor), 1f);
+
+            float axisY = Y(0f);
+            float axisX = X(0f);
+            if (axisY < oy + top || axisY > oy + top + ph) axisY = oy + top + ph;
+            if (axisX < ox + left || axisX > ox + left + pw) axisX = ox + left;
+
+            _ctx.DrawLine(new Vector2(ox + left, axisY),
+                          new Vector2(ox + left + pw, axisY), Brush(axisColor), 2f);
+            _ctx.DrawLine(new Vector2(axisX, oy + top + ph),
+                          new Vector2(axisX, oy + top), Brush(axisColor), 2f);
+            // 箭头
+            _ctx.DrawLine(new Vector2(ox + left + pw, axisY),
+                          new Vector2(ox + left + pw - 12f, axisY - 6f), Brush(axisColor), 2f);
+            _ctx.DrawLine(new Vector2(ox + left + pw, axisY),
+                          new Vector2(ox + left + pw - 12f, axisY + 6f), Brush(axisColor), 2f);
+            _ctx.DrawLine(new Vector2(axisX, oy + top),
+                          new Vector2(axisX - 6f, oy + top + 12f), Brush(axisColor), 2f);
+            _ctx.DrawLine(new Vector2(axisX, oy + top),
+                          new Vector2(axisX + 6f, oy + top + 12f), Brush(axisColor), 2f);
+
+            var tickFmt = AiTextFormat(20f, false, true);
+            for (float x = MathF.Ceiling(xMin / xStep) * xStep;
+                 x <= xMax + 1e-4f; x += xStep)
+            {
+                if (MathF.Abs(x) < xStep * 0.01f) continue;
+                _ctx.DrawLine(new Vector2(X(x), axisY - 4f),
+                              new Vector2(X(x), axisY + 4f), Brush(tickColor), 1.6f);
+                FigureText(Fmt(x), X(x), axisY + 29f, 40f, 24f, tickFmt, labelColor);
+            }
+            for (float y = MathF.Ceiling(yMin / yStep) * yStep;
+                 y <= yMax + 1e-4f; y += yStep)
+            {
+                if (MathF.Abs(y) < yStep * 0.01f) continue;
+                _ctx.DrawLine(new Vector2(axisX - 4f, Y(y)),
+                              new Vector2(axisX + 4f, Y(y)), Brush(tickColor), 1.6f);
+                FigureText(Fmt(y), axisX - 30f, Y(y), 48f, 24f, tickFmt, labelColor);
+            }
+            FigureText("O", axisX - 14f, axisY + 24f, 30f, 26f, tickFmt, labelColor);
+            FigureText("x", ox + left + pw - 14f, axisY - 16f, 30f, 26f, tickFmt, labelColor);
+            FigureText("y", axisX + 16f, oy + top + 10f, 30f, 26f, tickFmt, labelColor);
+
+            // 曲线
+            _ctx.PushAxisAlignedClip(
+                new Vortice.RawRectF(ox + left, oy + top, ox + left + pw, oy + top + ph),
+                AntialiasMode.Aliased);
+            foreach (var curve in curves)
+            {
+                using var geo = BuildCurveGeometry(curve.Points, X, Y, ph);
+                if (geo == null) continue;
+                _ctx.DrawGeometry(geo, Brush(curve.Series.Color), 3.2f,
+                                  Gfx.StyleFor(curve.Series.Dashed
+                                      ? StrokeDash.Dashed : StrokeDash.Solid));
+            }
+            if (spec.Kind == "conic" && spec.Conic != null)
+                DrawConicFeaturesD2D(spec.Conic, X, Y, ox + left, oy + top, pw, ph,
+                                     xMin, xMax);
+            _ctx.PopAxisAlignedClip();
+
+            // 图例
+            bool wantLegend = curves.Count > 1
+                              || (spec.Kind == "conic" && curves.Count > 0);
+            if (wantLegend)
+            {
+                var legendFmt = AiTextFormat(17f, false, false);
+                float maxText = 0f;
+                foreach (var c in curves)
+                {
+                    string text = string.IsNullOrWhiteSpace(c.Series.Label)
+                        ? "y=" + c.Series.Expr : c.Series.Label;
+                    maxText = MathF.Max(maxText, MeasureTextWidth(text, legendFmt));
+                }
+                float lw = maxText + 56f;
+                float lh = curves.Count * 26f + 16f;
+                float lx = ox + left + pw - lw - 10f;
+                float ly = oy + top + 12f;
+                var lr = new Vortice.RawRectF(lx, ly, lx + lw, ly + lh);
+                _ctx.FillRoundedRectangle(new RoundedRectangle(lr, 8f, 8f),
+                    Brush(new Color4(1f, 1f, 1f, 0.92f)));
+                _ctx.DrawRoundedRectangle(new RoundedRectangle(lr, 8f, 8f),
+                    Brush(new Color4(0.86f, 0.88f, 0.90f, 1f)), 1f);
+                for (int i = 0; i < curves.Count; i++)
+                {
+                    var c = curves[i];
+                    float yy = ly + 8f + 13f + i * 26f;
+                    _ctx.DrawLine(new Vector2(lx + 10f, yy), new Vector2(lx + 38f, yy),
+                                  Brush(c.Series.Color), 3.2f);
+                    string text = string.IsNullOrWhiteSpace(c.Series.Label)
+                        ? "y=" + c.Series.Expr : c.Series.Label;
+                    _ctx.DrawText(text, legendFmt,
+                        new Rect(lx + 46f, yy - 11f, lw - 52f, 24f),
+                        Brush(new Color4(0.23f, 0.25f, 0.28f, 1f)));
+                }
+            }
+
+            // 标题 / 参数
+            if (!string.IsNullOrWhiteSpace(spec.Title))
+            {
+                var titleFmt = AiTextFormat(26f, false, false);
+                _ctx.DrawText(spec.Title, titleFmt,
+                    new Rect(ox + left, oy + 12f, pw, 36f),
+                    Brush(new Color4(0.13f, 0.15f, 0.18f, 1f)));
+            }
+            if (spec.Params.Count > 0)
+            {
+                var keys = new List<string>(spec.Params.Keys);
+                keys.Sort(StringComparer.Ordinal);
+                var parts = new List<string>(keys.Count);
+                foreach (var k in keys)
+                    parts.Add(k + " = " + Fmt((float)spec.Params[k]));
+                var paramFmt = AiTextFormat(18f, false, false);
+                _ctx.DrawText("参数：" + string.Join("，", parts), paramFmt,
+                    new Rect(ox + left, oy + 46f, pw, 26f),
+                    Brush(new Color4(0.36f, 0.38f, 0.42f, 1f)));
+            }
+        }
+        finally
+        {
+            _ctx.PopAxisAlignedClip();
+            _ctx.Transform = saved;
+        }
+    }
+
+    private static ID2D1PathGeometry BuildCurveGeometry(
+        List<(float X, float Y)> pts, Func<float, float> X, Func<float, float> Y,
+        float plotHeight)
+    {
+        if (pts == null || pts.Count < 2) return null;
+        var geo = Gfx.D2DFactory.CreatePathGeometry();
+        using (var sink = geo.Open())
+        {
+            bool open = false;
+            float prevY = 0f;
+            foreach (var (x, y) in pts)
+            {
+                if (!float.IsFinite(x) || !float.IsFinite(y))
+                {
+                    if (open) { sink.EndFigure(FigureEnd.Open); open = false; }
+                    continue;
+                }
+                float sx = X(x), sy = Y(y);
+                bool jump = open && MathF.Abs(sy - prevY) > plotHeight * 1.4f;
+                if (!open || jump)
+                {
+                    if (open) sink.EndFigure(FigureEnd.Open);
+                    sink.BeginFigure(new Vector2(sx, sy), FigureBegin.Hollow);
+                    open = true;
+                }
+                else sink.AddLine(new Vector2(sx, sy));
+                prevY = sy;
+            }
+            if (open) sink.EndFigure(FigureEnd.Open);
+            sink.Close();               // ⚠ 必须显式 Close：Dispose 不保证封口（不封 = 空几何）
+        }
+        return geo;
+    }
+
+    private void DrawConicFeaturesD2D(PlotConic c, Func<float, float> X, Func<float, float> Y,
+                                      float left, float top, float pw, float ph,
+                                      float xMin, float xMax)
+    {
+        float a = MathF.Max(0.0001f, MathF.Abs(c.A));
+        float b = MathF.Max(0.0001f, MathF.Abs(c.B));
+        string type = (c.Type ?? "").ToLowerInvariant();
+        var dashColor = new Color4(0.48f, 0.50f, 0.55f, 0.82f);
+        var dotColor = new Color4(0.77f, 0.30f, 0.24f, 1f);
+        var labelColor = new Color4(0.67f, 0.27f, 0.21f, 1f);
+        var tiny = AiTextFormat(15f, false, false);
+        var dashStyle = Gfx.StyleFor(StrokeDash.Dashed);
+
+        void Vertical(float x, string text)
+        {
+            float sx = X(x);
+            if (sx < left - 4f || sx > left + pw + 4f) return;
+            _ctx.DrawLine(new Vector2(sx, top), new Vector2(sx, top + ph),
+                          Brush(dashColor), 1.6f, dashStyle);
+            _ctx.DrawText(text, tiny, new Rect(sx + 4f, top + ph - 24f, 60f, 20f),
+                          Brush(labelColor));
+        }
+        void Horizontal(float y, string text)
+        {
+            float sy = Y(y);
+            if (sy < top - 4f || sy > top + ph + 4f) return;
+            _ctx.DrawLine(new Vector2(left, sy), new Vector2(left + pw, sy),
+                          Brush(dashColor), 1.6f, dashStyle);
+            _ctx.DrawText(text, tiny, new Rect(left + 6f, sy - 22f, 60f, 20f),
+                          Brush(labelColor));
+        }
+        void Focus(float x, float y, string text)
+        {
+            float sx = X(x), sy = Y(y);
+            if (sx < left - 8f || sx > left + pw + 8f ||
+                sy < top - 8f || sy > top + ph + 8f) return;
+            _ctx.FillEllipse(new Ellipse(new Vector2(sx, sy), 5f, 5f), Brush(dotColor));
+            _ctx.DrawText(text, tiny, new Rect(sx + 7f, sy - 24f, 40f, 20f),
+                          Brush(labelColor));
+        }
+
+        if (type == "ellipse")
+        {
+            float cc = MathF.Sqrt(MathF.Max(0f, a * a - b * b));
+            if (cc > 0.001f)
+            {
+                Focus(c.H - cc, c.K, "F1");
+                Focus(c.H + cc, c.K, "F2");
+                Vertical(c.H - a * a / cc, "准线");
+                Vertical(c.H + a * a / cc, "准线");
+            }
+        }
+        else if (type == "hyperbola")
+        {
+            float cc = MathF.Sqrt(a * a + b * b);
+            Focus(c.H - cc, c.K, "F1");
+            Focus(c.H + cc, c.K, "F2");
+            Vertical(c.H - a * a / cc, "准线");
+            Vertical(c.H + a * a / cc, "准线");
+            float slope = b / a;
+            foreach (float sgn in new[] { -1f, 1f })
+            {
+                float y1 = c.K + sgn * slope * (xMin - c.H);
+                float y2 = c.K + sgn * slope * (xMax - c.H);
+                _ctx.DrawLine(new Vector2(X(xMin), Y(y1)),
+                              new Vector2(X(xMax), Y(y2)),
+                              Brush(dashColor), 1.6f, dashStyle);
+            }
+        }
+        else
+        {
+            float p = a;
+            float half = p * 0.5f;
+            switch ((c.Axis ?? "right").ToLowerInvariant())
+            {
+                case "left":
+                    Focus(c.H - half, c.K, "F");
+                    Vertical(c.H + half, "准线");
+                    break;
+                case "up":
+                    Focus(c.H, c.K + half, "F");
+                    Horizontal(c.K - half, "准线");
+                    break;
+                case "down":
+                    Focus(c.H, c.K - half, "F");
+                    Horizontal(c.K + half, "准线");
+                    break;
+                default:
+                    Focus(c.H + half, c.K, "F");
+                    Vertical(c.H - half, "准线");
+                    break;
+            }
+        }
+    }
+
+    private void FigureText(string text, float cx, float cy, float w, float h,
+                            IDWriteTextFormat fmt, Color4 color)
+        => _ctx.DrawText(text, fmt, new Rect(cx - w * 0.5f, cy - h * 0.5f, w, h),
+                         Brush(color));
+
+    private static string Fmt(float v)
+    {
+        if (MathF.Abs(v) < 1e-6f) return "0";
+        return v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static float NiceStep(float range, int target)
+    {
+        if (range <= 0 || !float.IsFinite(range)) return 1f;
+        float raw = range / Math.Max(2, target);
+        float mag = MathF.Pow(10f, MathF.Floor(MathF.Log10(raw)));
+        float norm = raw / mag;
+        float nice = norm <= 1.5f ? 1f : norm <= 3f ? 2f : norm <= 7f ? 5f : 10f;
+        return nice * mag;
     }
 
     /// <summary>
@@ -3565,6 +3904,19 @@ internal sealed partial class OverlayWindow : IDisposable
             float cardPad = (4f + app.FloatingTheme.ShadowReachLogical) * dpi;
             r.Add(CanvasRectToWindow(app.SelectionBarCanvasRect.Inflate(cardPad)));
 
+            // 交互矢量图的参数滑杆：浮在选中框上方，**必须每帧算进脏区**，
+            // 否则拖动参数时曲线变了、滑杆却停在旧值（2026-11-09 v2.1 实测踩到）。
+            if (app.Doc.Selected.Count == 1
+                && app.Doc.Selected[0].Kind == StrokeKind.Figure)
+            {
+                var keys = FigureParamBar.Keys(app.Doc.Selected[0]);
+                if (keys.Count > 0)
+                {
+                    var pr = FigureParamBar.PanelRect(sb, dpi, app.FurnitureViewport, keys.Count);
+                    r.Add(CanvasRectToWindow(pr.Inflate(4f * dpi)));
+                }
+            }
+
             // 收起态的圆钮 / 打开的面板 / 提示条：都是"每帧都在变"的浮动层，
             // 漏一块就在屏幕上留一块擦不掉的残影（这条踩过好几次了）。
             r.Add(CanvasRectToWindow(app.SelectionDotCanvasRect.Inflate(cardPad)));
@@ -4188,8 +4540,13 @@ internal sealed partial class OverlayWindow : IDisposable
             }
         }
 
-        // 5) 操作条（九格）/ 收起态的圆钮。放在下方，理由见 DrawSelectionBar 的注释。
-        //    拖动 / 旋转中收起来：此刻点不中；而且贴着屏幕下边时它会**停在原地**，
+        // 4.5) 交互矢量图：参数滑杆（只画在 overlay，不进内容层）。
+        if (!collapsed && sel.Count == 1 && sel[0].Kind == StrokeKind.Figure)
+        {
+            DrawFigureParamBar(app, sel[0], frame, dpi);
+        }
+
+        // 5) 操作条（九格）/ 收起态的圆钮。放在下方，理由见 DrawSelectionBar 的注释。        //    拖动 / 旋转中收起来：此刻点不中；而且贴着屏幕下边时它会**停在原地**，
         //    内容继续走、条不跟——那是最像卡死的一幕（见 SelectionHandles.BarRect）。
         //
         // ⚠ 那一块画不画由 `SelectionBarShown` 定；**画整条还是画那颗圆钮**由
@@ -4252,6 +4609,73 @@ internal sealed partial class OverlayWindow : IDisposable
         //    "这一帧有哪些"（见 FillAnglePills）。**两个图形都只在拖顶点时出现**
         //    （用户 2026-09-20 定："三角形应该在拖动的时候再显示角度，要不然看起来也乱"）。
         DrawAnglePills(app);
+    }
+
+    /// <summary>交互矢量图的参数滑杆（选中时浮在图卡上方；拖动只改 Params）。</summary>
+    private void DrawFigureParamBar(InkEngine app, Stroke s, SelectionFrame frame, float dpi)
+    {
+        var keys = FigureParamBar.Keys(s);
+        if (keys.Count == 0) return;
+        var panel = FigureParamBar.PanelRect(frame.CanvasAabb, dpi, app.FurnitureViewport,
+                                             keys.Count);
+        if (panel.IsEmpty) return;
+
+        var accent = new Color4(0f, 0.47f, 0.83f, 1f);
+        var border = new Color4(0.82f, 0.85f, 0.89f, 1f);
+        var track = new Color4(0.84f, 0.86f, 0.90f, 1f);
+        var ink = new Color4(0.20f, 0.22f, 0.26f, 1f);
+        var white = Brush(new Color4(1f, 1f, 1f, 1f));
+
+        var rr = new RoundedRectangle(
+            new Vortice.RawRectF(panel.MinX, panel.MinY, panel.MaxX, panel.MaxY),
+            10f * dpi, 10f * dpi);
+        _ctx.FillRoundedRectangle(rr, Brush(new Color4(1f, 1f, 1f, 0.97f)));
+        _ctx.DrawRoundedRectangle(rr, Brush(border), 1.2f * dpi);
+
+        var labelFmt = AiTextFormat(13f * dpi, false, false);
+        var valueFmt = AiTextFormat(13f * dpi, true, false);
+        for (int i = 0; i < keys.Count; i++)
+        {
+            string key = keys[i];
+            if (!FigureParamBar.TryGet(s, key, out double value)) continue;
+            var row = FigureParamBar.RowRect(panel, i, dpi);
+            bool hot = app.FigureParamDragging
+                       && ReferenceEquals(app.FigureParamStroke, s)
+                       && app.FigureParamKey == key;
+            if (hot)
+            {
+                var hr = new RoundedRectangle(
+                    new Vortice.RawRectF(row.MinX, row.MinY, row.MaxX, row.MaxY),
+                    7f * dpi, 7f * dpi);
+                _ctx.FillRoundedRectangle(hr, Brush(new Color4(0.90f, 0.95f, 1f, 1f)));
+            }
+
+            _ctx.DrawText(key, labelFmt,
+                new Rect(row.MinX + 8f * dpi, row.MinY + 7f * dpi,
+                         24f * dpi, 20f * dpi), Brush(ink));
+
+            FigureParamBar.Range(value, out float min, out float max);
+            if (hot) { min = app.FigureParamMin; max = app.FigureParamMax; }
+            var tr = FigureParamBar.TrackRect(row, dpi);
+            float cy = (tr.MinY + tr.MaxY) * 0.5f;
+            float tx0 = tr.MinX, tx1 = tr.MaxX;
+            float t = Math.Clamp((float)((value - min) / MathF.Max(1e-4f, max - min)), 0f, 1f);
+            float knobX = tx0 + (tx1 - tx0) * t;
+
+            _ctx.DrawLine(new Vector2(tx0, cy), new Vector2(tx1, cy),
+                          Brush(track), 3f * dpi);
+            _ctx.DrawLine(new Vector2(tx0, cy), new Vector2(knobX, cy),
+                          Brush(accent), 3f * dpi);
+            _ctx.FillEllipse(new Ellipse(new Vector2(knobX, cy), 6.5f * dpi, 6.5f * dpi), white);
+            _ctx.DrawEllipse(new Ellipse(new Vector2(knobX, cy), 6.5f * dpi, 6.5f * dpi),
+                             Brush(accent), 2f * dpi);
+
+            string text = Fmt((float)value);
+            float tw = MeasureTextWidth(text, valueFmt);
+            _ctx.DrawText(text, valueFmt,
+                new Rect(row.MaxX - tw - 8f * dpi, row.MinY + 7f * dpi,
+                         tw + 4f * dpi, 20f * dpi), Brush(ink));
+        }
     }
 
     /// <summary>

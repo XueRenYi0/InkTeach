@@ -183,7 +183,7 @@ internal static class InkSerializer
     /// v29（2026-11-06）：再追加 **字体档 / 行距 / 逐行墨色**（识别结果按行保留红蓝）。
     /// v30（2026-11-06）：再追加 **逐字墨色 span**（编辑时选中一段改色）。
     /// </summary>
-    public const int FormatVersion = 33;
+    public const int FormatVersion = 34;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -411,6 +411,11 @@ internal static class InkSerializer
             w.Write(c.Figure != null);
             if (c.Figure != null) WriteImage(w, c.Figure);
         }
+
+        // ---- v34：交互矢量图（只有 Kind == Figure 才写） ----
+        // 一行 JSON；表达式/参数/圆锥参数都在这。旧文件没有这一段，读端按版本号跳过。
+        if (s.Kind == StrokeKind.Figure)
+            w.Write(s.Figure != null ? PlotSpecJson.Write(s.Figure) : "");
     }
 
     // =====================================================================
@@ -769,6 +774,13 @@ internal static class InkSerializer
             // 普通文本框：高度永远自动（2026-11-01 新规则）。
             // 老文件里存的 false 一并迁移成 true；固定高/内部滚动只留给 AI 题卡。
             if (c.Role == TextBoxRole.Normal) c.AutoHeight = true;
+        }
+
+        // ---- v34：交互矢量图 ----
+        if (version >= 34 && s.Kind == StrokeKind.Figure)
+        {
+            string plotJson = ReadString(r, 1_000_000);
+            s.Figure = PlotSpecJson.Read(plotJson);
         }
 
         // ---- v13：抛物线的第二个点**换了含义**，老文件要迁移一次 ----

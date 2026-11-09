@@ -11,6 +11,7 @@ internal sealed class PlotSeries
     public string Expr = "";
     public Color4 Color = new(0.12f, 0.14f, 0.18f, 1f);
     public string Label = "";
+    public bool Dashed;
     /// <summary>非空时直接用预采样点（圆锥曲线/参数曲线），不走 PlotExpression。</summary>
     public List<(float X, float Y)> Precomputed;
 }
@@ -59,61 +60,15 @@ internal static class PlotRenderer
         if (spec.Kind is "plane" or "solid")
             return FigureRenderer.RenderCard(spec.Figure, spec.Title, width, height);
 
-        if (spec.Kind == "conic" && spec.Conic != null && spec.Series.Count == 0)
-            BuildConicSeries(spec);
-        if (spec.Series.Count == 0) return null;
+        if (spec.Kind == "conic" && spec.Conic == null) return null;
 
         width = Math.Clamp(width, 400, 2000);
         height = Math.Clamp(height, 300, 1400);
 
-        // 先采样，决定 y 范围。
-        const int samples = 1400;
-        var curves = new List<(PlotSeries S, List<(float X, float Y)> Pts)>();
-        float yMin = float.MaxValue, yMax = float.MinValue;
-        foreach (var s in spec.Series)
-        {
-            List<(float, float)> pts;
-            if (s.Precomputed is { Count: > 0 })
-            {
-                pts = s.Precomputed;
-            }
-            else
-            {
-                PlotExpression expr;
-                try { expr = PlotExpression.Parse(s.Expr, spec.Params); }
-                catch { continue; }
-                if (expr == null) continue;
-                pts = new List<(float, float)>(samples);
-                for (int i = 0; i <= samples; i++)
-                {
-                    float x = spec.XMin + (spec.XMax - spec.XMin) * i / samples;
-                    double y = expr.Eval(x);
-                    if (!double.IsFinite(y)) continue;
-                    if (Math.Abs(y) > 1e6) continue;
-                    pts.Add((x, (float)y));
-                }
-            }
-            int valid = 0;
-            foreach (var (x, y) in pts)
-            {
-                if (!float.IsFinite(x) || !float.IsFinite(y)) continue;
-                if (y < yMin) yMin = y;
-                if (y > yMax) yMax = y;
-                valid++;
-            }
-            if (valid > 0) curves.Add((s, pts));
-        }
+        var curves = PlotSampling.Build(spec, PlotSampling.DefaultSamples,
+                                        out float yMin, out float yMax);
         if (curves.Count == 0) return null;
-
-        if (!float.IsFinite(yMin) || !float.IsFinite(yMax))
-        { yMin = -5; yMax = 5; }
-        if (yMax - yMin < 1e-4f) { yMin -= 1; yMax += 1; }
-        float pad = (yMax - yMin) * 0.15f;
-        yMin -= pad; yMax += pad;
-        // 防止 exp 之类把图压扁：显示范围限制在 ±50，曲线出界就裁掉。
-        yMin = MathF.Max(yMin, -50f);
-        yMax = MathF.Min(yMax, 50f);
-        if (yMax - yMin < 0.5f) { yMin -= 0.5f; yMax += 0.5f; }
+        float xMin = spec.XMin, xMax = spec.XMax;
 
         // 含参函数在标题下再留一行显示参数默认值。
         float top = spec.Params.Count > 0 ? 94f : 64f;
@@ -123,26 +78,7 @@ internal static class PlotRenderer
         if (pw < 50 || ph < 50) return null;
 
         // 圆锥曲线必须等比例：否则椭圆会被画成圆、抛物线会变形。
-        // 同时保证采样出来的曲线全部落在视窗内，不够就扩大 x/y 范围。
-        if (spec.Kind == "conic" && spec.Conic != null)
-        {
-            float xSpan = spec.XMax - spec.XMin;
-            float ySpan = yMax - yMin;
-            float yc = (yMin + yMax) * 0.5f;
-            float xc = (spec.XMin + spec.XMax) * 0.5f;
-            if (xSpan * ph / pw < ySpan)
-            {
-                xSpan = ySpan * pw / ph;
-                spec.XMin = xc - xSpan * 0.5f;
-                spec.XMax = xc + xSpan * 0.5f;
-            }
-            else
-            {
-                ySpan = xSpan * ph / pw;
-                yMin = yc - ySpan * 0.5f;
-                yMax = yc + ySpan * 0.5f;
-            }
-        }
+        PlotSampling.FitConicAspect(spec, ref xMin, ref xMax, ref yMin, ref yMax, pw, ph);
 
         var bmp = new SKBitmap(new SKImageInfo(width, height, SKColorType.Bgra8888,
                                                SKAlphaType.Premul));
@@ -158,11 +94,11 @@ internal static class PlotRenderer
             canvas.ClipRoundRect(new SKRoundRect(new SKRect(1, 1, width - 1, height - 1),
                                                  radius, radius), SKClipOperation.Intersect, true);
 
-            float X(float x) => left + (x - spec.XMin) / (spec.XMax - spec.XMin) * pw;
+            float X(float x) => left + (x - xMin) / (xMax - xMin) * pw;
             float Y(float y) => top + (yMax - y) / (yMax - yMin) * ph;
 
             // 网格/刻度
-            float xStep = NiceStep(spec.XMax - spec.XMin, 8);
+            float xStep = NiceStep(xMax - xMin, 8);
             float yStep = NiceStep(yMax - yMin, 7);
             using var grid = new SKPaint
             {
@@ -185,8 +121,8 @@ internal static class PlotRenderer
                 TextSize = 20f, Typeface = Face,
             };
 
-            for (float x = MathF.Ceiling(spec.XMin / xStep) * xStep;
-                 x <= spec.XMax + 1e-4f; x += xStep)
+            for (float x = MathF.Ceiling(xMin / xStep) * xStep;
+                 x <= xMax + 1e-4f; x += xStep)
             {
                 float sx = X(x);
                 canvas.DrawLine(sx, top, sx, top + ph, grid);
@@ -214,8 +150,8 @@ internal static class PlotRenderer
             canvas.DrawLine(axisX, top, axisX + 6, top + 12, axis);
 
             // 刻度数字（避开 0 和轴外）
-            for (float x = MathF.Ceiling(spec.XMin / xStep) * xStep;
-                 x <= spec.XMax + 1e-4f; x += xStep)
+            for (float x = MathF.Ceiling(xMin / xStep) * xStep;
+                 x <= xMax + 1e-4f; x += xStep)
             {
                 if (MathF.Abs(x) < xStep * 0.01f) continue;
                 float sx = X(x);
@@ -241,8 +177,9 @@ internal static class PlotRenderer
             // 曲线（出界裁剪；非连续点断段）
             canvas.Save();
             canvas.ClipRect(new SKRect(left, top, left + pw, top + ph));
-            foreach (var (s, pts) in curves)
+            foreach (var curve in curves)
             {
+                var s = curve.Series;
                 using var pen = new SKPaint
                 {
                     Color = ToSK(s.Color),
@@ -255,7 +192,7 @@ internal static class PlotRenderer
                 using var path = new SKPath();
                 bool started = false;
                 float prevY = 0f;
-                foreach (var (x, y) in pts)
+                foreach (var (x, y) in curve.Points)
                 {
                     if (!float.IsFinite(x) || !float.IsFinite(y))
                     {
@@ -273,7 +210,7 @@ internal static class PlotRenderer
 
             if (spec.Kind == "conic" && spec.Conic != null)
                 DrawConicFeatures(canvas, spec.Conic, X, Y, left, top, pw, ph,
-                                  spec.XMin, spec.XMax);
+                                  xMin, xMax);
             canvas.Restore();
 
             // 多条曲线：右上角图例（色线 + 解析式）
@@ -297,9 +234,12 @@ internal static class PlotRenderer
                     Style = SKPaintStyle.Stroke, StrokeWidth = 1f,
                 };
                 float maxText = 0f;
-                foreach (var (s, _) in curves)
+                foreach (var curve in curves)
+                {
+                    var s = curve.Series;
                     maxText = MathF.Max(maxText, legendText.MeasureText(
                         string.IsNullOrWhiteSpace(s.Label) ? "y=" + s.Expr : s.Label));
+                }
                 float lw = maxText + 56f;
                 float lh = curves.Count * 26f + 16f;
                 float lx = left + pw - lw - 10f;
@@ -309,7 +249,7 @@ internal static class PlotRenderer
                 canvas.DrawRoundRect(lr, 8f, 8f, legendBorder);
                 for (int i = 0; i < curves.Count; i++)
                 {
-                    var (s, _) = curves[i];
+                    var s = curves[i].Series;
                     float yy = ly + 8f + 13f + i * 26f;
                     using var swatch = new SKPaint
                     {
@@ -366,101 +306,6 @@ internal static class PlotRenderer
     }
 
     // ---- 圆锥曲线 ----------------------------------------------------------
-
-    private static void BuildConicSeries(PlotSpec spec)
-    {
-        var c = spec.Conic;
-        var pts = new List<(float, float)>();
-        switch ((c.Type ?? "").ToLowerInvariant())
-        {
-            case "hyperbola":
-            {
-                float a = MathF.Max(0.05f, MathF.Abs(c.A));
-                float b = MathF.Max(0.05f, MathF.Abs(c.B));
-                float dx = MathF.Max(MathF.Abs(spec.XMax - c.H), MathF.Abs(spec.XMin - c.H));
-                float tMax = MathF.Min(3.6f, MathF.Max(0.8f, MathF.Asinh(dx / a)));
-                const int n = 220;
-                for (int branch = -1; branch <= 1; branch += 2)
-                {
-                    for (int i = 0; i <= n; i++)
-                    {
-                        float t = -tMax + 2f * tMax * i / n;
-                        pts.Add((c.H + branch * a * MathF.Cosh(t),
-                                 c.K + b * MathF.Sinh(t)));
-                    }
-                    pts.Add((float.NaN, float.NaN));
-                }
-                break;
-            }
-            case "parabola":
-            {
-                float p = MathF.Max(0.05f, MathF.Abs(c.A));
-                string axis = (c.Axis ?? "right").ToLowerInvariant();
-                float tMax;
-                if (axis is "up" or "down")
-                    tMax = MathF.Min(18f, MathF.Sqrt(2f * p * 16f));
-                else
-                {
-                    float dx = axis == "left"
-                        ? MathF.Max(0.5f, c.H - spec.XMin)
-                        : MathF.Max(0.5f, spec.XMax - c.H);
-                    tMax = MathF.Min(18f, MathF.Sqrt(2f * p * dx));
-                }
-                const int n = 320;
-                for (int i = 0; i <= n; i++)
-                {
-                    float t = -tMax + 2f * tMax * i / n;
-                    switch (axis)
-                    {
-                        case "left":
-                            pts.Add((c.H - t * t / (2f * p), c.K + t));
-                            break;
-                        case "up":
-                            pts.Add((c.H + t, c.K + t * t / (2f * p)));
-                            break;
-                        case "down":
-                            pts.Add((c.H + t, c.K - t * t / (2f * p)));
-                            break;
-                        default:
-                            pts.Add((c.H + t * t / (2f * p), c.K + t));
-                            break;
-                    }
-                }
-                break;
-            }
-            default: // ellipse
-            {
-                float a = MathF.Max(0.05f, MathF.Abs(c.A));
-                float b = MathF.Max(0.05f, MathF.Abs(c.B));
-                const int n = 720;
-                for (int i = 0; i <= n; i++)
-                {
-                    float t = MathF.PI * 2f * i / n;
-                    pts.Add((c.H + a * MathF.Cos(t), c.K + b * MathF.Sin(t)));
-                }
-                break;
-            }
-        }
-
-        string label = c.Label;
-        if (string.IsNullOrWhiteSpace(label))
-        {
-            string name = (c.Type ?? "").ToLowerInvariant() switch
-            {
-                "hyperbola" => "双曲线",
-                "parabola" => "抛物线",
-                _ => "椭圆",
-            };
-            label = string.IsNullOrWhiteSpace(c.Equation) ? name : name + "  " + c.Equation;
-        }
-        spec.Series.Add(new PlotSeries
-        {
-            Precomputed = pts,
-            Label = label,
-            Expr = c.Equation,
-            Color = c.Color,
-        });
-    }
 
     private static void DrawConicFeatures(SKCanvas canvas, PlotConic c,
                                           Func<float, float> X, Func<float, float> Y,

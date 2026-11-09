@@ -1779,6 +1779,18 @@ public partial class InkEngine
     /// </summary>
     internal Stroke _dragHitStroke;
 
+    // ---- 交互矢量图的参数滑杆（v2.1） ----
+    private bool _figureParamDragging;
+    private Stroke _figureParamStroke;
+    private string _figureParamKey = "";
+    private float _figureParamMin, _figureParamMax;
+    private string _figureParamOldJson = "";
+    internal bool FigureParamDragging => _figureParamDragging;
+    internal Stroke FigureParamStroke => _figureParamStroke;
+    internal string FigureParamKey => _figureParamKey;
+    internal float FigureParamMin => _figureParamMin;
+    internal float FigureParamMax => _figureParamMax;
+
     /// <summary>
     /// 点选的命中容差（逻辑像素）。细笔只有 1.5 逻辑像素宽，严格按墨判等于点不中；
     /// 4 像素和操作条手柄的容差同一量级。见 <see cref="InkDocument.HitObjectAt"/>。
@@ -18538,6 +18550,76 @@ public partial class InkEngine
     /// 第 3 步必须在第 4 步之前：否则"拖动已选中的一块"会被判成"点选其中一条"，
     /// 多选就再也搬不动了。（2026-09-15 实现点选时定的顺序。）
     /// </summary>
+    /// <summary>按下参数滑杆：进入"拖参数"手势（一次拖动 = 一步撤销）。</summary>
+    private bool TryBeginFigureParamDrag(float x, float y, in SelectionFrame frame)
+    {
+        if (Doc.Selected.Count != 1) return false;
+        var s = Doc.Selected[0];
+        if (s.Kind != StrokeKind.Figure || s.Figure == null) return false;
+        var keys = FigureParamBar.Keys(s);
+        if (keys.Count == 0) return false;
+        float ui = UiUnit;
+        var panel = FigureParamBar.PanelRect(frame.CanvasAabb, ui, FurnitureViewport, keys.Count);
+        int row = FigureParamBar.RowAt(panel, keys.Count, x, y, ui);
+        if (row < 0) return false;
+        string key = keys[row];
+        if (!FigureParamBar.TryGet(s, key, out double value)) return false;
+
+        _figureParamDragging = true;
+        _figureParamStroke = s;
+        _figureParamKey = key;
+        FigureParamBar.Range(value, out _figureParamMin, out _figureParamMax);
+        _figureParamOldJson = PlotSpecJson.Write(s.Figure);
+        SelDragging = true;
+        _dragIsMove = false;
+        _dragHandle = SelHandle.None;
+        _selDragMoved = true;
+        ApplyFigureParamAt(x);
+        return true;
+    }
+
+    private void ApplyFigureParamAt(float x)
+    {
+        if (!_figureParamDragging || _figureParamStroke?.Figure == null) return;
+        var keys = FigureParamBar.Keys(_figureParamStroke);
+        int row = keys.IndexOf(_figureParamKey);
+        if (row < 0) return;
+        float ui = UiUnit;
+        var frame = SelectionHandles.FrameOf(Doc.Selected);
+        var panel = FigureParamBar.PanelRect(frame.CanvasAabb, ui, FurnitureViewport, keys.Count);
+        var track = FigureParamBar.TrackRect(FigureParamBar.RowRect(panel, row, ui), ui);
+        float v = FigureParamBar.ValueAt(track, x, _figureParamMin, _figureParamMax);
+        FigureParamBar.Set(_figureParamStroke, _figureParamKey, v);
+        _figureParamStroke.InvalidateMetrics();
+        Doc.Dirty.Add(_figureParamStroke.PaddedBounds);
+        Doc.StructureChangedSinceRender = true;
+        Doc.Version++;
+        _dirty = true;
+    }
+
+    private void FinishFigureParamDrag()
+    {
+        var s = _figureParamStroke;
+        if (s?.Figure != null)
+        {
+            string json = PlotSpecJson.Write(s.Figure);
+            if (json != _figureParamOldJson)
+            {
+                var act = new SetFigureParamsAction(s, _figureParamOldJson, json);
+                Doc.CommitInteractive(act);
+            }
+            Doc.Dirty.Add(s.PaddedBounds);
+        }
+        _figureParamDragging = false;
+        _figureParamStroke = null;
+        _figureParamKey = "";
+        _figureParamOldJson = "";
+        _dragIsMove = false;
+        _dragHandle = SelHandle.None;
+        SelDragging = false;
+        _dirty = true;
+    }
+
     private bool TryBeginSelectionGesture(float x, float y, bool shift, bool alt)
     {
         _dragHitStroke = null;
@@ -18549,6 +18631,9 @@ public partial class InkEngine
         bool move = false;
         var h = SelHandle.None;
         var frame = SelectionHandles.FrameOf(Doc.Selected);
+
+        // ⓪.5 交互矢量图：参数滑杆优先于操作条/手柄（它浮在框上方）。
+        if (TryBeginFigureParamDrag(x, y, frame)) return true;
 
         // —— ⓪ 收起态圆钮 / 浮动面板 / 操作条：优先级最高（它们盖在别的东西上面）——
         //
@@ -19401,6 +19486,9 @@ public partial class InkEngine
     /// </summary>
     private void UpdateSelDrag(float x, float y)
     {
+        // 参数滑杆：每帧只改一个参数并重采样，不碰变换。
+        if (_figureParamDragging) { ApplyFigureParamAt(x); return; }
+
         // 文本框：8 手柄改宽高（不是 Transform 缩放）。
         if (_textBoxResizing) { UpdateTextBoxResize(x, y); return; }
 
@@ -19582,6 +19670,9 @@ public partial class InkEngine
     /// </summary>
     private void EndSelDrag()
     {
+        // 参数滑杆：提交一步撤销，结束。
+        if (_figureParamDragging) { FinishFigureParamDrag(); return; }
+
         // 文本框：改宽高手势收尾（模型已经实时改好，这里只清状态）。
         if (_textBoxResizing) { FinishTextBoxResize(); return; }
 

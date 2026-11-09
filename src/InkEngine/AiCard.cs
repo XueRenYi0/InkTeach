@@ -1549,12 +1549,16 @@ public partial class InkEngine
         {
             var r = await AiPlotClient.ParseAsync(prompt, cfg, CancellationToken.None)
                                  .ConfigureAwait(false);
+            bool vector = r.Ok && r.Spec != null
+                          && r.Spec.Kind is "functions" or "conic";
             ImageData img = null;
-            if (r.Ok && r.Spec != null) img = PlotRenderer.Render(r.Spec);
+            if (r.Ok && r.Spec != null && !vector) img = PlotRenderer.Render(r.Spec);
             var done = new AiPlotDone
             {
-                Ok = r.Ok && img != null,
-                Error = r.Ok ? (img == null ? "没有可渲染的数据" : "") : r.Error,
+                Ok = r.Ok && (vector || img != null),
+                Error = r.Ok
+                    ? (vector || img != null ? "" : "没有可渲染的数据")
+                    : r.Error,
                 Image = img,
                 Spec = r.Spec,
                 Seconds = r.Seconds,
@@ -1569,32 +1573,36 @@ public partial class InkEngine
         var done = Interlocked.Exchange(ref _aiPlotDone, null);
         if (done == null) return;
         _aiPlotBusy = false;
-        if (!done.Ok || done.Image == null)
+        bool vector = done.Ok && done.Spec != null
+                      && done.Spec.Kind is "functions" or "conic";
+        if (!done.Ok || (!vector && done.Image == null))
         {
             ShowToast("AI 作图失败：" + ClipAiPlot(done.Error, 40), 3500);
             return;
         }
 
-        var img = done.Image;
         var screen = ScreenRectPhysical();
         float u = MathF.Max(0.75f, DpiScale);
         float maxW = MathF.Max(320f * u, (screen.MaxX - screen.MinX) * 0.82f);
         float maxH = MathF.Max(240f * u, (screen.MaxY - screen.MinY) * 0.82f);
-        float scale = MathF.Min(1f, MathF.Min(maxW / img.Width, maxH / img.Height));
+        float localW = vector ? 1100f : done.Image.Width;
+        float localH = vector ? 760f : done.Image.Height;
+        float scale = MathF.Min(1f, MathF.Min(maxW / localW, maxH / localH));
         var s = new Stroke
         {
             Tool = Tool.Capture,
-            Kind = StrokeKind.Image,
+            Kind = vector ? StrokeKind.Figure : StrokeKind.Image,
             Color = new Color4(1f, 1f, 1f, 1f),
             Width = 0f,
-            Image = img,
+            Image = vector ? null : done.Image,
+            Figure = vector ? done.Spec : null,
         };
         s.SetPoints(new[]
         {
             new Vector2(0f, 0f),
-            new Vector2(img.Width, img.Height),
+            new Vector2(localW, localH),
         });
-        float w = img.Width * scale, h = img.Height * scale;
+        float w = localW * scale, h = localH * scale;
         float x = screen.MinX + (screen.MaxX - screen.MinX - w) * 0.5f;
         float y = screen.MinY + (screen.MaxY - screen.MinY - h) * 0.5f - ViewOffsetY;
         s.Transform = Matrix3x2.CreateScale(scale) * Matrix3x2.CreateTranslation(x, y);

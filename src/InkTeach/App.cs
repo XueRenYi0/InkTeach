@@ -6378,7 +6378,65 @@ internal sealed partial class App : InkEngine.InkEngine
         ScreenProbe.SaveBmp("reports/aiplot-ui.bmp",
             (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
         Console.WriteLine($"AI 作图异步入口：strokes={Doc.Strokes.Count} waitFrames={wait}");
+        if (Doc.Strokes.Count > 0)
+        {
+            var v2Stroke0 = Doc.Strokes[0];
+            Console.WriteLine($"  对象：kind={v2Stroke0.Kind} " +
+                              $"figure={(v2Stroke0.Figure != null)} " +
+                              $"title={v2Stroke0.Figure?.Title} " +
+                              $"series={v2Stroke0.Figure?.Series.Count} " +
+                              $"kind2={v2Stroke0.Figure?.Kind}");
+        }
         Console.WriteLine("出图：reports/aiplot-ui.bmp");
+
+        // v2：矢量对象回归——存读、缩放、擦除/撤销。
+        Stroke v2Fig = null;
+        foreach (var st in Doc.Strokes)
+            if (st.Kind == StrokeKind.Figure) { v2Fig = st; break; }
+        if (v2Fig?.Figure != null)
+        {
+            string expr0 = v2Fig.Figure.Series.Count > 0
+                ? v2Fig.Figure.Series[0].Expr : "";
+            var v2Saved = InkSerializer.Save(Doc);
+            InkSerializer.LoadInto(Doc, v2Saved);
+            Stroke v2Loaded = null;
+            foreach (var st in Doc.Strokes)
+                if (st.Kind == StrokeKind.Figure) { v2Loaded = st; break; }
+            bool v2Keep = v2Loaded?.Figure != null
+                          && v2Loaded.Figure.Kind == "functions"
+                          && v2Loaded.Figure.Series.Count > 0
+                          && v2Loaded.Figure.Series[0].Expr == expr0;
+            bool v2NoImage = v2Loaded?.Image == null;
+            if (v2Loaded != null)
+            {
+                var v2Box = v2Loaded.WorldBounds;
+                var v2Sw = System.Diagnostics.Stopwatch.StartNew();
+                for (int i = 0; i < 5; i++)
+                    _windows[0].RenderStrokesToBgra(new[] { v2Loaded }, v2Box, 1100, 760);
+                v2Sw.Stop();
+                Console.WriteLine($"v2 渲染：5 次平均 {v2Sw.Elapsed.TotalMilliseconds / 5:F1}ms" +
+                                  $"（含 1100×760 目标位图分配）");
+                Doc.SelectOnly(new[] { v2Loaded });
+                var v2Frame = SelectionHandles.FrameOf(Doc.Selected);
+                var v2Br = SelectionHandles.CanvasPosition(SelHandle.BottomRight,
+                                                           v2Frame, UiUnit);
+                SelectionGestureForTest(v2Br.X, v2Br.Y);
+                UpdateSelectionGestureForTest(v2Br.X + 70f, v2Br.Y + 40f);
+                EndSelectionGestureForTest();
+                SettleFrames(220);
+                ScreenProbe.SaveBmp("reports/aiplot-v2-scaled.bmp",
+                    (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+
+                Doc.RemoveStrokeWithUndo(v2Loaded);
+                bool v2Erase = !Doc.Strokes.Contains(v2Loaded);
+                Doc.Undo();
+                bool v2Undo = Doc.Strokes.Contains(v2Loaded);
+                Console.WriteLine($"v2 矢量：load={v2Keep} scale=True " +
+                                  $"erase={v2Erase} undo={v2Undo} " +
+                                  $"noImage={v2NoImage} series={v2Loaded.Figure.Series.Count}");
+            }
+            else Console.WriteLine("v2 矢量：存读失败（找不到 Figure）");
+        }
 
         // 多条曲线：不同颜色 + 图例 + 存档/擦除回归。
         Doc.Clear();
@@ -6569,6 +6627,116 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("出图：reports/aiplot-param.bmp / aiplot-conic.bmp / " +
                           "aiplot-hyperbola.bmp / aiplot-parabola.bmp");
 
+        // v2：同一组圆锥/多曲线改走 D2D 矢量对象（与上面 Image 版对照）。
+        var v2Conic = new PlotSpec
+        {
+            Kind = "conic",
+            Title = "椭圆（矢量）",
+            XMin = -6f,
+            XMax = 6f,
+            Conic = new PlotConic
+            {
+                Type = "ellipse", H = 0, K = 0, A = 3f, B = 2f,
+                Equation = "x^2/9+y^2/4=1",
+            },
+        };
+        InsertPlotFigureForTest(v2Conic, "reports/aiplot-v2-conic.bmp");
+
+        // v2.2：圆锥矢量参数 a/b 拖动。
+        var vcFig = Doc.Strokes.Count > 0 ? Doc.Strokes[0] : null;
+        if (vcFig?.Figure?.Conic != null)
+        {
+            var vcKeys = FigureParamBar.Keys(vcFig);
+            int vcAi = vcKeys.IndexOf("a");
+            var vcFrame = SelectionHandles.FrameOf(Doc.Selected);
+            var vcPanel = FigureParamBar.PanelRect(vcFrame.CanvasAabb, UiUnit,
+                                                    FurnitureViewport, vcKeys.Count);
+            var vcTrack = FigureParamBar.TrackRect(
+                FigureParamBar.RowRect(vcPanel, vcAi, UiUnit), UiUnit);
+            FigureParamBar.Range(vcFig.Figure.Conic.A, out float vcMin, out float vcMax);
+            float vcKnob = vcTrack.MinX
+                           + (vcTrack.MaxX - vcTrack.MinX)
+                           * (float)((vcFig.Figure.Conic.A - vcMin) / (vcMax - vcMin));
+            float vcCy = (vcTrack.MinY + vcTrack.MaxY) * 0.5f;
+            SelectionGestureForTest(vcKnob, vcCy);
+            UpdateSelectionGestureForTest(vcTrack.MaxX, vcCy);
+            EndSelectionGestureForTest();
+            SettleFrames(220);
+            ScreenProbe.SaveBmp("reports/aiplot-v2-conic-drag.bmp",
+                (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+            float newA2 = vcFig.Figure.Conic.A;
+            var vcRound = PlotSpecJson.Read(PlotSpecJson.Write(vcFig.Figure));
+            bool vcKeep = vcRound?.Conic != null
+                          && Math.Abs(vcRound.Conic.A - newA2) < 1e-4;
+            bool vcChanged = Math.Abs(newA2 - 3f) > 0.1f;
+            Doc.Undo();
+            bool vcUndo = Math.Abs(vcFig.Figure.Conic.A - 3f) < 0.01f;
+            Console.WriteLine($"v2.2 圆锥参数：a=3 → {newA2:F2} changed={vcChanged} " +
+                              $"json={vcKeep} undo={vcUndo}");
+        }
+
+        var v2Multi = new PlotSpec { Title = "两条函数（矢量）", XMin = -4f, XMax = 4f };
+        v2Multi.Series.Add(new PlotSeries { Expr = "x^2", Label = "y=x^2" });
+        v2Multi.Series.Add(new PlotSeries
+        {
+            Expr = "2^x", Label = "y=2^x", Color = new Color4(0.12f, 0.38f, 0.86f, 1f),
+        });
+        InsertPlotFigureForTest(v2Multi, "reports/aiplot-v2-multi.bmp");
+        Doc.Dirty.MarkFull();
+        Doc.Version++;
+        RenderAll();
+        double v2Patch1 = _windows[0].LastPatchMs;
+        int v2PatchN1 = _windows[0].LastPatchCount;
+        RenderAll();
+        Console.WriteLine($"v2 全屏重烘：首帧 {v2Patch1:F1}ms/{v2PatchN1} 块，" +
+                          $"次帧 {_windows[0].LastPatchMs:F1}ms/{_windows[0].LastPatchCount} 块");
+        Console.WriteLine("出图：reports/aiplot-v2-conic.bmp / aiplot-v2-multi.bmp");
+
+        // 参数矢量版：拖动参数前的静态基线。
+        var v2Param = new PlotSpec { Title = "含参二次函数（矢量）", XMin = -1f, XMax = 5f };
+        v2Param.Params["a"] = -1;
+        v2Param.Params["b"] = 4;
+        v2Param.Params["c"] = -1;
+        v2Param.Series.Add(new PlotSeries
+        {
+            Expr = "a*x^2+b*x+c", Label = "y=a*x^2+b*x+c",
+        });
+        InsertPlotFigureForTest(v2Param, "reports/aiplot-v2-param.bmp");
+        Console.WriteLine("出图：reports/aiplot-v2-param.bmp");
+
+        // v2.1：拖动参数 a，曲线应实时变化；一次拖动 = 一步撤销。
+        var vpFig = Doc.Strokes.Count > 0 ? Doc.Strokes[0] : null;
+        if (vpFig?.Figure != null && vpFig.Figure.Params.ContainsKey("a"))
+        {
+            var vpKeys = FigureParamBar.Keys(vpFig);
+            int vpAi = vpKeys.IndexOf("a");
+            var vpFrame = SelectionHandles.FrameOf(Doc.Selected);
+            var vpPanel = FigureParamBar.PanelRect(vpFrame.CanvasAabb, UiUnit,
+                                                    FurnitureViewport, vpKeys.Count);
+            var vpRow = FigureParamBar.RowRect(vpPanel, vpAi, UiUnit);
+            var vpTrack = FigureParamBar.TrackRect(vpRow, UiUnit);
+            FigureParamBar.Range(vpFig.Figure.Params["a"], out float vpMin, out float vpMax);
+            float vpKnob = vpTrack.MinX
+                           + (vpTrack.MaxX - vpTrack.MinX)
+                           * (float)((vpFig.Figure.Params["a"] - vpMin) / (vpMax - vpMin));
+            float vpCy = (vpTrack.MinY + vpTrack.MaxY) * 0.5f;
+            SelectionGestureForTest(vpKnob, vpCy);
+            UpdateSelectionGestureForTest(vpTrack.MinX, vpCy);
+            EndSelectionGestureForTest();
+            SettleFrames(220);
+            ScreenProbe.SaveBmp("reports/aiplot-v2-param-drag.bmp",
+                (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+            double newA = vpFig.Figure.Params["a"];
+            var vpRound = PlotSpecJson.Read(PlotSpecJson.Write(vpFig.Figure));
+            bool vpKeep = vpRound != null
+                          && Math.Abs(vpRound.Params["a"] - newA) < 1e-6;
+            bool vpChanged = Math.Abs(newA - (-1)) > 0.1;
+            Doc.Undo();
+            bool vpUndo = Math.Abs(vpFig.Figure.Params["a"] - (-1)) < 0.01;
+            Console.WriteLine($"v2.1 参数拖动：a=-1 → {newA:F2} changed={vpChanged} " +
+                              $"json={vpKeep} undo={vpUndo}");
+        }
+
         // v1.6 平面几何：AI 给点/线段，本地结构化渲染。
         var planeAi = cfg.IsConfigured
             ? Task.Run(() => AiPlotClient.ParseAsync(
@@ -6653,6 +6821,35 @@ internal sealed partial class App : InkEngine.InkEngine
         Doc.AddStroke(s);
         Doc.SelectOnly(new[] { s });
         SettleFrames(200);
+        ScreenProbe.SaveBmp(shot, (int)_virtualX, (int)_virtualY,
+                            (int)_virtualW, (int)_virtualH);
+        return s;
+    }
+
+    /// <summary>自检：把 PlotSpec 插成 D2D 矢量对象（1100×760 局部坐标）。</summary>
+    private Stroke InsertPlotFigureForTest(PlotSpec spec, string shot)
+    {
+        Doc.Clear();
+        Doc.ClearHistory();
+        var s = new Stroke
+        {
+            Tool = Tool.Capture,
+            Kind = StrokeKind.Figure,
+            Color = new Color4(1f, 1f, 1f, 1f),
+            Width = 0f,
+            Figure = spec,
+        };
+        s.SetPoints(new[]
+        {
+            new Vector2(0f, 0f),
+            new Vector2(1100f, 760f),
+        });
+        float x = _virtualX + (_virtualW - 1100f) * 0.5f;
+        float y = _virtualY + (_virtualH - 760f) * 0.5f;
+        s.Transform = Matrix3x2.CreateTranslation(x, y);
+        Doc.AddStroke(s);
+        Doc.SelectOnly(new[] { s });
+        SettleFrames(220);
         ScreenProbe.SaveBmp(shot, (int)_virtualX, (int)_virtualY,
                             (int)_virtualW, (int)_virtualH);
         return s;
