@@ -927,7 +927,8 @@ public partial class InkEngine
         };
         uint show = _textBoxEditVisible ? Native.SWP_SHOWWINDOW : 0;
         // 宿主必须是 TOPMOST：主画布也是置顶窗口，NOZORDER 会让编辑窗藏在它下面。
-        Native.SetWindowPos(_textBoxEditHost, Native.HWND_TOPMOST, x, y, w, h, show);
+        Native.SetWindowPos(_textBoxEditHost, Native.HWND_TOPMOST, x, y, w, h,
+                            show | Native.SWP_NOACTIVATE);
         Native.SetWindowPos(_textBoxEditHwnd, IntPtr.Zero, 0, 0, w, h,
                             Native.SWP_NOZORDER | show);
         var textRect = new Native.RECT
@@ -1067,6 +1068,10 @@ public partial class InkEngine
         Doc.Version++;
         _dirty = true;
         RefreshTextBoxEditWindow(box);
+        // 自动长宽会移动/重设宿主；若焦点被系统丢掉（某些 Topmost/owner 组合），
+        // 后续输入会静默丢失。只在真的丢焦点时抢回来，不打断工具栏操作。
+        if (_textBoxEditVisible && Native.GetFocus() != _textBoxEditHwnd)
+            FocusTextBoxEditWindow();
         KeepTextBoxEditInView(s);
         // 重排后 RichEdit 可能又跟了一下末尾光标；内容全部可见，钉回左上角。
         ResetRichEditScroll();
@@ -1375,7 +1380,9 @@ public partial class InkEngine
         if (UseWindowlessTextBox)
         {
             _windowlessText = WindowlessTextControl.TryCreate(_textBoxEditHost, _hInstance,
-                (int)MathF.Round(18f * MathF.Max(0.75f, DpiScale)));
+                (int)MathF.Round(18f * MathF.Max(0.75f, DpiScale)),
+                Math.Max(80, (int)MathF.Round(_textFontSize * MathF.Max(0.5f, DpiScale) * 15f)),
+                (uint)ColorRef(_textColor));
             if (_windowlessText != null)
             {
                 _textBoxEditHwnd = _windowlessText.Hwnd;
@@ -1641,9 +1648,9 @@ public partial class InkEngine
         float dpi = MathF.Max(1f, DpiScale);
         // 普通 RichEdit 窗口走 DPI 感知的 GDI；windowless 路径按 96 DPI 解释 twips，
         // 这里直接用物理像素换算，否则 2x 屏上字会只有一半大。
+        // windowless/GDI 的 YaHei 字面宽比 D2D 略窄；17 让编辑态和最终稿宽度接近。
         float twipsPerPx = _windowlessText != null ? 15f : 15f / dpi;
         int fontTwips = Math.Max(80, (int)MathF.Round(fontPx * twipsPerPx));
-        // 日志别加在这里：每敲一个字都会调用。
 
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETBKGNDCOLOR,
                            IntPtr.Zero, new IntPtr(_textBoxEditBackColor));
@@ -1684,6 +1691,10 @@ public partial class InkEngine
 
         int len = Native.GetWindowTextLengthW(_textBoxEditHwnd);
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL, new IntPtr(len), new IntPtr(len));
+        // 光标处的“插入格式”也要设：只设 SCF_ALL 时，空框/末尾新输入会退回默认小字。
+        Native.SendMessageCharFormat(_textBoxEditHwnd, Native.EM_SETCHARFORMAT,
+                                     new IntPtr(Native.SCF_SELECTION), ref cf);
+        Native.SendMessageParaFormat(_textBoxEditHwnd, Native.EM_SETPARAFORMAT, IntPtr.Zero, ref pf);
     }
 
     private static List<TextBoxColorSpan> CloneSpans(IEnumerable<TextBoxColorSpan> src)

@@ -175,7 +175,8 @@ internal sealed unsafe class WindowlessTextControl : IDisposable
     private WindowlessTextControl() { }
 
     /// <summary>创建子窗口 + 文字服务；失败返回 null（调用方回退到 RichEdit 窗口）。</summary>
-    public static WindowlessTextControl? TryCreate(IntPtr parent, IntPtr hInstance, int initialInset)
+    public static WindowlessTextControl? TryCreate(IntPtr parent, IntPtr hInstance,
+        int initialInset, int initialFontTwips, uint initialColor)
     {
         EnsureClass();
         if (!_classReady)
@@ -192,7 +193,7 @@ internal sealed unsafe class WindowlessTextControl : IDisposable
 
         host._charFormat = Marshal.AllocHGlobal(Marshal.SizeOf<CHARFORMATW>());
         host._paraFormat = Marshal.AllocHGlobal(Marshal.SizeOf<PARAFORMAT>());
-        host.ResetDefaultFormats();
+        host.ResetDefaultFormats(initialFontTwips, initialColor);
 
         IntPtr hwnd = Native.CreateWindowEx(0, ClassName, "InkTeachWindowlessText",
             WS_CHILD | WS_VISIBLE, 0, 0, 1, 1, parent, IntPtr.Zero, hInstance,
@@ -312,14 +313,15 @@ internal sealed unsafe class WindowlessTextControl : IDisposable
         PaintBackground = null;
     }
 
-    private void ResetDefaultFormats()
+    private void ResetDefaultFormats(int fontTwips, uint color)
     {
+        _defaultTextColor = color;
         var cf = new CHARFORMATW
         {
             cbSize = Marshal.SizeOf<CHARFORMATW>(),
             dwMask = Native.CFM_FACE | Native.CFM_SIZE | Native.CFM_COLOR | Native.CFM_CHARSET,
-            yHeight = 240,
-            crTextColor = 0,
+            yHeight = Math.Max(80, fontTwips),
+            crTextColor = (int)color,
             bCharSet = 1,
             szFaceName = "Microsoft YaHei UI",
         };
@@ -420,9 +422,12 @@ internal sealed unsafe class WindowlessTextControl : IDisposable
     public void Draw(IntPtr hdc, int width, int height)
     {
         if (_services == IntPtr.Zero || hdc == IntPtr.Zero) return;
+        // 文字排版看 TxDraw 的 bounds；caret 在 TxSetCaretPos 补同一 pad。
+        // 两者用同一个内缩，文字和 caret 才会重合。
         int pad = Math.Max(0, Math.Min(ViewInset, Math.Min(width, height) / 3));
-        var rcl = new RECTL { Left = pad, Top = pad, Right = width - pad, Bottom = height - pad };
-        var upd = new Native.RECT { Left = pad, Top = pad, Right = width - pad, Bottom = height - pad };
+        // 底部不再内缩：多行文本框最后一行不会被 bounds 裁掉。
+        var rcl = new RECTL { Left = pad, Top = pad, Right = width - pad, Bottom = height };
+        var upd = new Native.RECT { Left = pad, Top = pad, Right = width - pad, Bottom = height };
         // 某些 windowless 路径下 RichEdit 不主动设 GDI 文字色；先给 DC 一个
         // 和当前墨色一致的文字色，避免白板白字被画成系统黑。
         Native.SetTextColor(hdc, _defaultTextColor != 0 ? _defaultTextColor : 0x00000000);
@@ -836,7 +841,12 @@ internal sealed unsafe class WindowlessTextControl : IDisposable
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     private static int TxSetCaretPos(IntPtr self, int x, int y)
-        => SetCaretPos(x, y) ? 1 : 0;
+    {
+        var h = HostFromSelf(self);
+        // 文字用 TxDraw bounds 内缩 pad；caret 坐标是 bounds 相对，补上同样的 pad。
+        int pad = Math.Max(0, h.ViewInset);
+        return SetCaretPos(x + pad, y + pad) ? 1 : 0;
+    }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     private static int TxSetTimer(IntPtr self, uint id, uint ms)
@@ -903,7 +913,8 @@ internal sealed unsafe class WindowlessTextControl : IDisposable
     private static int TxGetClientRect(IntPtr self, IntPtr rect)
     {
         if (rect == IntPtr.Zero) return E_POINTER;
-        if (!Native.GetClientRect(HostFromSelf(self)._hwnd, out var r)) return 0;
+        var h = HostFromSelf(self);
+        if (!Native.GetClientRect(h._hwnd, out var r)) return 0;
         Marshal.StructureToPtr(r, rect, false);
         return 1;
     }
@@ -912,8 +923,8 @@ internal sealed unsafe class WindowlessTextControl : IDisposable
     private static int TxGetViewInset(IntPtr self, IntPtr rect)
     {
         if (rect == IntPtr.Zero) return E_POINTER;
-        int pad = Math.Max(0, HostFromSelf(self).ViewInset);
-        var r = new Native.RECT { Left = pad, Top = pad, Right = pad, Bottom = pad };
+        // 内缩由 TxDraw bounds + TxSetCaretPos 处理，这里返回 0 避免重复。
+        var r = new Native.RECT();
         Marshal.StructureToPtr(r, rect, false);
         return S_OK;
     }
@@ -922,7 +933,8 @@ internal sealed unsafe class WindowlessTextControl : IDisposable
     private static int TxGetCharFormat(IntPtr self, IntPtr pp)
     {
         if (pp == IntPtr.Zero) return E_POINTER;
-        *(IntPtr*)pp = HostFromSelf(self)._charFormat;
+        var h = HostFromSelf(self);
+        *(IntPtr*)pp = h._charFormat;
         return S_OK;
     }
 
@@ -994,8 +1006,8 @@ internal sealed unsafe class WindowlessTextControl : IDisposable
         Native.GetClientRect(h._hwnd, out var rc);
         var sz = new SIZEL
         {
-            cx = rc.Width * 2540 / 96,
-            cy = rc.Height * 2540 / 96,
+            cx = Math.Max(1, rc.Width) * 2540 / 96,
+            cy = Math.Max(1, rc.Height) * 2540 / 96,
         };
         Marshal.StructureToPtr(sz, extent, false);
         return S_OK;

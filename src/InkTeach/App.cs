@@ -398,6 +398,34 @@ internal sealed partial class App : InkEngine.InkEngine
                 EndTextBoxEditFromUi(true);
             }
 
+            // 真实逐字输入（不是 SetText）：验证光标位置、字号和字是否对得上。
+            Doc.Clear();
+            Doc.ClearHistory();
+            InsertPlainTextBoxForTest("");
+            var typed = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
+            if (typed?.TextBox != null)
+            {
+                typed.Color = new Vortice.Mathematics.Color4(1f, 1f, 1f, 1f);
+                typed.TextBox.Ink = typed.Color;
+                typed.TextBox.Paper = false;
+                typed.TextBox.AutoWidth = false;
+                typed.TextBox.Width = 600f;
+                typed.TextBox.InvalidateLayout();
+                BeginTextBoxEdit(typed);
+                SettleFrames(220);          // 等快照/宿主显示
+                TypeTextBoxEditCharForTest('你');
+                TypeTextBoxEditCharForTest('怎');
+                TypeTextBoxEditCharForTest('么');
+                SettleFrames(220);
+                ScreenProbe.SaveBmp("reports/b0-textbox-realtype.bmp",
+                    (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+                EndTextBoxEditFromUi(true);
+                Doc.SelectOnly(Array.Empty<Stroke>());
+                SettleFrames(160);
+                ScreenProbe.SaveBmp("reports/b0-textbox-realtype-committed.bmp",
+                    (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+            }
+
             // 已有文字的重新编辑：快照里不能残留旧字（否则会出现双份/重影）。
             Doc.Clear();
             Doc.ClearHistory();
