@@ -183,7 +183,7 @@ internal static class InkSerializer
     /// v29（2026-11-06）：再追加 **字体档 / 行距 / 逐行墨色**（识别结果按行保留红蓝）。
     /// v30（2026-11-06）：再追加 **逐字墨色 span**（编辑时选中一段改色）。
     /// </summary>
-    public const int FormatVersion = 30;
+    public const int FormatVersion = 31;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -397,6 +397,9 @@ internal static class InkSerializer
                 w.Write(span.Color.G);
                 w.Write(span.Color.B);
             }
+            // v31：只读富文本卡（OCR）：是否按 Markdown/公式排版、是否禁止编辑。
+            w.Write((byte)(c.Rich ? 1 : 0));
+            w.Write((byte)(c.ReadOnly ? 1 : 0));
         }
     }
 
@@ -719,6 +722,11 @@ internal static class InkSerializer
                                 1f),
                         });
                     }
+                }
+                if (version >= 31)
+                {
+                    c.Rich = r.ReadByte() != 0;
+                    c.ReadOnly = r.ReadByte() != 0;
                 }
             }
             s.TextBox = c;

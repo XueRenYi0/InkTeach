@@ -47,6 +47,13 @@ internal sealed class TextBoxColorSpan
 internal sealed class TextBoxData
 {
     public TextBoxRole Role = TextBoxRole.Normal;
+    /// <summary>
+    /// 只读富文本卡（OCR 结果）：用 Markdown/公式排版，但**不能进入文字编辑**。
+    /// 普通文字标签 Rich=false，只排纯文本。
+    /// </summary>
+    public bool Rich;
+    /// <summary>只读：双击/点选不进入编辑；选中、移动、缩放、删除照常。</summary>
+    public bool ReadOnly;
     /// <summary>纸面背景：识别结果放到文本框时打开，避免叠在原板书上看不清。</summary>
     public bool Paper;
     public string Title = "";
@@ -561,7 +568,9 @@ internal static class TextBoxLayout
     public static List<TextBoxLine> Build(TextBoxData card, out float height)
         => card.Role == TextBoxRole.AiQuestion
             ? BuildAi(card, out height)
-            : BuildPlain(card, out height);
+            : card.Rich
+                ? BuildRich(card, out height)
+                : BuildPlainText(card, out height);
 
     private static List<TextBoxLine> BuildAi(TextBoxData card, out float height)
     {
@@ -634,7 +643,81 @@ internal static class TextBoxLayout
         return lines;
     }
 
-    private static List<TextBoxLine> BuildPlain(TextBoxData card, out float height)
+    /// <summary>
+    /// 普通文本框：**纯文本**。不解析 Markdown、不做行内公式。
+    /// 所见即所得：编辑态看到什么，提交后就是什么。
+    /// </summary>
+    private static List<TextBoxLine> BuildPlainText(TextBoxData card, out float height)
+    {
+        float u = MathF.Max(0.5f, card.Unit);
+        float pad = 18f * u;
+        float size = Math.Clamp(card.FontSize, 8f, 72f) * u;
+        // 给 GDI 编辑态留半个字的右边余量：RichEdit 的字面宽比 DirectWrite
+        // 略宽，恰好顶到边时会把最后一个字挤到下一行。
+        float textW = MathF.Max(8f * u, card.Width - pad * 2f + size * 0.5f);
+        float spacing = TextBoxFaces.ClampSpacing(card.LineSpacing);
+        float lineH = size * spacing;
+        var lines = new List<TextBoxLine>();
+        float y = pad;
+
+        string[] hardLines = (card.Text ?? "").Replace("\r\n", "\n").Split('\n');
+        int textOffset = 0;
+        for (int hi = 0; hi < hardLines.Length; hi++)
+        {
+            string hard = hardLines[hi];
+            int lineStart = textOffset;
+            textOffset += hard.Length + 1;
+            Color4 ink = card.InkForLine(hi);
+
+            // 逐字颜色是纯文本唯一的“富”格式；不解析任何语法。
+            if (card.HasColorSpanIn(lineStart, hard.Length))
+            {
+                AddColoredPlain(lines, hard, lineStart, size, u, pad, textW, lineH,
+                                ink, card, ref y);
+                continue;
+            }
+
+            foreach (string line in Wrap(hard, textW, size))
+            {
+                AddText(lines, line, pad, y, size, lineH, ink);
+                y += lineH;
+            }
+        }
+
+        height = MathF.Max(y + pad, pad * 2f + lineH);
+        return lines;
+    }
+
+    /// <summary>纯文本的逐字颜色排版：按 ColorSpans 切 run，不碰 `$...$`。</summary>
+    private static void AddColoredPlain(List<TextBoxLine> lines, string text, int textStart,
+                                        float size, float u, float pad, float textW,
+                                        float lineH, Color4 fallback, TextBoxData card,
+                                        ref float y)
+    {
+        var runs = new List<TextBoxRun>();
+        int i = 0;
+        while (i < text.Length)
+        {
+            Color4 c = card.ColorAt(textStart + i, fallback);
+            int j = i + 1;
+            while (j < text.Length && SameInk(card.ColorAt(textStart + j, fallback), c)) j++;
+            runs.Add(new TextBoxRun
+            {
+                Text = text[i..j], Size = size, Tint = c,
+                Height = size * 1.55f, Ascent = size * 0.82f, Descent = size * 0.30f,
+            });
+            i = j;
+        }
+        if (runs.Count > 0)
+            LayoutInlineRuns(lines, runs, pad, textW, size, lineH, u, ref y);
+    }
+
+    private static bool SameInk(Color4 a, Color4 b)
+        => MathF.Abs(a.R - b.R) < 0.004f
+           && MathF.Abs(a.G - b.G) < 0.004f
+           && MathF.Abs(a.B - b.B) < 0.004f;
+
+    private static List<TextBoxLine> BuildRich(TextBoxData card, out float height)
     {
         float u = MathF.Max(0.5f, card.Unit);
         float pad = 18f * u;

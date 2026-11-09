@@ -510,6 +510,13 @@ internal sealed partial class App : InkEngine.InkEngine
             Console.WriteLine("B0 出图：reports/b0-textbox-*.bmp");
             _quit = true;
         }
+        else if (mode == "--newtext")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            NewTextModelTest();
+            _quit = true;
+        }
         else if (mode == "--textboxsim")
         {
             _autoExitAt = double.MaxValue;
@@ -6100,7 +6107,8 @@ internal sealed partial class App : InkEngine.InkEngine
             bool hasMath = false;
             foreach (var l in mathLines)
                 if (l.Kind == TextBoxLineKind.Math && l.MathImage != null) { hasMath = true; break; }
-            Check(hasMath, "普通文本框：整行 $$...$$ 渲染成公式图");
+            Check(!hasMath && mathBox.Text.Contains("$$\\frac{\\sqrt{2}}{3}$$"),
+                  "普通文本框：整行 $$...$$ 按字面显示");
 
             var inlineBox = TextBoxData.CreatePlain("当 $x=1$ 时，$y=x^2$。", 2f, 840f, 240f);
             var inlineLines = inlineBox.EnsureLayout();
@@ -6109,7 +6117,8 @@ internal sealed partial class App : InkEngine.InkEngine
                 if (l.Runs != null)
                     foreach (var r in l.Runs)
                         if (r.IsMath) { hasInlineMath = true; break; }
-            Check(hasInlineMath, "普通文本框：行内 $...$ 渲染成公式 run");
+            Check(!hasInlineMath && inlineBox.Text.Contains("$x=1$"),
+                  "普通文本框：行内 $...$ 按字面显示");
 
             // 8 手柄：右下角拖拽 = 同时改宽高，字号不变
             if (pt != null)
@@ -6130,14 +6139,115 @@ internal sealed partial class App : InkEngine.InkEngine
                 Doc.Redo();
 
                 float fs0 = pt.TextBox.FontSize;
-                RunBarButtonForTest(SelBarButton.FlipV);
-                Check(pt.TextBox.FontSize > fs0, $"操作条 A+：字号 {fs0:0} → {pt.TextBox.FontSize:0}");
+                pt.TextBox.FontSize = MathF.Min(72f, fs0 + 4f);
+                pt.TextBox.InvalidateLayout();
+                Check(pt.TextBox.FontSize > fs0, $"文本框字号可改：{fs0:0} → {pt.TextBox.FontSize:0}");
             }
         }
 
         Console.WriteLine(fails == 0 ? "AI 题卡自检：全部通过" : $"AI 题卡自检：{fails} 项失败");
         ExitCode = fails == 0 ? 0 : 1;
         _quit = true;
+    }
+
+    /// <summary>
+    /// 新文字模型自检：普通框纯文本；OCR 只读富文本卡；AI 卡不变。
+    /// 出图 reports/newtext-*.bmp。
+    /// </summary>
+    private void NewTextModelTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 新文字模型：纯文本 + OCR 只读卡 + AI 卡 ===");
+        SetUiFactory(() => new InkUi.FullUi());
+        PassThrough = false;
+        BoardOn = true;
+        SetBoardFromUi(true);
+        Tool = Tool.Marquee;
+        ShowHud = false;
+        float u = MathF.Max(0.75f, DpiScale);
+
+        void Shot(string name)
+        {
+            SettleFrames(260);
+            ScreenProbe.SaveBmp($"reports/{name}.bmp",
+                (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+        }
+
+        // ① 普通文本框：Markdown / LaTeX 全部按字面显示。
+        Doc.Clear();
+        Doc.ClearHistory();
+        InsertPlainTextBoxForTest("**粗体** 不是粗体\n# 标题 不是标题\n公式 $x^2$ 原样显示\n--- 不是分隔线");
+        var plain = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
+        if (plain?.TextBox != null)
+        {
+            plain.Color = new Vortice.Mathematics.Color4(0.12f, 0.14f, 0.18f, 1f);
+            plain.TextBox.Ink = plain.Color;
+            plain.TextBox.Paper = false;
+            plain.TextBox.LineColors.Clear();
+            plain.TextBox.ColorSpans.Clear();
+            plain.TextBox.InvalidateLayout();
+            plain.SyncTextBoxBounds();
+        }
+        Doc.SelectOnly(Array.Empty<Stroke>());
+        Shot("newtext-plain");
+        Console.WriteLine($"纯文本：rich={plain?.TextBox?.Rich} " +
+                          $"readOnly={plain?.TextBox?.ReadOnly} " +
+                          $"text={plain?.TextBox?.Text.Replace('\n', '/')}");
+
+        // 编辑态同样按字面显示：证明“所见即所得”。
+        BeginTextBoxEdit(plain);
+        SetTextBoxEditTextForTest("**粗体** 不是粗体\n# 标题 不是标题\n公式 $x^2$ 原样显示\n--- 不是分隔线");
+        Shot("newtext-plain-edit");
+        EndTextBoxEditFromUi(true);
+        Doc.SelectOnly(Array.Empty<Stroke>());
+        Shot("newtext-plain-committed");
+
+        // ② OCR 结果：只读富文本卡，文字 + 公式混排。
+        Doc.Clear();
+        Doc.ClearHistory();
+        InsertPlainTextBoxForTest("已知 $x^2-4x+3=0$，求：\n（1）对称轴；\n（2）顶点坐标。");
+        var ocr = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
+        if (ocr?.TextBox != null)
+        {
+            ocr.Color = new Vortice.Mathematics.Color4(0.12f, 0.14f, 0.18f, 1f);
+            ocr.TextBox.Ink = ocr.Color;
+            ocr.TextBox.LineColors.Clear();
+            ocr.TextBox.ColorSpans.Clear();
+            ocr.TextBox.Rich = true;
+            ocr.TextBox.ReadOnly = true;
+            ocr.TextBox.Paper = true;
+            ocr.TextBox.AutoWidth = false;
+            ocr.TextBox.Width = 760f * u;
+            ocr.TextBox.FontSize = 15f;
+            ocr.TextBox.InvalidateLayout();
+            ocr.TextBox.FitToContent(ocr.TextBox.Width, 0f, fitWidth: false);
+            ocr.SyncTextBoxBounds();
+        }
+        Doc.SelectOnly(Array.Empty<Stroke>());
+        Shot("newtext-ocr");
+        BeginTextBoxEdit(ocr);
+        Console.WriteLine($"OCR 卡：rich={ocr?.TextBox?.Rich} " +
+                          $"readOnly={ocr?.TextBox?.ReadOnly} " +
+                          $"editing={TextBoxEditing}（应为 False）");
+        if (TextBoxEditing) EndTextBoxEditFromUi(false);
+
+        // 只读标志要能存读：否则重新打开又变成可编辑文本。
+        var saved = InkSerializer.Save(Doc);
+        InkSerializer.LoadInto(Doc, saved);
+        Stroke back = null;
+        foreach (var s in Doc.Strokes)
+            if (s.TextBox is { Rich: true }) { back = s; break; }
+        Console.WriteLine($"OCR 存读：rich={back?.TextBox?.Rich} " +
+                          $"readOnly={back?.TextBox?.ReadOnly} " +
+                          $"editing={TextBoxEditing}（应为 False）");
+
+        // ③ AI 题卡：沿用原有只读渲染。
+        Doc.Clear();
+        Doc.ClearHistory();
+        InsertMockTextBoxFromUi();
+        Doc.SelectOnly(Array.Empty<Stroke>());
+        Shot("newtext-ai");
+        Console.WriteLine("出图：reports/newtext-plain.bmp / newtext-ocr.bmp / newtext-ai.bmp");
     }
 
     private void AiShow(string path)

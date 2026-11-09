@@ -429,8 +429,18 @@ public partial class InkEngine
                               $"OCR {items?.Count ?? 0} 行（bbox {boxes}），几何 {detected.Count} 行，" +
                               $"中位行高 {medianH:F1} → 字号 {fontPx / u:F1}px，行距 {spacing:F2}×");
         }
-        return CreatePlainTextBoxAt(text, target, done.InkColor, TextBoxFace.YaHei,
-                                    spacing, fontPx / u, colors);
+        var card = CreatePlainTextBoxAt(text, target, done.InkColor, TextBoxFace.YaHei,
+                                        spacing, fontPx / u, colors);
+        if (card?.TextBox != null)
+        {
+            // OCR 结果是**只读富文本卡**：文字 + 公式混排，但不进文字编辑。
+            card.TextBox.Rich = true;
+            card.TextBox.ReadOnly = true;
+            card.TextBox.Paper = true;
+            card.TextBox.FitToContent(card.TextBox.Width, 0f, fitWidth: false);
+            card.SyncTextBoxBounds();
+        }
+        return card;
     }
 
     private static RectF ItemBox(OcrClient.OcrLine item, RectF pngBox)

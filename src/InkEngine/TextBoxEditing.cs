@@ -667,7 +667,8 @@ public partial class InkEngine
     /// </summary>
     private void ArmTextBoxEditOnDoubleClick(Stroke s, float screenX, float screenY)
     {
-        if (s?.TextBox == null || s.TextBox.Role != TextBoxRole.Normal || s.Locked) return;
+        if (s?.TextBox == null || s.TextBox.Role != TextBoxRole.Normal
+            || s.TextBox.ReadOnly || s.Locked) return;
         double now = NowMs;
         bool dbl = ReferenceEquals(_lastTextBoxClickStroke, s) && now - _lastTextBoxClickMs < 450;
         _lastTextBoxClickStroke = s;
@@ -694,7 +695,8 @@ public partial class InkEngine
     internal void BeginTextBoxEdit(Stroke s, bool isNew = false,
                                    float? caretScreenX = null, float? caretScreenY = null)
     {
-        if (s?.TextBox == null || s.TextBox.Role != TextBoxRole.Normal) return;
+        if (s?.TextBox == null || s.TextBox.Role != TextBoxRole.Normal
+            || s.TextBox.ReadOnly) return;
         BakeTextBoxTranslation(s);
         EnsureTextBoxEditWindow();
         if (_textBoxEditHwnd == IntPtr.Zero) return;
@@ -956,11 +958,13 @@ public partial class InkEngine
             int lead = (int)MathF.Round(0.194f * fontPx + 0.5f);
             textTop = Math.Max(0, textTop - lead);
         }
+        int editSlack = _windowlessText == null && !box.Rich
+            ? (int)MathF.Round(fontPx * 0.5f) : 0;
         var textRect = new Native.RECT
         {
             Left = (int)MathF.Round(pad),
             Top = textTop,
-            Right = Math.Max((int)MathF.Round(pad) + 40, w - (int)MathF.Round(pad)),
+            Right = Math.Max((int)MathF.Round(pad) + 40, w - (int)MathF.Round(pad) + editSlack),
             Bottom = Math.Max(textTop + 20, h - (int)MathF.Round(pad)),
         };
         if (_windowlessText != null)
