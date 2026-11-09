@@ -512,6 +512,13 @@ internal sealed partial class App : InkEngine.InkEngine
             Console.WriteLine("B0 出图：reports/b0-textbox-*.bmp");
             _quit = true;
         }
+        else if (mode == "--figure")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            FigureTest();
+            _quit = true;
+        }
         else if (mode == "--textbg")
         {
             _autoExitAt = double.MaxValue;
@@ -6157,6 +6164,159 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine(fails == 0 ? "AI 题卡自检：全部通过" : $"AI 题卡自检：{fails} 项失败");
         ExitCode = fails == 0 ? 0 : 1;
         _quit = true;
+    }
+
+    /// <summary>自检用：画一个简单的立体几何线框（正方体）当题目配图。</summary>
+    private static ImageData MakeCubeFigure()
+    {
+        const int w = 480, h = 360;
+        var bgra = new byte[w * h * 4];
+        // 透明底：图片块只显示线框，不出现一块和卡片不同的灰白矩形。
+        for (int i = 0; i < w * h; i++)
+        {
+            int o = i * 4;
+            bgra[o] = 0; bgra[o + 1] = 0; bgra[o + 2] = 0; bgra[o + 3] = 0;
+        }
+
+        void Line(int x0, int y0, int x1, int y1, int thick, byte b, byte g, byte r)
+        {
+            int dx = Math.Abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+            int deltaY = -Math.Abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+            int err = dx + deltaY;
+            while (true)
+            {
+                for (int oy = -thick; oy <= thick; oy++)
+                {
+                    for (int ox = -thick; ox <= thick; ox++)
+                    {
+                        int px = x0 + ox, py = y0 + oy;
+                        if (px < 0 || py < 0 || px >= w || py >= h) continue;
+                        int o = (py * w + px) * 4;
+                        bgra[o] = b; bgra[o + 1] = g; bgra[o + 2] = r; bgra[o + 3] = 255;
+                    }
+                }
+                if (x0 == x1 && y0 == y1) break;
+                int e2 = 2 * err;
+                if (e2 >= deltaY) { err += deltaY; x0 += sx; }
+                if (e2 <= dx) { err += dx; y0 += sy; }
+            }
+        }
+
+        float s = 140f, cx = w * 0.5f, cy = h * 0.58f;
+        Vector2 P(float x, float y, float z)
+            => new(cx + (x - y) * 0.866f * s, cy + (x + y) * 0.5f * s - z * s);
+
+        var v = new[]
+        {
+            P(0, 0, 0), P(1, 0, 0), P(1, 1, 0), P(0, 1, 0),
+            P(0, 0, 1), P(1, 0, 1), P(1, 1, 1), P(0, 1, 1),
+        };
+        int[,] edges =
+        {
+            {0,1},{1,2},{2,3},{3,0},
+            {4,5},{5,6},{6,7},{7,4},
+            {0,4},{1,5},{2,6},{3,7},
+        };
+        for (int i = 0; i < edges.GetLength(0); i++)
+        {
+            var a = v[edges[i, 0]];
+            var b = v[edges[i, 1]];
+            // 后面的棱用浅灰，前面的用深灰：线框图有层次，不靠消隐。
+            bool back = edges[i, 0] >= 4 && edges[i, 1] >= 4;
+            byte ink = back ? (byte)150 : (byte)45;
+            Line((int)MathF.Round(a.X), (int)MathF.Round(a.Y),
+                 (int)MathF.Round(b.X), (int)MathF.Round(b.Y), 1, ink, ink, ink);
+        }
+        return ImageData.Adopt(w, h, bgra, hasAlpha: true);
+    }
+
+    /// <summary>P1 图片块自检：AI 题卡题干后配图、OCR 卡底部配图、存读。</summary>
+    private void FigureTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 题目图片块：AI 题卡 / OCR 卡 ===");
+        SetUiFactory(() => new InkUi.FullUi());
+        PassThrough = false;
+        BoardOn = true;
+        SetBoardFromUi(true);
+        Tool = Tool.Marquee;
+        ShowHud = false;
+        float u = MathF.Max(0.75f, DpiScale);
+        var figure = MakeCubeFigure();
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        InsertMockTextBoxFromUi();
+        Stroke card = null;
+        foreach (var s in Doc.Strokes)
+            if (s.Kind == StrokeKind.TextBox) { card = s; break; }
+        if (card?.TextBox != null)
+        {
+            var b = card.TextBox;
+            b.Title = "二次函数 · 中等 · 1 道";
+            while (b.Questions.Count > 1) b.Questions.RemoveAt(b.Questions.Count - 1);
+            b.Questions[0].Figure = figure;
+            b.Width = 680f * u;
+            b.AutoWidth = false;
+            b.InvalidateLayout();
+            _ = b.EnsureLayout();
+            float x = _virtualX + _virtualW * 0.5f - b.Width * 0.5f;
+            float y = MathF.Max(_virtualY - ViewOffsetY + 16f * u,
+                                (_virtualY + _virtualH) * 0.5f - ViewOffsetY - b.Height * 0.5f);
+            card.SetTextBoxRect(new Vector2(x, y), b.Width, b.Height);
+            card.SyncTextBoxBounds();
+            Doc.RefreshStrokeGrid(card);
+        }
+        Doc.SelectOnly(Array.Empty<Stroke>());
+        SettleFrames(300);
+        ScreenProbe.SaveBmp("reports/figure-ai-card.bmp",
+            (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+        bool hasImage = false;
+        if (card?.TextBox != null)
+            foreach (var l in card.TextBox.EnsureLayout())
+                if (l.Kind == TextBoxLineKind.Image && l.Image != null) { hasImage = true; break; }
+        Console.WriteLine($"AI 题卡图片块：figure={card?.TextBox?.Questions[0].Figure != null} layoutImage={hasImage}");
+
+        var bytes = InkSerializer.Save(Doc);
+        InkSerializer.LoadInto(Doc, bytes);
+        Stroke loaded = null;
+        foreach (var s in Doc.Strokes)
+            if (s.Kind == StrokeKind.TextBox) { loaded = s; break; }
+        bool kept = loaded?.TextBox?.Questions.Count > 0
+                    && loaded.TextBox.Questions[0].Figure != null;
+        Console.WriteLine($"AI 题卡图片存读：{kept}");
+
+        // OCR 结果卡：整体图放在识别文字底部。
+        Doc.Clear();
+        Doc.ClearHistory();
+        InsertPlainTextBoxForTest("OCR 识别结果：\n已知正方体 ABCD-A1B1C1D1，AB=2，求体对角线长度。");
+        Stroke ocr = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
+        if (ocr?.TextBox != null)
+        {
+            var b = ocr.TextBox;
+            b.Rich = true;
+            b.ReadOnly = true;
+            b.Paper = true;
+            b.Fill = TextBoxBackground.Fill(1, BoardColor, card: true);
+            b.Border = TextBoxBackground.Border(1, BoardColor, card: true);
+            b.Figure = figure;
+            b.AutoWidth = false;
+            b.Width = 680f * u;
+            b.FontSize = 15f;
+            b.InvalidateLayout();
+            b.FitToContent(b.Width, 0f, fitWidth: false);
+            float x = _virtualX + _virtualW * 0.5f - b.Width * 0.5f;
+            float y = MathF.Max(_virtualY - ViewOffsetY + 16f * u,
+                                (_virtualY + _virtualH) * 0.5f - ViewOffsetY - b.Height * 0.5f);
+            ocr.SetTextBoxRect(new Vector2(x, y), b.Width, b.Height);
+            ocr.SyncTextBoxBounds();
+            Doc.RefreshStrokeGrid(ocr);
+        }
+        Doc.SelectOnly(Array.Empty<Stroke>());
+        SettleFrames(300);
+        ScreenProbe.SaveBmp("reports/figure-ocr-card.bmp",
+            (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+        Console.WriteLine("出图：reports/figure-ai-card.bmp / figure-ocr-card.bmp");
     }
 
     /// <summary>

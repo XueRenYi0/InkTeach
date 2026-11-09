@@ -13,10 +13,12 @@ internal sealed class TextBoxQuestion
     public string Stem = "";
     public string Answer = "";
     public string Analysis = "";
+    /// <summary>题目配图（可为空）。图片由卡片持有，跟着卡片移动/缩放。</summary>
+    public ImageData Figure;
 
     public TextBoxQuestion Clone() => new()
     {
-        Stem = Stem, Answer = Answer, Analysis = Analysis,
+        Stem = Stem, Answer = Answer, Analysis = Analysis, Figure = Figure,
     };
 }
 
@@ -66,6 +68,9 @@ internal sealed class TextBoxData
     public string Meta = "";
     public string Text = "";
     public bool ShowAnswers;
+
+    /// <summary>OCR/生成结果卡的整体配图（可为空）。题目卡一般用每题 Figure。</summary>
+    public ImageData Figure;
 
     /// <summary>文本框宽度（画布像素）。</summary>
     public float Width = 560f;
@@ -435,7 +440,7 @@ internal sealed class TextBoxData
             Face = Face, LineSpacing = LineSpacing, Paper = Paper,
             Rich = Rich, ReadOnly = ReadOnly,
             Fill = Fill, Border = Border, Radius = Radius,
-            Unit = Unit, Ink = Ink, ScrollY = ScrollY,
+            Unit = Unit, Ink = Ink, ScrollY = ScrollY, Figure = Figure,
         };
         foreach (var color in LineColors) c.LineColors.Add(color);
         foreach (var span in ColorSpans)
@@ -521,6 +526,8 @@ internal enum TextBoxLineKind
     Divider = 2,
     /// <summary>独立公式行（整行 LaTeX），画的是透明位图。</summary>
     Math = 3,
+    /// <summary>题目配图：整块位图，按内容宽度等比缩放。</summary>
+    Image = 4,
 }
 
 internal enum TextBoxInk
@@ -548,6 +555,9 @@ internal sealed class TextBoxLine
     /// <summary>独立公式行的透明位图；Math 行才有。</summary>
     public ImageData MathImage;
     public float MathW, MathH;
+    /// <summary>题目配图；Image 行才有。</summary>
+    public ImageData Image;
+    public float ImageW, ImageH;
     /// <summary>行内混排（文字 + 公式片段）；普通文本框含 `$...$` 时才有。</summary>
     public List<TextBoxRun> Runs;
 }
@@ -608,6 +618,8 @@ internal static class TextBoxLayout
             y += 17f * u;
 
             AddRichText(lines, q.Stem, pad, textW, baseSize, 22f * u, u, TextBoxInk.Black, ref y);
+            if (q.Figure != null)
+                AddFigure(lines, q.Figure, pad, textW, 360f * u, 8f * u, ref y);
 
             y += 4f * u;
             if (card.ShowAnswers)
@@ -889,6 +901,8 @@ internal static class TextBoxLayout
                 y += lineH2;
             }
         }
+        if (card.Figure != null)
+            AddFigure(lines, card.Figure, pad, card.Width - pad * 2f, 360f * u, 10f * u, ref y);
         height = MathF.Max(y + pad, pad * 2f + lineH);
         return lines;
     }
@@ -1370,6 +1384,26 @@ internal static class TextBoxLayout
             X = x0, Y = y, Size = 1f, Height = 1f,
             Box = new RectF { MinX = x0, MinY = y, MaxX = x1, MaxY = y + 1f },
         });
+    }
+
+    /// <summary>题目配图：按内容宽度等比缩放、居中；图片高度计入卡片自动高度。</summary>
+    private static void AddFigure(List<TextBoxLine> lines, ImageData img, float x, float maxW,
+                                  float maxH, float gap, ref float y)
+    {
+        if (img == null || img.Width <= 0 || img.Height <= 0) return;
+        float scale = MathF.Min(1f, maxW / img.Width);
+        if (maxH > 0f) scale = MathF.Min(scale, maxH / img.Height);
+        if (scale <= 0.001f) return;
+        float w = MathF.Max(1f, img.Width * scale);
+        float h = MathF.Max(1f, img.Height * scale);
+        lines.Add(new TextBoxLine
+        {
+            Kind = TextBoxLineKind.Image,
+            X = x + MathF.Max(0f, (maxW - w) * 0.5f), Y = y,
+            Size = 1f, Height = h,
+            Image = img, ImageW = w, ImageH = h,
+        });
+        y += h + gap;
     }
 
     /// <summary>

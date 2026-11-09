@@ -2560,6 +2560,17 @@ internal sealed partial class OverlayWindow : IDisposable
                         break;
                     }
 
+                    case TextBoxLineKind.Image:
+                    {
+                        var bmp = line.Image?.GetBitmap(_ctx);
+                        if (bmp == null) break;
+                        var dst = new Vortice.RawRectF(o.X + line.X, scrolledY + line.Y,
+                                                       o.X + line.X + line.ImageW,
+                                                       scrolledY + line.Y + line.ImageH);
+                        _ctx.DrawBitmap(bmp, dst, 1f, Vortice.Direct2D1.InterpolationMode.Linear, null, null);
+                        break;
+                    }
+
                     case TextBoxLineKind.Math:
                     {
                         var bmp = line.MathImage?.GetBitmap(_ctx);

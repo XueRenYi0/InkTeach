@@ -183,7 +183,7 @@ internal static class InkSerializer
     /// v29（2026-11-06）：再追加 **字体档 / 行距 / 逐行墨色**（识别结果按行保留红蓝）。
     /// v30（2026-11-06）：再追加 **逐字墨色 span**（编辑时选中一段改色）。
     /// </summary>
-    public const int FormatVersion = 32;
+    public const int FormatVersion = 33;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -372,6 +372,9 @@ internal static class InkSerializer
                 w.Write(q.Stem ?? "");
                 w.Write(q.Answer ?? "");
                 w.Write(q.Analysis ?? "");
+                // v33：题目配图。
+                w.Write(q.Figure != null);
+                if (q.Figure != null) WriteImage(w, q.Figure);
             }
             // v27：是否仍处于"自动宽"（没手动拖过左右竖线/四角）。
             w.Write((byte)(c.AutoWidth ? 1 : 0));
@@ -404,6 +407,9 @@ internal static class InkSerializer
             w.Write(c.Fill.R); w.Write(c.Fill.G); w.Write(c.Fill.B); w.Write(c.Fill.A);
             w.Write(c.Border.R); w.Write(c.Border.G); w.Write(c.Border.B); w.Write(c.Border.A);
             w.Write(c.Radius);
+            // v33：卡片整体配图（OCR 结果卡用）。
+            w.Write(c.Figure != null);
+            if (c.Figure != null) WriteImage(w, c.Figure);
         }
     }
 
@@ -668,12 +674,14 @@ internal static class InkSerializer
                 throw new InvalidDataException($"题卡题目数量不合理：{qn}。");
             for (int qi = 0; qi < qn; qi++)
             {
-                c.Questions.Add(new TextBoxQuestion
+                var q = new TextBoxQuestion
                 {
                     Stem = ReadString(r, 65536),
                     Answer = ReadString(r, 65536),
                     Analysis = ReadString(r, 65536),
-                });
+                };
+                if (version >= 33 && r.ReadByte() != 0) q.Figure = ReadImage(r);
+                c.Questions.Add(q);
             }
             // v27 起：普通文本记住"自动宽"状态。
             // v26 及以前没有这个字段——那些文本框默认按**自动宽**迁移：老版本的
@@ -751,6 +759,7 @@ internal static class InkSerializer
                     float rad = r.ReadSingle();
                     c.Radius = float.IsFinite(rad) ? Math.Clamp(rad, 0f, 40f) : 12f;
                 }
+                if (version >= 33 && r.ReadByte() != 0) c.Figure = ReadImage(r);
             }
             s.TextBox = c;
             c.Ink = s.Color;
@@ -814,6 +823,29 @@ internal static class InkSerializer
             s.SetPoint(1, new Vector2(o.X + 2f * a, o.Y + 2f * b));
         }
         return s;
+    }
+
+    /// <summary>题目配图：和图片对象同一套 BGRA 存储，读回走 AdoptPremultiplied 避免二次预乘。</summary>
+    private static void WriteImage(BinaryWriter w, ImageData img)
+    {
+        w.Write(img.Width);
+        w.Write(img.Height);
+        w.Write(img.Bgra.Length);
+        w.Write(img.Bgra);
+    }
+
+    private static ImageData ReadImage(BinaryReader r)
+    {
+        int w = r.ReadInt32();
+        int h = r.ReadInt32();
+        if (w <= 0 || h <= 0 || (long)w * h > 16_000_000)
+            throw new InvalidDataException($"题目配图尺寸不合理：{w}×{h}。");
+        long need = (long)w * h * 4;
+        int len = r.ReadInt32();
+        if (len != need || len > 64_000_000)
+            throw new InvalidDataException($"题目配图像素长度不合理：{len}。");
+        var px = r.ReadBytes(len);
+        return ImageData.AdoptPremultiplied(w, h, px);
     }
 
     /// <summary>
