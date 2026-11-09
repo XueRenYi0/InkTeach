@@ -5,6 +5,8 @@ internal sealed class SampledCurve
 {
     public PlotSeries Series;
     public List<(float X, float Y)> Points;
+    /// <summary>分段端点的开/闭圆点；非分段函数为空。</summary>
+    public List<(float X, float Y, bool Filled)> Breaks;
 }
 
 /// <summary>
@@ -43,6 +45,7 @@ internal static class PlotSampling
             foreach (var s in spec.Series)
             {
                 List<(float X, float Y)> pts;
+                List<(float X, float Y, bool)> breaks = null;
                 if (s.Precomputed is { Count: > 0 })
                 {
                     pts = s.Precomputed;
@@ -50,6 +53,7 @@ internal static class PlotSampling
                 else if (s.Pieces.Count > 0)
                 {
                     pts = new List<(float, float)>(samples);
+                    breaks = new List<(float, float, bool)>();
                     foreach (var piece in s.Pieces)
                     {
                         PlotExpression pe;
@@ -61,10 +65,25 @@ internal static class PlotSampling
                         a = MathF.Max(a, spec.XMin);
                         b = MathF.Min(b, spec.XMax);
                         if (b < a) continue;
+                        // 分段端点：闭区间实心、开区间空心，跳变一眼能看出来。
+                        if (piece.MinX.HasValue && piece.MinX.Value >= spec.XMin
+                            && piece.MinX.Value <= spec.XMax)
+                        {
+                            double by = pe.Eval(piece.MinX.Value);
+                            if (double.IsFinite(by))
+                                breaks.Add((piece.MinX.Value, (float)by, piece.MinInclusive));
+                        }
+                        if (piece.MaxX.HasValue && piece.MaxX.Value >= spec.XMin
+                            && piece.MaxX.Value <= spec.XMax)
+                        {
+                            double by = pe.Eval(piece.MaxX.Value);
+                            if (double.IsFinite(by))
+                                breaks.Add((piece.MaxX.Value, (float)by, piece.MaxInclusive));
+                        }
                         if (b - a < 1e-6f)
                         {
                             float y0 = (float)pe.Eval(a);
-                            if (double.IsFinite(y0)) pts.Add((a, (float)y0));
+                            if (double.IsFinite(y0)) pts.Add((a, y0));
                             pts.Add((float.NaN, float.NaN));
                             continue;
                         }
@@ -85,6 +104,7 @@ internal static class PlotSampling
                         }
                         pts.Add((float.NaN, float.NaN));   // 段与段之间断线
                     }
+                    // 交给下面统一建 curve；先暂存到局部，后面补。
                 }
                 else
                 {
@@ -101,7 +121,7 @@ internal static class PlotSampling
                         pts.Add((x, (float)y));
                     }
                 }
-                var curve = new SampledCurve { Series = s, Points = pts };
+                var curve = new SampledCurve { Series = s, Points = pts, Breaks = breaks };
                 if (AddRange(curve, ref yMin, ref yMax) > 0) curves.Add(curve);
             }
         }

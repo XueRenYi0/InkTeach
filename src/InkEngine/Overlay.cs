@@ -2599,6 +2599,23 @@ internal sealed partial class OverlayWindow : IDisposable
                 _ctx.DrawGeometry(geo, Brush(curve.Series.Color), 3.2f,
                                   Gfx.StyleFor(curve.Series.Dashed
                                       ? StrokeDash.Dashed : StrokeDash.Solid));
+                if (curve.Breaks != null)
+                {
+                    var whiteDot = Brush(new Color4(1f, 1f, 1f, 1f));
+                    var colorDot = Brush(curve.Series.Color);
+                    foreach (var (bx, by, filled) in curve.Breaks)
+                    {
+                        if (!float.IsFinite(bx) || !float.IsFinite(by)) continue;
+                        var c = new Vector2(X(bx), Y(by));
+                        if (filled)
+                            _ctx.FillEllipse(new Ellipse(c, 4.4f, 4.4f), colorDot);
+                        else
+                        {
+                            _ctx.FillEllipse(new Ellipse(c, 4.4f, 4.4f), whiteDot);
+                            _ctx.DrawEllipse(new Ellipse(c, 3.5f, 3.5f), colorDot, 1.8f);
+                        }
+                    }
+                }
             }
             if (spec.Kind == "conic" && spec.Conic != null)
                 DrawConicFeaturesD2D(spec.Conic, X, Y, ox + left, oy + top, pw, ph,

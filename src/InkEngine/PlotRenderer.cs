@@ -218,6 +218,24 @@ internal static class PlotRenderer
                     prevY = sy;
                 }
                 canvas.DrawPath(path, pen);
+                if (curve.Breaks != null)
+                {
+                    using var fill = new SKPaint
+                    {
+                        Color = pen.Color, IsAntialias = true, Style = SKPaintStyle.Fill,
+                    };
+                    using var white = new SKPaint
+                    {
+                        Color = SKColors.White, IsAntialias = true, Style = SKPaintStyle.Fill,
+                    };
+                    foreach (var (bx, by, filled) in curve.Breaks)
+                    {
+                        if (!float.IsFinite(bx) || !float.IsFinite(by)) continue;
+                        float sx = X(bx), sy = Y(by);
+                        if (!filled) canvas.DrawCircle(sx, sy, 4.2f, white);
+                        canvas.DrawCircle(sx, sy, 4.2f, filled ? fill : pen);
+                    }
+                }
             }
 
             if (spec.Kind == "conic" && spec.Conic != null)
