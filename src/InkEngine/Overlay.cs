@@ -4626,6 +4626,8 @@ internal sealed partial class OverlayWindow : IDisposable
 
     private IDWriteTextFormat _readoutLeft;
     private float _readoutLeftPx;
+    private IDWriteTextFormat _panelLabel;
+    private float _panelLabelPx;
 
     /// <summary>左对齐的小号字（收藏弹窗的分类列 / 菜单行）。</summary>
     private IDWriteTextFormat ReadoutFormatLeft(float dpi)
@@ -4642,6 +4644,23 @@ internal sealed partial class OverlayWindow : IDisposable
             _readoutLeftPx = px;
         }
         return _readoutLeft;
+    }
+
+    /// <summary>属性面板左侧标签（字体/字号/行距/背景）：左对齐 + 垂直居中，和右侧色块同一行高。</summary>
+    private IDWriteTextFormat PanelLabelFormat(float dpi)
+    {
+        float px = MathF.Max(9f, MathF.Round(12f * dpi));
+        if (_panelLabel == null || _panelLabelPx != px)
+        {
+            _panelLabel?.Dispose();
+            _panelLabel = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _panelLabel.TextAlignment = TextAlignment.Leading;
+            _panelLabel.ParagraphAlignment = ParagraphAlignment.Center;
+            _panelLabel.WordWrapping = WordWrapping.NoWrap;
+            _panelLabelPx = px;
+        }
+        return _panelLabel;
     }
 
     /// <summary>
@@ -6521,7 +6540,8 @@ internal sealed partial class OverlayWindow : IDisposable
     {
         float dpi = app.UiUnit;
         var p = SelectionHandles.FontPanelRect(sel, dpi, app.FurnitureViewport);
-        DrawPanelCard(app, p, app.FloatingTheme.CornerRadius * dpi, dpi);
+        // 属性面板内容密、又有色块，半透明会透出后面的文字，看起来脏；这里用实底。
+        DrawPanelCard(app, p, app.FloatingTheme.CornerRadius * dpi, dpi, opaque: true);
         var th = app.FloatingTheme;
 
         var box = app.Doc.Selected.Count == 1 ? app.Doc.Selected[0].TextBox : null;
@@ -6530,7 +6550,7 @@ internal sealed partial class OverlayWindow : IDisposable
         float currentSpacing = box?.LineSpacing ?? TextBoxFaces.DefaultLineSpacing;
 
         float pad = SelectionHandles.FloatPadLogical * dpi;
-        var labelFmt = AiTextFormat(12f * dpi, false, false);
+        var labelFmt = PanelLabelFormat(dpi);
         string[] rowLabels = { "字体", "字号", "行距", "背景" };
         for (int row = 0; row < 4; row++)
         {
@@ -6583,7 +6603,7 @@ internal sealed partial class OverlayWindow : IDisposable
                  AiTextFormat(14f * dpi, true, true));
         }
 
-        // 背景：透明 / 白纸 / 板色 / 浅色。填色块直接画出来，文字颜色按底色反差。
+        // 背景：透明 / 白纸 / 板色 / 浅色。四格铺满整行，和上面几行右沿对齐。
         bool card = box != null && (box.Rich || box.Role == TextBoxRole.AiQuestion);
         var board = app.BoardColor;
         var bgFmt = AiTextFormat(12f * dpi, true, true);
@@ -6607,8 +6627,9 @@ internal sealed partial class OverlayWindow : IDisposable
                 _scratch.Color = th.Hover;
                 _ctx.FillRoundedRectangle(new RoundedRectangle(rf, cr, cr), _scratch);
                 _scratch.Color = new Color4(th.TextMuted.R, th.TextMuted.G, th.TextMuted.B, 0.55f);
-                _ctx.DrawLine(new Vector2(cell.MinX + 6f * dpi, cell.MaxY - 6f * dpi),
-                              new Vector2(cell.MaxX - 6f * dpi, cell.MinY + 6f * dpi),
+                // 小斜杠只放在左侧，避免从“透明”两个字中间穿过去。
+                _ctx.DrawLine(new Vector2(cell.MinX + 7f * dpi, cell.MaxY - 7f * dpi),
+                              new Vector2(cell.MinX + 15f * dpi, cell.MinY + 7f * dpi),
                               _scratch, 1.2f * dpi);
             }
             _scratch.Color = border.A > 0.01f
@@ -6629,7 +6650,8 @@ internal sealed partial class OverlayWindow : IDisposable
                     : new Color4(0.98f, 0.98f, 0.98f, 1f))
                 : th.Text;
             _ctx.DrawText(TextBoxBackground.Names[i], bgFmt,
-                new Rect(cell.MinX, cell.MinY, cell.MaxX - cell.MinX, cell.MaxY - cell.MinY), Brush(label));
+                new Rect(cell.MinX, cell.MinY, cell.MaxX - cell.MinX, cell.MaxY - cell.MinY),
+                Brush(label));
         }
     }
 

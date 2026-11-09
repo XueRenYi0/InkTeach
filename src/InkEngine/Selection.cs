@@ -2869,9 +2869,19 @@ internal static class SelectionHandles
     public static RectF FontPanelSpacingRect(int i, in RectF sel, float dpi, in RectF visible)
         => StyleCellRect(2, i, sel, dpi, visible);
 
-    /// <summary>背景档（第四行：透明 / 白纸 / 板色 / 浅色）。</summary>
+    /// <summary>背景档（第四行：透明 / 白纸 / 板色 / 浅色）。四个等宽格铺满整行，和上面几行右沿对齐。</summary>
     public static RectF FontPanelBackgroundRect(int i, in RectF sel, float dpi, in RectF visible)
-        => StyleCellRect(3, i, sel, dpi, visible);
+    {
+        var p = FontPanelRect(sel, dpi, visible);
+        float pad = FloatPadLogical * dpi;
+        float gap = FloatGapLogical * dpi;
+        float left = p.MinX + pad + StyleLabelWidthLogical * dpi;
+        float right = p.MaxX - pad;
+        float w = (right - left - 3 * gap) * 0.25f;
+        float y = p.MinY + pad + 3 * (StyleRowHeightLogical * dpi + gap);
+        float x = left + i * (w + gap);
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + StyleRowHeightLogical * dpi };
+    }
 
     /// <summary>
     /// "挂在操作条某个按钮下面的小面板"——层级和导出共用这一份几何：
