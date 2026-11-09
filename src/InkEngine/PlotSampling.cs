@@ -47,6 +47,45 @@ internal static class PlotSampling
                 {
                     pts = s.Precomputed;
                 }
+                else if (s.Pieces.Count > 0)
+                {
+                    pts = new List<(float, float)>(samples);
+                    foreach (var piece in s.Pieces)
+                    {
+                        PlotExpression pe;
+                        try { pe = PlotExpression.Parse(piece.Expr, spec.Params); }
+                        catch { continue; }
+                        if (pe == null) continue;
+                        float a = piece.MinX ?? spec.XMin;
+                        float b = piece.MaxX ?? spec.XMax;
+                        a = MathF.Max(a, spec.XMin);
+                        b = MathF.Min(b, spec.XMax);
+                        if (b < a) continue;
+                        if (b - a < 1e-6f)
+                        {
+                            float y0 = (float)pe.Eval(a);
+                            if (double.IsFinite(y0)) pts.Add((a, (float)y0));
+                            pts.Add((float.NaN, float.NaN));
+                            continue;
+                        }
+                        int n = Math.Clamp((int)((b - a) / MathF.Max(1e-6f,
+                                            spec.XMax - spec.XMin) * samples), 40, samples);
+                        for (int i = 0; i <= n; i++)
+                        {
+                            float x = a + (b - a) * i / n;
+                            if (i == 0 && piece.MinX.HasValue && !piece.MinInclusive
+                                && x <= piece.MinX.Value)
+                                x = MathF.Min(b, piece.MinX.Value + (b - a) * 0.001f);
+                            if (i == n && piece.MaxX.HasValue && !piece.MaxInclusive
+                                && x >= piece.MaxX.Value)
+                                x = MathF.Max(a, piece.MaxX.Value - (b - a) * 0.001f);
+                            double y = pe.Eval(x);
+                            if (!double.IsFinite(y) || Math.Abs(y) > 1e6) continue;
+                            pts.Add((x, (float)y));
+                        }
+                        pts.Add((float.NaN, float.NaN));   // 段与段之间断线
+                    }
+                }
                 else
                 {
                     PlotExpression expr;

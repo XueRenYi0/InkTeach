@@ -5,6 +5,16 @@ using Vortice.Mathematics;
 
 namespace InkEngine;
 
+/// <summary>分段函数的一段：expr 在 [MinX,MaxX] 上生效；null = 不限制。</summary>
+internal sealed class PlotPiece
+{
+    public string Expr = "";
+    public float? MinX;
+    public float? MaxX;
+    public bool MinInclusive = true;
+    public bool MaxInclusive = false;
+}
+
 /// <summary>一条函数曲线。第一版只用一条，后面多条直接加 list + 颜色。</summary>
 internal sealed class PlotSeries
 {
@@ -12,6 +22,8 @@ internal sealed class PlotSeries
     public Color4 Color = new(0.12f, 0.14f, 0.18f, 1f);
     public string Label = "";
     public bool Dashed;
+    /// <summary>非空 = 分段函数；每段自己的定义域。</summary>
+    public readonly List<PlotPiece> Pieces = new();
     /// <summary>非空时直接用预采样点（圆锥曲线/参数曲线），不走 PlotExpression。</summary>
     public List<(float X, float Y)> Precomputed;
 }

@@ -6800,6 +6800,39 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("出图：reports/aiplot-recognize-text.bmp / " +
                           "aiplot-recognize-image.bmp / aiplot-ai-menu.bmp");
 
+        // 分段函数：同一坐标系两条分支，段间断线。
+        var pieceSpec = new PlotSpec { Title = "分段函数", XMin = -5f, XMax = 5f };
+        var pieceSeries = new PlotSeries { Label = "y={2^x (x≥0); x^2 (x<0)}" };
+        pieceSeries.Pieces.Add(new PlotPiece { Expr = "2^x", MinX = 0, MinInclusive = true });
+        pieceSeries.Pieces.Add(new PlotPiece { Expr = "x^2", MaxX = 0, MaxInclusive = false });
+        pieceSpec.Series.Add(pieceSeries);
+        var pieceImg = PlotRenderer.Render(pieceSpec);
+        if (pieceImg != null)
+            InsertPlotImageForTest(pieceImg, "reports/aiplot-piecewise.bmp");
+        InsertPlotFigureForTest(pieceSpec, "reports/aiplot-v2-piecewise.bmp");
+        var pieceRound = PlotSpecJson.Read(PlotSpecJson.Write(pieceSpec));
+        Console.WriteLine($"分段函数：pieces={pieceRound?.Series[0].Pieces.Count ?? 0} " +
+                          $"label={pieceRound?.Series[0].Label}");
+        Console.WriteLine("出图：reports/aiplot-piecewise.bmp / aiplot-v2-piecewise.bmp");
+
+        // 真实模型：分段函数 → pieces（而不是只给一段）。
+        var aiPiece = cfg.IsConfigured
+            ? Task.Run(() => AiPlotClient.ParseAsync(
+                "画分段函数 y=2^x（x≥0），y=x^2（x<0），同一个坐标系。",
+                cfg, CancellationToken.None)).GetAwaiter().GetResult()
+            : new AiPlotClient.Result { Error = "AI 未配置" };
+        int aiPieceCount = aiPiece.Spec?.Series.Count > 0
+            ? aiPiece.Spec.Series[0].Pieces.Count : 0;
+        Console.WriteLine($"AI 分段：ok={aiPiece.Ok} pieces={aiPieceCount} " +
+                          $"series={aiPiece.Spec?.Series.Count ?? 0} error={aiPiece.Error}");
+        if (aiPiece.Spec != null && aiPieceCount > 0)
+        {
+            var aiPieceImg = PlotRenderer.Render(aiPiece.Spec);
+            if (aiPieceImg != null)
+                InsertPlotImageForTest(aiPieceImg, "reports/aiplot-piecewise-ai.bmp");
+            Console.WriteLine("出图：reports/aiplot-piecewise-ai.bmp");
+        }
+
         // v1.6 平面几何：AI 给点/线段，本地结构化渲染。
         var planeAi = cfg.IsConfigured
             ? Task.Run(() => AiPlotClient.ParseAsync(

@@ -65,6 +65,11 @@ internal static class AiPlotClient
             "1) 函数（可含参数）：\n" +
             "{\"kind\":\"functions\",\"functions\":[{\"expr\":\"a*x^2+b*x+c\"}]," +
             "\"params\":{\"a\":1,\"b\":-2,\"c\":1},\"domain\":[-5,5],\"title\":\"含参二次函数\"}\n" +
+            "分段函数用 pieces（每段一个 expr + min/max 边界，min/max 可省略）：\n" +
+            "{\"kind\":\"functions\",\"functions\":[{\"pieces\":[" +
+            "{\"expr\":\"2^x\",\"min\":0,\"min_inclusive\":true}," +
+            "{\"expr\":\"x^2\",\"max\":0,\"max_inclusive\":false}]}]," +
+            "\"domain\":[-5,5],\"title\":\"分段函数\"}\n" +
             "2) 圆锥曲线：\n" +
             "{\"kind\":\"conic\",\"conic\":{\"type\":\"ellipse\",\"h\":0,\"k\":0,\"a\":3,\"b\":2," +
             "\"axis\":\"right\",\"equation\":\"x^2/9+y^2/4=1\"},\"domain\":[-6,6],\"title\":\"椭圆\"}\n" +
@@ -89,6 +94,7 @@ internal static class AiPlotClient
             "规则：只支持一个自变量 x；expr 用 * 表示乘法、^ 表示乘方；" +
             "函数支持 sin/cos/tan/sqrt/exp/ln/log/abs。含参函数必须在 params 里给默认值，" +
             "expr 里可以用参数名。定义域要避开 log/sqrt 的非法区间。" +
+            "分段函数必须用 pieces（每段自己的 min/max），不能只写一个 expr；" +
             "几何点坐标取 0..10 的方便数值，连线要闭合完整。\n" +
             (fromImage ? "图片：" + (request ?? "") : "用户要求：" + (request ?? ""));
     }
@@ -195,11 +201,26 @@ internal static class AiPlotClient
             {
                 foreach (var s in spec.Series)
                 {
-                    try { PlotExpression.Parse(s.Expr, spec.Params); }
-                    catch (Exception ex)
+                    if (s.Pieces.Count > 0)
                     {
-                        throw new FormatException(
-                            "表达式无法解析：" + s.Expr + "（" + ex.Message + "）");
+                        foreach (var piece in s.Pieces)
+                        {
+                            try { PlotExpression.Parse(piece.Expr, spec.Params); }
+                            catch (Exception ex)
+                            {
+                                throw new FormatException(
+                                    "分段表达式无法解析：" + piece.Expr + "（" + ex.Message + "）");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        try { PlotExpression.Parse(s.Expr, spec.Params); }
+                        catch (Exception ex)
+                        {
+                            throw new FormatException(
+                                "表达式无法解析：" + s.Expr + "（" + ex.Message + "）");
+                        }
                     }
                 }
                 if (spec.Series.Count == 0)

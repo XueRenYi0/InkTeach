@@ -45,6 +45,22 @@ internal static class PlotSpecJson
                 w.WriteString("label", s.Label ?? "");
                 w.WriteNumber("color", ToUInt(s.Color));
                 w.WriteString("dash", s.Dashed ? "1" : "0");
+                if (s.Pieces.Count > 0)
+                {
+                    w.WritePropertyName("pieces");
+                    w.WriteStartArray();
+                    foreach (var p in s.Pieces)
+                    {
+                        w.WriteStartObject();
+                        w.WriteString("expr", p.Expr ?? "");
+                        if (p.MinX.HasValue) w.WriteNumber("min", p.MinX.Value);
+                        if (p.MaxX.HasValue) w.WriteNumber("max", p.MaxX.Value);
+                        w.WriteBoolean("min_inclusive", p.MinInclusive);
+                        w.WriteBoolean("max_inclusive", p.MaxInclusive);
+                        w.WriteEndObject();
+                    }
+                    w.WriteEndArray();
+                }
                 w.WriteEndObject();
             }
             w.WriteEndArray();
@@ -130,15 +146,18 @@ internal static class PlotSpecJson
                 string expr = e.ValueKind == JsonValueKind.String
                     ? e.GetString()
                     : Str(e, "expr");
-                if (string.IsNullOrWhiteSpace(expr)) continue;
+                var pieces = ReadPieces(e);
+                if (string.IsNullOrWhiteSpace(expr) && pieces.Count == 0) continue;
                 var s = new PlotSeries
                 {
-                    Expr = expr.Trim(),
+                    Expr = (expr ?? "").Trim(),
                     Label = Str(e, "label"),
                     Color = ColorOf(e, "color", Palette[idx % Palette.Length]),
                     Dashed = Str(e, "dash") == "1",
                 };
-                if (string.IsNullOrWhiteSpace(s.Label)) s.Label = "y=" + s.Expr;
+                s.Pieces.AddRange(pieces);
+                if (string.IsNullOrWhiteSpace(s.Label))
+                    s.Label = pieces.Count > 0 ? PieceLabel(pieces) : "y=" + s.Expr;
                 spec.Series.Add(s);
                 idx++;
             }
@@ -150,13 +169,16 @@ internal static class PlotSpecJson
             foreach (var f in fns.EnumerateArray())
             {
                 string expr = f.ValueKind == JsonValueKind.String ? f.GetString() : Str(f, "expr");
-                if (string.IsNullOrWhiteSpace(expr)) continue;
-                spec.Series.Add(new PlotSeries
+                var pieces = ReadPieces(f);
+                if (string.IsNullOrWhiteSpace(expr) && pieces.Count == 0) continue;
+                var s = new PlotSeries
                 {
-                    Expr = expr.Trim(),
-                    Label = "y=" + expr.Trim(),
+                    Expr = (expr ?? "").Trim(),
+                    Label = pieces.Count > 0 ? PieceLabel(pieces) : "y=" + (expr ?? "").Trim(),
                     Color = Palette[idx % Palette.Length],
-                });
+                };
+                s.Pieces.AddRange(pieces);
+                spec.Series.Add(s);
                 idx++;
             }
         }
@@ -212,6 +234,60 @@ internal static class PlotSpecJson
         ((v >> 8) & 0xFF) / 255f,
         (v & 0xFF) / 255f,
         ((v >> 24) & 0xFF) / 255f);
+
+    private static List<PlotPiece> ReadPieces(JsonElement e)
+    {
+        var result = new List<PlotPiece>();
+        if (e.ValueKind != JsonValueKind.Object
+            || !e.TryGetProperty("pieces", out var arr)
+            || arr.ValueKind != JsonValueKind.Array) return result;
+        foreach (var p in arr.EnumerateArray())
+        {
+            if (p.ValueKind != JsonValueKind.Object) continue;
+            string expr = Str(p, "expr");
+            if (string.IsNullOrWhiteSpace(expr)) continue;
+            var piece = new PlotPiece
+            {
+                Expr = expr.Trim(),
+                MinInclusive = Bool(p, "min_inclusive", true),
+                MaxInclusive = Bool(p, "max_inclusive", false),
+            };
+            if (p.TryGetProperty("min", out var mn) && mn.ValueKind == JsonValueKind.Number)
+                piece.MinX = (float)mn.GetDouble();
+            if (p.TryGetProperty("max", out var mx) && mx.ValueKind == JsonValueKind.Number)
+                piece.MaxX = (float)mx.GetDouble();
+            result.Add(piece);
+        }
+        return result;
+    }
+
+    private static string PieceLabel(IReadOnlyList<PlotPiece> pieces)
+    {
+        var parts = new List<string>(pieces.Count);
+        foreach (var p in pieces)
+        {
+            string cond;
+            if (p.MinX.HasValue && p.MaxX.HasValue)
+                cond = $"{Fmt(p.MinX.Value)}{(p.MinInclusive ? "≤" : "<")}x" +
+                       $"{(p.MaxInclusive ? "≤" : "<")}{Fmt(p.MaxX.Value)}";
+            else if (p.MinX.HasValue)
+                cond = $"x{(p.MinInclusive ? "≥" : ">")}{Fmt(p.MinX.Value)}";
+            else if (p.MaxX.HasValue)
+                cond = $"x{(p.MaxInclusive ? "≤" : "<")}{Fmt(p.MaxX.Value)}";
+            else cond = "";
+            parts.Add(p.Expr + (cond.Length > 0 ? " (" + cond + ")" : ""));
+        }
+        return "y={" + string.Join("; ", parts) + "}";
+    }
+
+    private static string Fmt(float v)
+        => v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static bool Bool(JsonElement e, string name, bool fallback)
+        => e.ValueKind == JsonValueKind.Object
+           && e.TryGetProperty(name, out var v)
+           && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)
+            ? v.GetBoolean() : fallback;
 
     private static Color4 ColorOf(JsonElement e, string name, Color4 fallback)
     {
