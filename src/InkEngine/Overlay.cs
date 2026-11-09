@@ -3907,7 +3907,8 @@ internal sealed partial class OverlayWindow : IDisposable
             // 交互矢量图的参数滑杆：浮在选中框上方，**必须每帧算进脏区**，
             // 否则拖动参数时曲线变了、滑杆却停在旧值（2026-11-09 v2.1 实测踩到）。
             if (app.Doc.Selected.Count == 1
-                && app.Doc.Selected[0].Kind == StrokeKind.Figure)
+                && app.Doc.Selected[0].Kind == StrokeKind.Figure
+                && !app.Doc.Selected[0].Locked)
             {
                 var keys = FigureParamBar.Keys(app.Doc.Selected[0]);
                 if (keys.Count > 0)
@@ -4541,7 +4542,8 @@ internal sealed partial class OverlayWindow : IDisposable
         }
 
         // 4.5) 交互矢量图：参数滑杆（只画在 overlay，不进内容层）。
-        if (!collapsed && sel.Count == 1 && sel[0].Kind == StrokeKind.Figure)
+        if (!collapsed && sel.Count == 1 && sel[0].Kind == StrokeKind.Figure
+            && !sel[0].Locked)
         {
             DrawFigureParamBar(app, sel[0], frame, dpi);
         }

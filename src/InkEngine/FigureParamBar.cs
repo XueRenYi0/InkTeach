@@ -18,6 +18,8 @@ internal static class FigureParamBar
         {
             keys.Add("a");
             keys.Add("b");
+            keys.Add("h");
+            keys.Add("k");
             return keys;
         }
         if (s.Figure.Params.Count > 0)
@@ -36,6 +38,8 @@ internal static class FigureParamBar
         {
             if (key == "a") { value = s.Figure.Conic.A; return true; }
             if (key == "b") { value = s.Figure.Conic.B; return true; }
+            if (key == "h") { value = s.Figure.Conic.H; return true; }
+            if (key == "k") { value = s.Figure.Conic.K; return true; }
             return false;
         }
         return s.Figure.Params.TryGetValue(key, out value);
@@ -49,6 +53,8 @@ internal static class FigureParamBar
             float v = Math.Clamp((float)value, 0.1f, 50f);
             if (key == "a") s.Figure.Conic.A = v;
             else if (key == "b") s.Figure.Conic.B = v;
+            else if (key == "h") s.Figure.Conic.H = Math.Clamp((float)value, -50f, 50f);
+            else if (key == "k") s.Figure.Conic.K = Math.Clamp((float)value, -50f, 50f);
             return;
         }
         s.Figure.Params[key] = value;

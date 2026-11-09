@@ -6407,6 +6407,11 @@ internal sealed partial class App : InkEngine.InkEngine
                           && v2Loaded.Figure.Series.Count > 0
                           && v2Loaded.Figure.Series[0].Expr == expr0;
             bool v2NoImage = v2Loaded?.Image == null;
+            var v2Clone = v2Loaded?.Clone();
+            bool v2CloneOk = v2Clone?.Figure != null
+                             && !ReferenceEquals(v2Clone.Figure, v2Loaded.Figure)
+                             && v2Clone.Figure.Series.Count > 0
+                             && v2Clone.Figure.Series[0].Expr == expr0;
             if (v2Loaded != null)
             {
                 var v2Box = v2Loaded.WorldBounds;
@@ -6433,7 +6438,8 @@ internal sealed partial class App : InkEngine.InkEngine
                 bool v2Undo = Doc.Strokes.Contains(v2Loaded);
                 Console.WriteLine($"v2 矢量：load={v2Keep} scale=True " +
                                   $"erase={v2Erase} undo={v2Undo} " +
-                                  $"noImage={v2NoImage} series={v2Loaded.Figure.Series.Count}");
+                                  $"noImage={v2NoImage} clone={v2CloneOk} " +
+                                  $"series={v2Loaded.Figure.Series.Count}");
             }
             else Console.WriteLine("v2 矢量：存读失败（找不到 Figure）");
         }

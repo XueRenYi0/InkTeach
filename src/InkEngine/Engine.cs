@@ -18555,7 +18555,7 @@ public partial class InkEngine
     {
         if (Doc.Selected.Count != 1) return false;
         var s = Doc.Selected[0];
-        if (s.Kind != StrokeKind.Figure || s.Figure == null) return false;
+        if (s.Kind != StrokeKind.Figure || s.Figure == null || s.Locked) return false;
         var keys = FigureParamBar.Keys(s);
         if (keys.Count == 0) return false;
         float ui = UiUnit;

@@ -3449,6 +3449,8 @@ internal sealed class Stroke
             FocusPointU = FocusPointU,         // 焦点三角形的顶点 P 在椭圆上哪个位置（NaN = 还没定过）
             Transform = Transform,
             TextBox = TextBox?.Clone(),   // 题卡内容也是"这一条的样子"，复制要独立一份
+            // 交互矢量图：JSON 深拷贝一份，复制/收藏后改参数不会串到原对象。
+            Figure = Figure == null ? null : PlotSpecJson.Read(PlotSpecJson.Write(Figure)),
         };
         // 用 AddPoint 加：它会顺便把 Bounds 和 Revision 收拾好。
         for (int i = 0; i < Points.Count; i++)
