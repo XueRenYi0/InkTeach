@@ -94,6 +94,8 @@ public partial class InkEngine
 
     internal bool TextBoxEditing => _textBoxEditing;
     internal bool TextBoxEditHasImmContextForTest => _windowlessText?.HasImmContext() == true;
+    internal (int X, int Y) TextBoxEditCaretPointForTest
+        => TryGetTextBoxEditCaretPoint(out int x, out int y) ? (x, y) : (-1, -1);
     internal bool IsTextBoxEditingStroke(Stroke s)
         => _textBoxEditing && _textBoxEditStroke != null
            && (ReferenceEquals(s, _textBoxEditStroke)
@@ -846,7 +848,10 @@ public partial class InkEngine
                                    pin.AddrOfPinnedObject(), new IntPtr(index));
                 pt = System.Runtime.InteropServices.Marshal.PtrToStructure<Native.POINT>(
                     pin.AddrOfPinnedObject());
-                x = pt.X; y = pt.Y;
+                int pad = _windowlessText != null
+                    ? (int)MathF.Round(18f * MathF.Max(0.5f, _textBoxEditStroke?.TextBox?.Unit ?? 1f))
+                    : 0;
+                x = pt.X + pad; y = pt.Y + pad;
                 return true;
             }
             finally { pin.Free(); }
@@ -871,10 +876,16 @@ public partial class InkEngine
         var b = s.PaddedBounds;
         int hostX = (int)MathF.Round(b.MinX + 2f);
         int hostY = (int)MathF.Round(b.MinY + 2f + ViewOffsetY);
-        int clientX = (int)MathF.Round(screenX) - hostX;
-        int clientY = (int)MathF.Round(screenY) - hostY;
-        clientX = Math.Clamp(clientX, 0, Math.Max(0, (int)MathF.Round(b.MaxX - b.MinX) - 4));
-        clientY = Math.Clamp(clientY, 0, Math.Max(0, (int)MathF.Round(b.MaxY - b.MinY) - 4));
+        int w = Math.Max(1, (int)MathF.Round(b.MaxX - b.MinX) - 4);
+        int h = Math.Max(1, (int)MathF.Round(b.MaxY - b.MinY) - 4);
+        // 文字在宿主里内缩了 pad；EM_CHARFROMPOS 用文字区坐标，点也要先减 pad。
+        int pad = _windowlessText != null
+            ? (int)MathF.Round(18f * MathF.Max(0.5f, s.TextBox.Unit))
+            : 0;
+        int clientX = Math.Clamp((int)MathF.Round(screenX) - hostX - pad, 0,
+                                 Math.Max(0, w - pad * 2));
+        int clientY = Math.Clamp((int)MathF.Round(screenY) - hostY - pad, 0,
+                                 Math.Max(0, h - pad * 2));
         uint scrollCaret = (uint)(_richEditReady ? Native.EM_SCROLLCARET_RICH : Native.EM_SCROLLCARET);
         IntPtr at;
         if (_richEditReady)

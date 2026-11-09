@@ -426,6 +426,35 @@ internal sealed partial class App : InkEngine.InkEngine
                     (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
             }
 
+            // 点击文字中间：caret 应落在点击处附近，而不是偏一截。
+            Doc.Clear();
+            Doc.ClearHistory();
+            InsertPlainTextBoxForTest("你怎么又来了 ABC");
+            var clickBox = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
+            if (clickBox?.TextBox != null)
+            {
+                clickBox.Color = new Vortice.Mathematics.Color4(1f, 1f, 1f, 1f);
+                clickBox.TextBox.Ink = clickBox.Color;
+                clickBox.TextBox.Paper = false;
+                clickBox.TextBox.AutoWidth = false;
+                clickBox.TextBox.Width = 600f;
+                BeginTextBoxEdit(clickBox);
+                SettleFrames(220);
+                var cb = clickBox.PaddedBounds;
+                float cpad = 18f * MathF.Max(0.5f, clickBox.TextBox.Unit);
+                int clickX = (int)MathF.Round(cb.MinX + 2f + cpad + 90f);
+                int clickY = (int)MathF.Round(cb.MinY + 2f + ViewOffsetY + cpad + 24f);
+                SendMouse(clickX, clickY, 0);
+                SendMouse(clickX, clickY, Native.MOUSEEVENTF_LEFTDOWN);
+                SendMouse(clickX, clickY, Native.MOUSEEVENTF_LEFTUP);
+                SettleFrames(180);
+                var cp = TextBoxEditCaretPointForTest;
+                Console.WriteLine($"B0 点击 ({clickX},{clickY}) caret={TextBoxEditCaretForTest} point={cp.X},{cp.Y} host={clickX - cp.X},{clickY - cp.Y}");
+                ScreenProbe.SaveBmp("reports/b0-textbox-click.bmp",
+                    (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+                EndTextBoxEditFromUi(true);
+            }
+
             // 已有文字的重新编辑：快照里不能残留旧字（否则会出现双份/重影）。
             Doc.Clear();
             Doc.ClearHistory();

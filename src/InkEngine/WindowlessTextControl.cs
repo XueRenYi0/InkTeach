@@ -670,6 +670,16 @@ internal sealed unsafe class WindowlessTextControl : IDisposable
 
         if (host != null && IsTextMessage(msg))
         {
+            // 鼠标点也在“文字区”坐标里：去掉 TxDraw bounds 的内缩。
+            if (msg >= 0x0200 && msg <= 0x020E && host.ViewInset > 0)
+            {
+                int pad = host.ViewInset;
+                int mx = (short)(lParam.ToInt64() & 0xFFFF) - pad;
+                int my = (short)((lParam.ToInt64() >> 16) & 0xFFFF) - pad;
+                mx = Math.Max(0, mx);
+                my = Math.Max(0, my);
+                lParam = new IntPtr(((long)my << 16) | ((long)mx & 0xFFFF));
+            }
             IntPtr result = host.Send(msg, wParam, lParam);
             host.Invalidate(true);
             return result;
