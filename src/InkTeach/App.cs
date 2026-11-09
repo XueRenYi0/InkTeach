@@ -6765,7 +6765,8 @@ internal sealed partial class App : InkEngine.InkEngine
             ScreenProbe.SaveBmp("reports/aiplot-recognize-text.bmp",
                 (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
             SelAiMenuOpen = false;
-            Console.WriteLine($"识别作图/文字：prompt={textPromptOk} len={plotPrompt.Length}");
+            Console.WriteLine($"识别作图/文字：prompt={textPromptOk} len={plotPrompt.Length} " +
+                              $"rows={AiMenuRows} plotOnly={AiMenuPlotOnly}");
         }
 
         // 图片路径：先造一张二次函数图，再让模型看图反推并重画成矢量。
@@ -6778,6 +6779,12 @@ internal sealed partial class App : InkEngine.InkEngine
         {
             var recogSrc = InsertPlotImageForTest(recogImg, "reports/aiplot-recognize-src.bmp");
             Doc.SelectOnly(new[] { recogSrc });
+            SelAiMenuOpen = true;
+            SettleFrames(160);
+            ScreenProbe.SaveBmp("reports/aiplot-image-ai-menu.bmp",
+                (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+            SelAiMenuOpen = false;
+            Console.WriteLine($"图片AI菜单：rows={AiMenuRows} plotOnly={AiMenuPlotOnly}");
             InsertAiPlotFromImageFromUi(recogSrc);
             int iw = 0;
             Stroke imagePlotFig = null;

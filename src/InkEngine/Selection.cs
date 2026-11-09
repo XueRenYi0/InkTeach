@@ -2310,10 +2310,11 @@ internal static class SelectionHandles
     };
 
     /// <summary>
-    /// 文本框操作条（2026-11-08 收口）：**收起 / 字号 / 颜色 / 复制 / 删除 / `⋯`**。
-    /// 锁定、层级收进 `⋯`；不显示 AI/翻转/导出/图库（对纯文字无意义或太低频）。
+    /// 文本框操作条（2026-11-10）：**收起 / 字号 / 颜色 / 复制 / AI / 删除 / `⋯`**。
+    /// AI 用于“识别作图”（文字/OCR 卡直接生成图），不再重复“识别文本”。
+    /// 锁定、层级收进 `⋯`；翻转/导出/图库对纯文字无意义或太低频。
     /// </summary>
-    public const int TextBarButtonCount = 6;
+    public const int TextBarButtonCount = 7;
 
     private static readonly SelBarButton[] TextBarOrder =
     {
@@ -2321,16 +2322,18 @@ internal static class SelectionHandles
         SelBarButton.FontSize,
         SelBarButton.Color,
         SelBarButton.Copy,
+        SelBarButton.Ai,
         SelBarButton.Delete,
         SelBarButton.More,
     };
 
-    /// <summary>图片：颜色/AI 对图片无意义，“保存/导出”补进来（5 格）。</summary>
+    /// <summary>图片：**收起 / 保存 / 复制 / AI / 删除 / `⋯`**；AI 用于识别作图。</summary>
     private static readonly SelBarButton[] ImageBarOrder =
     {
         SelBarButton.Collapse,
         SelBarButton.Export,
         SelBarButton.Copy,
+        SelBarButton.Ai,
         SelBarButton.Delete,
         SelBarButton.More,
     };
@@ -2390,7 +2393,7 @@ internal static class SelectionHandles
         SelBarButton.Library,
     };
 
-    public const int ImageBarButtonCount = 5;
+    public const int ImageBarButtonCount = 6;
     public const int ShapeBarButtonCount = 5;
 
     /// <summary>这一条有几格（普通/文本 6，图片/图形 5）。</summary>

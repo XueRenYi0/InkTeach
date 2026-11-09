@@ -59,8 +59,8 @@ internal sealed partial class App
 
         OpenSelectionMenuForTest(ai: true);
         SettleFrames(120);
-        Check("AI 菜单：打开、1 行、有矩形",
-              SelAiMenuOpen && !SelMoreMenuOpen && SelectionMenuRowsNow == 1
+        Check("AI 菜单：打开、2 行、有矩形",
+              SelAiMenuOpen && !SelMoreMenuOpen && SelectionMenuRowsNow == 2
               && !SelectionMenuRectNow().IsEmpty,
               $"ai={SelAiMenuOpen} more={SelMoreMenuOpen} rows={SelectionMenuRowsNow}");
         var aiRect = SelectionMenuRectNow();
@@ -146,17 +146,18 @@ internal sealed partial class App
               && SelectionHandles.MoreBarOrder(SelBarSurface.Shape).Length == 7,
               $"surface={BarSurfaceNow} count={SelectionHandles.BarButtonCountFor(SelBarSurface.Shape)}");
 
-        // 图片：5 格（第 2 格是保存/导出、无 AI），⋯ 6 行（保存已在核心）。
+        // 图片：6 格（保存/导出、AI 都在核心），⋯ 6 行（保存已在核心）。
         Doc.Clear();
         var img = Doc.AddImage(MakeTestImage(32, 24), 300f, 300f, 1f);
         Doc.Selected.Clear();
         Doc.Selected.Add(img);
         SettleFrames(160);
-        Check("图片条：5 格、保存外露、无 AI、⋯ 6 行",
+        Check("图片条：6 格、保存+AI 外露、⋯ 6 行",
               BarSurfaceNow == SelBarSurface.Image
-              && SelectionHandles.BarButtonCountFor(SelBarSurface.Image) == 5
+              && SelectionHandles.BarButtonCountFor(SelBarSurface.Image) == 6
               && SelectionHandles.BarButtonOf(1, SelBarSurface.Image) == SelBarButton.Export
-              && SelectionHandles.BarButtonOf(4, SelBarSurface.Image) == SelBarButton.More
+              && SelectionHandles.BarButtonOf(3, SelBarSurface.Image) == SelBarButton.Ai
+              && SelectionHandles.BarButtonOf(5, SelBarSurface.Image) == SelBarButton.More
               && SelectionHandles.MoreBarOrder(SelBarSurface.Image).Length == 6,
               $"surface={BarSurfaceNow} count={SelectionHandles.BarButtonCountFor(SelBarSurface.Image)}");
 
