@@ -519,6 +519,13 @@ internal sealed partial class App : InkEngine.InkEngine
             FigureTest();
             _quit = true;
         }
+        else if (mode == "--figurelive")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            FigureLiveTest();
+            _quit = true;
+        }
         else if (mode == "--textbg")
         {
             _autoExitAt = double.MaxValue;
@@ -6167,69 +6174,6 @@ internal sealed partial class App : InkEngine.InkEngine
     }
 
     /// <summary>自检用：画一个简单的立体几何线框（正方体）当题目配图。</summary>
-    private static ImageData MakeCubeFigure()
-    {
-        const int w = 480, h = 360;
-        var bgra = new byte[w * h * 4];
-        // 透明底：图片块只显示线框，不出现一块和卡片不同的灰白矩形。
-        for (int i = 0; i < w * h; i++)
-        {
-            int o = i * 4;
-            bgra[o] = 0; bgra[o + 1] = 0; bgra[o + 2] = 0; bgra[o + 3] = 0;
-        }
-
-        void Line(int x0, int y0, int x1, int y1, int thick, byte b, byte g, byte r)
-        {
-            int dx = Math.Abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
-            int deltaY = -Math.Abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
-            int err = dx + deltaY;
-            while (true)
-            {
-                for (int oy = -thick; oy <= thick; oy++)
-                {
-                    for (int ox = -thick; ox <= thick; ox++)
-                    {
-                        int px = x0 + ox, py = y0 + oy;
-                        if (px < 0 || py < 0 || px >= w || py >= h) continue;
-                        int o = (py * w + px) * 4;
-                        bgra[o] = b; bgra[o + 1] = g; bgra[o + 2] = r; bgra[o + 3] = 255;
-                    }
-                }
-                if (x0 == x1 && y0 == y1) break;
-                int e2 = 2 * err;
-                if (e2 >= deltaY) { err += deltaY; x0 += sx; }
-                if (e2 <= dx) { err += dx; y0 += sy; }
-            }
-        }
-
-        float s = 140f, cx = w * 0.5f, cy = h * 0.58f;
-        Vector2 P(float x, float y, float z)
-            => new(cx + (x - y) * 0.866f * s, cy + (x + y) * 0.5f * s - z * s);
-
-        var v = new[]
-        {
-            P(0, 0, 0), P(1, 0, 0), P(1, 1, 0), P(0, 1, 0),
-            P(0, 0, 1), P(1, 0, 1), P(1, 1, 1), P(0, 1, 1),
-        };
-        int[,] edges =
-        {
-            {0,1},{1,2},{2,3},{3,0},
-            {4,5},{5,6},{6,7},{7,4},
-            {0,4},{1,5},{2,6},{3,7},
-        };
-        for (int i = 0; i < edges.GetLength(0); i++)
-        {
-            var a = v[edges[i, 0]];
-            var b = v[edges[i, 1]];
-            // 后面的棱用浅灰，前面的用深灰：线框图有层次，不靠消隐。
-            bool back = edges[i, 0] >= 4 && edges[i, 1] >= 4;
-            byte ink = back ? (byte)150 : (byte)45;
-            Line((int)MathF.Round(a.X), (int)MathF.Round(a.Y),
-                 (int)MathF.Round(b.X), (int)MathF.Round(b.Y), 1, ink, ink, ink);
-        }
-        return ImageData.Adopt(w, h, bgra, hasAlpha: true);
-    }
-
     /// <summary>P1 图片块自检：AI 题卡题干后配图、OCR 卡底部配图、存读。</summary>
     private void FigureTest()
     {
@@ -6242,7 +6186,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Tool = Tool.Marquee;
         ShowHud = false;
         float u = MathF.Max(0.75f, DpiScale);
-        var figure = MakeCubeFigure();
+        var figure = FigureRenderer.Render(FigureRenderer.SampleTriangle());
 
         Doc.Clear();
         Doc.ClearHistory();
@@ -6253,8 +6197,12 @@ internal sealed partial class App : InkEngine.InkEngine
         if (card?.TextBox != null)
         {
             var b = card.TextBox;
-            b.Title = "二次函数 · 中等 · 1 道";
+            b.Title = "平面几何 · 中等 · 1 道";
+            b.Meta = "自检示例 · 结构化题图";
             while (b.Questions.Count > 1) b.Questions.RemoveAt(b.Questions.Count - 1);
+            b.Questions[0].Stem = "如图，在直角三角形 ABC 中，∠A=90°，AB=4，AC=3，求斜边 BC 的长。";
+            b.Questions[0].Answer = "BC = 5";
+            b.Questions[0].Analysis = "由勾股定理：BC² = AB² + AC² = 4² + 3² = 25，所以 BC = 5。";
             b.Questions[0].Figure = figure;
             b.Width = 680f * u;
             b.AutoWidth = false;
@@ -6318,6 +6266,80 @@ internal sealed partial class App : InkEngine.InkEngine
             (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
         Console.WriteLine("出图：reports/figure-ai-card.bmp / figure-ocr-card.bmp");
     }
+
+    /// <summary>真实大模型出题：DeepSeek/OpenAI 兼容接口 → JSON → 结构化图形 → 卡片。</summary>
+    private void FigureLiveTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 真实模型出题 + 结构化题图 ===");
+        SetUiFactory(() => new InkUi.FullUi());
+        PassThrough = false;
+        BoardOn = true;
+        SetBoardFromUi(true);
+        Tool = Tool.Marquee;
+        ShowHud = false;
+        float u = MathF.Max(0.75f, DpiScale);
+
+        var cfg = OcrClient.LoadConfig();
+        Console.WriteLine($"AI 配置：configured={cfg.IsConfigured} model={cfg.Model} base={cfg.BaseUrl}");
+        if (!cfg.IsConfigured)
+        {
+            Console.WriteLine("AI 未配置：跳过真实模型测试");
+            return;
+        }
+
+        var gen = Task.Run(() => AiQuestionClient.GenerateAsync(
+            "一道初中平面几何题，配一个简单的三角形或四边形，点坐标 0..10，题干要提到图中的点。",
+            cfg, CancellationToken.None)).GetAwaiter().GetResult();
+
+        Console.WriteLine($"AI 结果：ok={gen.Ok} {gen.Seconds:F1}s error={gen.Error}");
+        if (gen.Ok)
+            Console.WriteLine($"AI 题目：stem={ClipText(gen.Stem, 80)} " +
+                              $"figure={(gen.Figure != null ? gen.Figure.Kind : "none")} " +
+                              $"points={gen.Figure?.Points2D.Count + gen.Figure?.Points3D.Count ?? 0} " +
+                              $"segments={gen.Figure?.Segments.Count ?? 0}");
+
+        var spec = gen.Figure ?? FigureRenderer.SampleTriangle();
+        var figure = FigureRenderer.Render(spec);
+        InsertMockTextBoxFromUi();
+        Stroke card = null;
+        foreach (var s in Doc.Strokes)
+            if (s.Kind == StrokeKind.TextBox) { card = s; break; }
+        if (card?.TextBox != null)
+        {
+            var b = card.TextBox;
+            b.Title = $"{cfg.Model} · 真实模型 · 1 道";
+            b.Meta = gen.Ok
+                ? $"AI 生成 · {gen.Seconds:F1}s · 请老师核对"
+                : $"AI 失败：{ClipText(gen.Error, 60)}";
+            b.Questions.Clear();
+            b.Questions.Add(new TextBoxQuestion
+            {
+                Stem = gen.Ok ? gen.Stem : "真实模型未返回题目，下面是结构化图形兜底。",
+                Answer = gen.Answer,
+                Analysis = gen.Analysis,
+                Figure = figure,
+            });
+            b.Width = 700f * u;
+            b.AutoWidth = false;
+            b.InvalidateLayout();
+            _ = b.EnsureLayout();
+            float x = _virtualX + _virtualW * 0.5f - b.Width * 0.5f;
+            float y = MathF.Max(_virtualY - ViewOffsetY + 16f * u,
+                                (_virtualY + _virtualH) * 0.5f - ViewOffsetY - b.Height * 0.5f);
+            card.SetTextBoxRect(new Vector2(x, y), b.Width, b.Height);
+            card.SyncTextBoxBounds();
+            Doc.RefreshStrokeGrid(card);
+        }
+        Doc.SelectOnly(Array.Empty<Stroke>());
+        SettleFrames(300);
+        ScreenProbe.SaveBmp("reports/figure-live.bmp",
+            (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+        Console.WriteLine("出图：reports/figure-live.bmp");
+    }
+
+    private static string ClipText(string s, int n)
+        => string.IsNullOrEmpty(s) ? "" : s.Length <= n ? s : s[..n] + "…";
 
     /// <summary>
     /// P4 背景样式自检：四种预设 + 字号面板里的「背景」行 + 存读。
