@@ -6372,6 +6372,89 @@ internal sealed partial class App : InkEngine.InkEngine
             (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
         Console.WriteLine($"AI 作图异步入口：strokes={Doc.Strokes.Count} waitFrames={wait}");
         Console.WriteLine("出图：reports/aiplot-ui.bmp");
+
+        // 多条曲线：不同颜色 + 图例 + 存档/擦除回归。
+        Doc.Clear();
+        Doc.ClearHistory();
+        var multiAi = cfg.IsConfigured
+            ? Task.Run(() => AiPlotClient.ParseAsync(
+                "在同一个坐标系里画 y=x^2 和 y=2^x 两条曲线，颜色区分，标题写“两条函数”。",
+                cfg, CancellationToken.None)).GetAwaiter().GetResult()
+            : new AiPlotClient.Result { Error = "AI 未配置" };
+        var multiSpec = multiAi.Spec;
+        if (multiSpec == null || multiSpec.Series.Count < 2)
+        {
+            multiSpec = new PlotSpec { Title = "两条函数", XMin = -4f, XMax = 4f };
+            multiSpec.Series.Add(new PlotSeries { Expr = "x^2", Label = "y=x^2" });
+            multiSpec.Series.Add(new PlotSeries { Expr = "2^x", Label = "y=2^x",
+                Color = new Color4(0.12f, 0.38f, 0.86f, 1f) });
+        }
+        var swMulti = System.Diagnostics.Stopwatch.StartNew();
+        var multiImg = PlotRenderer.Render(multiSpec);
+        swMulti.Stop();
+        if (multiImg != null)
+        {
+            var multiStroke = new Stroke
+            {
+                Tool = Tool.Capture,
+                Kind = StrokeKind.Image,
+                Color = new Color4(1f, 1f, 1f, 1f),
+                Width = 0f,
+                Image = multiImg,
+            };
+            multiStroke.SetPoints(new[]
+            {
+                new Vector2(0f, 0f),
+                new Vector2(multiImg.Width, multiImg.Height),
+            });
+            float mx = _virtualX + (_virtualW - multiImg.Width) * 0.5f;
+            float my = _virtualY + (_virtualH - multiImg.Height) * 0.5f;
+            multiStroke.Transform = Matrix3x2.CreateTranslation(mx, my);
+            Doc.AddStroke(multiStroke);
+            Doc.SelectOnly(new[] { multiStroke });
+            SettleFrames(240);
+            ScreenProbe.SaveBmp("reports/aiplot-multi.bmp",
+                (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+
+            var saved = InkSerializer.Save(Doc);
+            InkSerializer.LoadInto(Doc, saved);
+            int images = 0;
+            Stroke reloaded = null;
+            foreach (var s in Doc.Strokes)
+                if (s.Kind == StrokeKind.Image) { images++; reloaded = s; }
+            bool dimsOk = reloaded?.Image != null
+                          && reloaded.Image.Width == multiImg.Width
+                          && reloaded.Image.Height == multiImg.Height;
+            bool eraseOk = false, undoOk = false;
+            if (reloaded != null)
+            {
+                Doc.RemoveStrokeWithUndo(reloaded);
+                eraseOk = !Doc.Strokes.Contains(reloaded);
+                Doc.Undo();
+                undoOk = Doc.Strokes.Contains(reloaded);
+            }
+            Console.WriteLine($"多曲线：series={multiSpec.Series.Count} " +
+                              $"render={swMulti.Elapsed.TotalMilliseconds:F1}ms " +
+                              $"ai={multiAi.Seconds:F1}s loadImages={images} dims={dimsOk} " +
+                              $"erase={eraseOk} undo={undoOk}");
+        }
+
+        // 3 条曲线热渲染性能
+        var perfSpec = new PlotSpec { Title = "三条函数", XMin = -4f, XMax = 4f };
+        perfSpec.Series.Add(new PlotSeries { Expr = "x^2", Label = "y=x^2" });
+        perfSpec.Series.Add(new PlotSeries { Expr = "2^x", Label = "y=2^x",
+            Color = new Color4(0.12f, 0.38f, 0.86f, 1f) });
+        perfSpec.Series.Add(new PlotSeries { Expr = "x", Label = "y=x",
+            Color = new Color4(0.82f, 0.16f, 0.16f, 1f) });
+        var warm3 = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < 5; i++)
+        {
+            var tmp = PlotRenderer.Render(perfSpec);
+            tmp?.Release();
+        }
+        warm3.Stop();
+        Console.WriteLine($"3 曲线热渲染：平均 {warm3.Elapsed.TotalMilliseconds / 5:F1}ms");
+        Console.WriteLine("出图：reports/aiplot-multi.bmp");
     }
 
     /// <summary>二次函数：AI 给 a/b/c，本地创建可缩放的抛物线对象。</summary>

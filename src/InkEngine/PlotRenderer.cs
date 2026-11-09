@@ -30,6 +30,10 @@ internal sealed class PlotSpec
 /// </summary>
 internal static class PlotRenderer
 {
+    // 字体只加载一次：首次 PlotRenderer.Render 里创建 typeface 会吃掉 ~10ms。
+    private static readonly SKTypeface Face =
+        SKTypeface.FromFamilyName("Microsoft YaHei UI") ?? SKTypeface.Default;
+
     public static ImageData Render(PlotSpec spec, int width = 1100, int height = 760)
     {
         if (spec == null || spec.Series.Count == 0) return null;
@@ -111,12 +115,10 @@ internal static class PlotRenderer
                 Color = new SKColor(90, 94, 102), IsAntialias = true,
                 Style = SKPaintStyle.Stroke, StrokeWidth = 1.6f,
             };
-            using var typeface = SKTypeface.FromFamilyName("Microsoft YaHei UI")
-                                 ?? SKTypeface.Default;
             using var label = new SKPaint
             {
                 Color = new SKColor(82, 86, 94), IsAntialias = true,
-                TextSize = 20f, Typeface = typeface,
+                TextSize = 20f, Typeface = Face,
             };
 
             for (float x = MathF.Ceiling(spec.XMin / xStep) * xStep;
@@ -205,13 +207,62 @@ internal static class PlotRenderer
             }
             canvas.Restore();
 
+            // 多条曲线：右上角图例（色线 + 解析式）
+            if (curves.Count > 1)
+            {
+                using var legendText = new SKPaint
+                {
+                    Color = new SKColor(58, 62, 70), IsAntialias = true,
+                    TextSize = 17f, Typeface = Face,
+                };
+                using var legendBg = new SKPaint
+                {
+                    Color = new SKColor(255, 255, 255, 235), IsAntialias = true,
+                    Style = SKPaintStyle.Fill,
+                };
+                using var legendBorder = new SKPaint
+                {
+                    Color = new SKColor(220, 224, 230), IsAntialias = true,
+                    Style = SKPaintStyle.Stroke, StrokeWidth = 1f,
+                };
+                float maxText = 0f;
+                foreach (var (s, _) in curves)
+                    maxText = MathF.Max(maxText, legendText.MeasureText(
+                        string.IsNullOrWhiteSpace(s.Label) ? "y=" + s.Expr : s.Label));
+                float lw = maxText + 56f;
+                float lh = curves.Count * 26f + 16f;
+                float lx = left + pw - lw - 10f;
+                float ly = top + 12f;
+                var lr = new SKRect(lx, ly, lx + lw, ly + lh);
+                canvas.DrawRoundRect(lr, 8f, 8f, legendBg);
+                canvas.DrawRoundRect(lr, 8f, 8f, legendBorder);
+                for (int i = 0; i < curves.Count; i++)
+                {
+                    var (s, _) = curves[i];
+                    float yy = ly + 8f + 13f + i * 26f;
+                    using var swatch = new SKPaint
+                    {
+                        Color = new SKColor(
+                            (byte)Math.Clamp((int)(s.Color.R * 255f), 0, 255),
+                            (byte)Math.Clamp((int)(s.Color.G * 255f), 0, 255),
+                            (byte)Math.Clamp((int)(s.Color.B * 255f), 0, 255),
+                            (byte)Math.Clamp((int)(s.Color.A * 255f), 0, 255)),
+                        IsAntialias = true, Style = SKPaintStyle.Stroke,
+                        StrokeWidth = 3.2f, StrokeCap = SKStrokeCap.Round,
+                    };
+                    canvas.DrawLine(lx + 10f, yy, lx + 38f, yy, swatch);
+                    string text = string.IsNullOrWhiteSpace(s.Label) ? "y=" + s.Expr : s.Label;
+                    canvas.DrawText(text, lx + 46f, yy + 6f, legendText);
+                }
+            }
+
             // 标题 / 解析式
             if (!string.IsNullOrWhiteSpace(spec.Title))
             {
                 using var titlePaint = new SKPaint
                 {
                     Color = new SKColor(34, 38, 46), IsAntialias = true,
-                    TextSize = 26f, Typeface = typeface,
+                    TextSize = 26f, Typeface = Face,
                 };
                 canvas.DrawText(spec.Title, left, 38, titlePaint);
             }

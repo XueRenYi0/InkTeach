@@ -115,13 +115,11 @@ internal static class AiPlotClient
                     string expr = f.ValueKind == JsonValueKind.String
                         ? f.GetString()
                         : Str(f, "expr");
-                    string label = f.ValueKind == JsonValueKind.Object
-                        ? Str(f, "label") : "";
                     if (string.IsNullOrWhiteSpace(expr)) continue;
                     spec.Series.Add(new PlotSeries
                     {
                         Expr = expr.Trim(),
-                        Label = string.IsNullOrWhiteSpace(label) ? "y=" + expr.Trim() : label,
+                        Label = "y=" + expr.Trim(),   // 不信任模型给 label：直接由解析式生成，避免错字
                         Color = palette[idx % palette.Length],
                     });
                     idx++;
