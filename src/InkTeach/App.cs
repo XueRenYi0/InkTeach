@@ -526,6 +526,13 @@ internal sealed partial class App : InkEngine.InkEngine
             FigureLiveTest();
             _quit = true;
         }
+        else if (mode == "--figurequad")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            FigureQuadTest();
+            _quit = true;
+        }
         else if (mode == "--textbg")
         {
             _autoExitAt = double.MaxValue;
@@ -6265,6 +6272,97 @@ internal sealed partial class App : InkEngine.InkEngine
         ScreenProbe.SaveBmp("reports/figure-ocr-card.bmp",
             (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
         Console.WriteLine("出图：reports/figure-ai-card.bmp / figure-ocr-card.bmp");
+    }
+
+    /// <summary>二次函数：AI 给 a/b/c，本地创建可缩放的抛物线对象。</summary>
+    private void FigureQuadTest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 二次函数：真实模型 → 可操作抛物线 ===");
+        SetUiFactory(() => new InkUi.FullUi());
+        PassThrough = false;
+        BoardOn = true;
+        SetBoardFromUi(true);
+        Tool = Tool.Marquee;
+        ShowHud = false;
+        float u = MathF.Max(0.75f, DpiScale);
+
+        var cfg = OcrClient.LoadConfig();
+        var gen = cfg.IsConfigured
+            ? Task.Run(() => AiQuestionClient.GenerateAsync(
+                "一道高中二次函数题，教材/高考风格。图中给出抛物线 y=ax²+bx+c，" +
+                "要求求顶点/最值或解集；figure 用 kind=quadratic，给 a/b/c 和 domain。",
+                cfg, CancellationToken.None)).GetAwaiter().GetResult()
+            : new AiQuestionClient.Result { Error = "AI 未配置" };
+        Console.WriteLine($"AI 结果：ok={gen.Ok} {gen.Seconds:F1}s error={gen.Error}");
+
+        FigureSpec spec = gen.Figure;
+        if (spec == null || spec.Kind != "quadratic")
+            spec = new FigureSpec { Kind = "quadratic", Qa = 1f, Qb = -4f, Qc = 3f,
+                                    DomainMin = -1f, DomainMax = 5f };
+        Console.WriteLine($"抛物线：a={spec.Qa} b={spec.Qb} c={spec.Qc} domain={spec.DomainMin}..{spec.DomainMax}");
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        InsertMockTextBoxFromUi();
+        Stroke card = null;
+        foreach (var s in Doc.Strokes)
+            if (s.Kind == StrokeKind.TextBox) { card = s; break; }
+        if (card?.TextBox != null)
+        {
+            var b = card.TextBox;
+            b.Title = $"{cfg.Model} · 二次函数 · 1 道";
+            b.Meta = gen.Ok ? $"AI 生成 · {gen.Seconds:F1}s · 请核对" : "AI 未配置，使用示例";
+            b.Questions.Clear();
+            b.Questions.Add(new TextBoxQuestion
+            {
+                Stem = gen.Ok ? gen.Stem : "已知抛物线 y = x² − 4x + 3，求它的顶点坐标和最值。",
+                Answer = gen.Answer,
+                Analysis = gen.Analysis,
+            });
+            b.Width = 560f * u;
+            b.AutoWidth = false;
+            b.InvalidateLayout();
+            _ = b.EnsureLayout();
+            float x = _virtualX + 80f;
+            float y = MathF.Max(_virtualY - ViewOffsetY + 16f * u,
+                                (_virtualY + _virtualH) * 0.5f - ViewOffsetY - b.Height * 0.5f);
+            card.SetTextBoxRect(new Vector2(x, y), b.Width, b.Height);
+            card.SyncTextBoxBounds();
+            Doc.RefreshStrokeGrid(card);
+        }
+
+        // y = a x² + b x + c → 现有 Parabola 对象（顶点 + 过点），可直接缩放/移动。
+        float h = -spec.Qb / (2f * MathF.Max(0.0001f, spec.Qa));
+        float k = spec.Qc - spec.Qb * spec.Qb / (4f * spec.Qa);
+        float sUnit = 60f * u;
+        float ox = 1850f, oy = 820f;
+        var sh = new Stroke
+        {
+            Tool = Tool.Parabola,
+            Kind = StrokeKind.Parabola,
+            Color = new Color4(0.12f, 0.14f, 0.18f, 1f),
+            Width = 5f * u,
+            CurveAxis = spec.Qa > 0 ? CurveAxis.OpenUp : CurveAxis.OpenDown,
+        };
+        sh.SetParabolaVertex(ox + h * sUnit, oy - k * sUnit);
+        sh.SetParabolaThroughPoint(ox + (h + 1f) * sUnit, oy - (k + spec.Qa) * sUnit);
+        Doc.AddStroke(sh);
+        Doc.SelectOnly(new[] { sh });
+        SettleFrames(300);
+        ScreenProbe.SaveBmp("reports/figure-quad-editable.bmp",
+            (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+
+        // 拖右下角缩放：现有通用框会等比改变曲线。
+        var frame = SelectionHandles.FrameOf(Doc.Selected);
+        var br = SelectionHandles.CanvasPosition(SelHandle.BottomRight, frame, UiUnit);
+        SelectionGestureForTest(br.X, br.Y);
+        UpdateSelectionGestureForTest(br.X + 80f * u, br.Y + 60f * u);
+        EndSelectionGestureForTest();
+        SettleFrames(300);
+        ScreenProbe.SaveBmp("reports/figure-quad-scaled.bmp",
+            (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+        Console.WriteLine("出图：reports/figure-quad-editable.bmp / figure-quad-scaled.bmp");
     }
 
     /// <summary>真实大模型出题：DeepSeek/OpenAI 兼容接口 → JSON → 结构化图形 → 卡片。</summary>

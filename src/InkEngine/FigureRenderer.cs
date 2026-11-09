@@ -20,6 +20,9 @@ internal sealed class FigureSpec
     public readonly List<(string A, string B)> Segments = new();
     public readonly List<(string Center, float Radius)> Circles = new();
     public readonly Dictionary<string, string> Labels = new();
+    /// <summary>kind=quadratic 时的 y = a x² + b x + c 系数。</summary>
+    public float Qa = 1f, Qb, Qc;
+    public float DomainMin = -6f, DomainMax = 6f;
 
     public static FigureSpec Parse(string json)
     {
@@ -83,6 +86,25 @@ internal sealed class FigureSpec
                 foreach (var l in labels.EnumerateObject())
                     if (l.Value.ValueKind == JsonValueKind.String)
                         spec.Labels[l.Name] = l.Value.GetString();
+
+            // 二次函数：AI 只给 a/b/c，曲线由本地采样/现有抛物线对象画。
+            if (spec.Kind == "quadratic")
+            {
+                if (root.TryGetProperty("a", out var av) && av.ValueKind == JsonValueKind.Number)
+                    spec.Qa = (float)av.GetDouble();
+                if (root.TryGetProperty("b", out var bv) && bv.ValueKind == JsonValueKind.Number)
+                    spec.Qb = (float)bv.GetDouble();
+                if (root.TryGetProperty("c", out var cv) && cv.ValueKind == JsonValueKind.Number)
+                    spec.Qc = (float)cv.GetDouble();
+                if (root.TryGetProperty("domain", out var dv) && dv.ValueKind == JsonValueKind.Array)
+                {
+                    var nums = new List<float>();
+                    foreach (var n in dv.EnumerateArray())
+                        if (n.ValueKind == JsonValueKind.Number) nums.Add((float)n.GetDouble());
+                    if (nums.Count >= 2) { spec.DomainMin = nums[0]; spec.DomainMax = nums[1]; }
+                }
+                return MathF.Abs(spec.Qa) > 0.0001f ? spec : null;
+            }
 
             bool hasPoints = spec.Points2D.Count + spec.Points3D.Count > 0;
             return hasPoints && spec.Segments.Count > 0 ? spec : null;

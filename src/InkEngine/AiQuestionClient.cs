@@ -28,6 +28,7 @@ internal static class AiQuestionClient
 
     private const string FigureSchema =
         "figure 可选，必须是结构化 JSON，不要返回图片、SVG、TikZ 或 LaTeX 代码。\n" +
+        "二次函数/抛物线：{\"kind\":\"quadratic\",\"a\":1,\"b\":-4,\"c\":3,\"domain\":[-1,5]}\n" +
         "平面几何：{\"kind\":\"geometry2d\",\"points\":{\"A\":[0,0],\"B\":[4,0],\"C\":[0,3]}," +
         "\"segments\":[[\"A\",\"B\"],[\"B\",\"C\"],[\"C\",\"A\"]],\"labels\":{\"A\":\"A\",\"B\":\"B\",\"C\":\"C\"}}\n" +
         "立体几何：{\"kind\":\"geometry3d\",\"points\":{\"A\":[0,0,0],\"B\":[1,0,0]}," +
