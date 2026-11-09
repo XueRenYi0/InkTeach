@@ -1600,6 +1600,20 @@ public partial class InkEngine
                 r = await AiPlotClient.ParseImageAsync(
                         png, "这是一道数学题或数学图形，请根据图中的函数/圆锥/几何关系作图。",
                         cfg, CancellationToken.None).ConfigureAwait(false);
+            // 模型不支持看图/看图失败：退回 OCR 文字，再走同一套解析。
+            if (!r.Ok)
+            {
+                var ocr = await OcrClient.RecognizeAsync(
+                        png, cfg, OcrClient.BoardPrompt, CancellationToken.None,
+                        withBoxes: false).ConfigureAwait(false);
+                if (ocr.Ok)
+                {
+                    string text = string.Join("\n", ocr.Lines);
+                    if (!string.IsNullOrWhiteSpace(text))
+                        r = await AiPlotClient.ParseAsync(text, cfg, CancellationToken.None)
+                                         .ConfigureAwait(false);
+                }
+            }
             bool vector = r.Ok && r.Spec != null
                           && r.Spec.Kind is "functions" or "conic";
             ImageData img = null;
