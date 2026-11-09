@@ -48,8 +48,10 @@ internal sealed partial class App
             new() { Cat = "explog", Prompt = "画函数 y=2^x 的图象。" },
             new() { Cat = "explog", Prompt = "画函数 y=e^x 的图象。" },
             new() { Cat = "explog", Prompt = "画函数 y=ln(x) 的图象。", Tag = "ln" },
+            new() { Cat = "explog", Prompt = "画函数 y=lg(x) 的图象。", Tag = "lg" },
+            new() { Cat = "explog", Prompt = "画函数 y=log₂(x) 的图象。", Tag = "log2" },
             new() { Cat = "explog", Prompt = "画函数 y=log2(x) 的图象。", Tag = "log2" },
-            new() { Cat = "explog", Prompt = "画函数 y=log(x)（常用对数）的图象。", Tag = "log" },
+            new() { Cat = "explog", Prompt = "画函数 y=log(x)（常用对数）的图象。", Tag = "lg" },
 
             // 三角
             new() { Cat = "trig", Prompt = "画函数 y=sin(x) 在 [-2*pi,2*pi] 的图象。", Tag = "sin" },
@@ -137,8 +139,9 @@ internal sealed partial class App
                 foreach (var s in spec.Series)
                 {
                     pieces += s.Pieces.Count;
-                    all += " " + s.Expr;
-                    foreach (var p in s.Pieces) all += " " + p.Expr;
+                    all += " " + PlotSpecJson.HighSchool(s.Expr);
+                    foreach (var p in s.Pieces)
+                        all += " " + PlotSpecJson.HighSchool(p.Expr);
                 }
                 if (spec.Conic != null) all += " conic:" + spec.Conic.Type;
             }

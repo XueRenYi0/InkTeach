@@ -45,6 +45,7 @@ internal sealed class PlotExpression
     {
         return s.Replace("²", "^2", StringComparison.Ordinal)
                 .Replace("³", "^3", StringComparison.Ordinal)
+                .Replace("log₂", "log2", StringComparison.Ordinal)
                 .Replace('×', '*').Replace('÷', '/')
                 .Replace('−', '-').Replace('（', '(').Replace('）', ')')
                 .Replace("**", "^", StringComparison.Ordinal);
@@ -128,7 +129,7 @@ internal sealed class PlotExpression
                 "abs" => Math.Abs(v),
                 "exp" => Math.Exp(v),
                 "ln" => v <= 0 ? double.NaN : Math.Log(v),
-                "log" or "log10" => v <= 0 ? double.NaN : Math.Log10(v),
+                "log" or "log10" or "lg" => v <= 0 ? double.NaN : Math.Log10(v),
                 "log2" or "log_2" => v <= 0 ? double.NaN : Math.Log2(v),
                 "cbrt" => Math.Cbrt(v),
                 _ => double.NaN,
@@ -253,7 +254,7 @@ internal sealed class PlotExpression
         private static bool IsFunction(string n)
             => n is "sin" or "cos" or "tan" or "cot" or "sec" or "csc"
                  or "asin" or "acos" or "atan"
-                 or "sqrt" or "abs" or "exp" or "ln" or "log" or "log10"
+                 or "sqrt" or "abs" or "exp" or "ln" or "log" or "log10" or "lg"
                  or "log2" or "log_2" or "cbrt";
     }
 }

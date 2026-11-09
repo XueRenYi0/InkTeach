@@ -161,7 +161,10 @@ internal static class PlotSpecJson
                 };
                 s.Pieces.AddRange(pieces);
                 if (string.IsNullOrWhiteSpace(s.Label))
-                    s.Label = pieces.Count > 0 ? PieceLabel(pieces) : "y=" + s.Expr;
+                    s.Label = pieces.Count > 0
+                        ? PieceLabel(pieces)
+                        : "y=" + HighSchool(s.Expr);
+                else s.Label = HighSchool(s.Label);
                 spec.Series.Add(s);
                 idx++;
             }
@@ -181,7 +184,8 @@ internal static class PlotSpecJson
                 var s = new PlotSeries
                 {
                     Expr = (expr ?? "").Trim(),
-                    Label = pieces.Count > 0 ? PieceLabel(pieces) : "y=" + (expr ?? "").Trim(),
+                    Label = pieces.Count > 0 ? PieceLabel(pieces)
+                                             : "y=" + HighSchool((expr ?? "").Trim()),
                     Color = Palette[idx % Palette.Length],
                 };
                 s.Pieces.AddRange(pieces);
@@ -396,13 +400,34 @@ internal static class PlotSpecJson
             else if (p.MaxX.HasValue)
                 cond = $"x{(p.MaxInclusive ? "≤" : "<")}{Fmt(p.MaxX.Value)}";
             else cond = "";
-            parts.Add(p.Expr + (cond.Length > 0 ? " (" + cond + ")" : ""));
+            parts.Add(HighSchool(p.Expr) + (cond.Length > 0 ? " (" + cond + ")" : ""));
         }
         return "y={" + string.Join("; ", parts) + "}";
     }
 
     private static string Fmt(float v)
         => v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>改过表达式后，图例标题重新按当前表达式生成。</summary>
+    internal static void RefreshLabels(PlotSpec spec)
+    {
+        if (spec == null) return;
+        foreach (var s in spec.Series)
+            s.Label = s.Pieces.Count > 0
+                ? PieceLabel(s.Pieces)
+                : "y=" + HighSchool(s.Expr);
+    }
+
+    /// <summary>显示层统一成高中数学写法：log10/log → lg；ln、log2 原样。</summary>
+    internal static string HighSchool(string expr)
+    {
+        if (string.IsNullOrEmpty(expr)) return "";
+        return expr.Replace("log10(", "lg(", StringComparison.Ordinal)
+                   .Replace("log_2(", "log2(", StringComparison.Ordinal)
+                   .Replace("log₂", "log2", StringComparison.Ordinal)
+                   .Replace("₂", "2", StringComparison.Ordinal)
+                   .Replace("log(", "lg(", StringComparison.Ordinal);
+    }
 
     private static bool Bool(JsonElement e, string name, bool fallback)
         => e.ValueKind == JsonValueKind.Object

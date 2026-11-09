@@ -32,7 +32,7 @@ internal static class AiPlotClient
             return Task.FromResult(res);
         }
         string body = BuildBody(cfg, BuildPrompt(request, false), null);
-        return SendAsync(body, cfg, res, ct);
+        return SendAsync(body, cfg, res, request, ct);
     }
 
     /// <summary>选中题目图片 → 模型直接看图，反推函数/圆锥/几何并输出同一套 JSON。</summary>
@@ -52,7 +52,7 @@ internal static class AiPlotClient
             return Task.FromResult(res);
         }
         string body = BuildBody(cfg, BuildPrompt(request, true), png);
-        return SendAsync(body, cfg, res, ct);
+        return SendAsync(body, cfg, res, request, ct);
     }
 
     private static string BuildPrompt(string request, bool fromImage)
@@ -93,9 +93,12 @@ internal static class AiPlotClient
                   "只选一个最贴近的 kind，不要把整张图当成几何点线硬拆。\n"
                 : "") +
             "规则：只支持一个自变量 x；expr 用 * 表示乘法、^ 表示乘方；" +
-            "函数支持 sin/cos/tan/cot/sec/csc/sqrt/abs/exp/ln/log/log2/cbrt。含参函数必须在 params 里给默认值，" +
+            "函数支持 sin/cos/tan/cot/sec/csc/sqrt/abs/exp/ln/log/log2/lg/cbrt。" +
+            "高中写法：lg(x) 是以 10 为底，ln(x) 是自然对数，log2(x) 是以 2 为底；" +
+            "含参函数必须在 params 里给默认值，" +
             "expr 里可以用参数名。定义域要避开 log/sqrt 的非法区间。" +
             "分段函数必须用 pieces（每段自己的 min/max），不能只写一个 expr；" +
+            "注意：lg 是以10为底，必须写 lg(x)，不能写成 log2；log₂/log2 是以2为底，必须写 log2(x)；" +
             "几何点坐标取 0..10 的方便数值，连线要闭合完整。\n" +
             (fromImage ? "图片：" + (request ?? "") : "用户要求：" + (request ?? ""));
     }
@@ -116,7 +119,8 @@ internal static class AiPlotClient
     }
 
     private static async Task<Result> SendAsync(string body, OcrClient.OcrConfig cfg,
-                                                Result res, CancellationToken ct)
+                                                Result res, string request,
+                                                CancellationToken ct)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         try
@@ -165,6 +169,7 @@ internal static class AiPlotClient
                 res.Error = "模型返回的 JSON 缺少可绘制内容";
                 return res;
             }
+            NormalizeLogNotation(spec, request);
 
             if (spec.Kind is "plane" or "solid")
             {
@@ -239,6 +244,44 @@ internal static class AiPlotClient
         catch (OperationCanceledException) { res.Error = "AI 请求超时"; return res; }
         catch (Exception ex) { res.Error = ex.Message; return res; }
         finally { res.Seconds = sw.Elapsed.TotalSeconds; }
+    }
+
+    private static void NormalizeLogNotation(PlotSpec spec, string request)
+    {
+        if (spec == null) return;
+        string q = (request ?? "").ToLowerInvariant();
+        bool hasLg = q.Contains("lg", StringComparison.Ordinal);
+        bool hasLog2 = q.Contains("log2", StringComparison.Ordinal)
+                       || q.Contains("log₂", StringComparison.Ordinal)
+                       || q.Contains("log_2", StringComparison.Ordinal);
+        if (hasLg == hasLog2) return;   // 两种都提到或都没提：不猜
+
+        bool toLg = hasLg;
+        foreach (var s in spec.Series)
+        {
+            if (s.Pieces.Count > 0)
+            {
+                foreach (var p in s.Pieces) p.Expr = RewriteLog(p.Expr, toLg);
+            }
+            else s.Expr = RewriteLog(s.Expr, toLg);
+        }
+        if (!string.IsNullOrWhiteSpace(spec.Title))
+        {
+            spec.Title = RewriteLog(spec.Title, toLg);
+            spec.Title = PlotSpecJson.HighSchool(spec.Title);
+        }
+        PlotSpecJson.RefreshLabels(spec);
+    }
+
+    private static string RewriteLog(string expr, bool toLg)
+    {
+        if (string.IsNullOrEmpty(expr)) return expr;
+        return toLg
+            ? expr.Replace("log2(", "lg(", StringComparison.Ordinal)
+                  .Replace("log_2(", "lg(", StringComparison.Ordinal)
+            : expr.Replace("log10(", "log2(", StringComparison.Ordinal)
+                  .Replace("lg(", "log2(", StringComparison.Ordinal)
+                  .Replace("log(", "log2(", StringComparison.Ordinal);
     }
 
     private static string ExtractJson(string s)
