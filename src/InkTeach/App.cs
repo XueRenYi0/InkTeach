@@ -424,6 +424,41 @@ internal sealed partial class App : InkEngine.InkEngine
                 SettleFrames(160);
                 ScreenProbe.SaveBmp("reports/b0-textbox-realtype-committed.bmp",
                     (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+
+                // 小字号（18px）：验证顶部留白按字号缩放，提交不跳。
+                typed.TextBox.FontSize = 9f;
+                typed.TextBox.AutoHeight = true;
+                typed.TextBox.Width = 300f;
+                typed.TextBox.InvalidateLayout();
+                BeginTextBoxEdit(typed);
+                SettleFrames(200);
+                TypeTextBoxEditCharForTest('你');
+                TypeTextBoxEditCharForTest('怎');
+                SettleFrames(200);
+                ScreenProbe.SaveBmp("reports/b0-textbox-smallfont.bmp",
+                    (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+                EndTextBoxEditFromUi(true);
+                Doc.SelectOnly(Array.Empty<Stroke>());
+                SettleFrames(160);
+                ScreenProbe.SaveBmp("reports/b0-textbox-smallfont-committed.bmp",
+                    (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+
+                // 27px：第三点校准 RichEdit / DirectWrite 的首行留白差。
+                typed.TextBox.FontSize = 13.5f;
+                typed.TextBox.AutoHeight = true;
+                typed.TextBox.Width = 300f;
+                typed.TextBox.InvalidateLayout();
+                BeginTextBoxEdit(typed);
+                SettleFrames(200);
+                TypeTextBoxEditCharForTest('你');
+                SettleFrames(200);
+                ScreenProbe.SaveBmp("reports/b0-textbox-midfont.bmp",
+                    (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+                EndTextBoxEditFromUi(true);
+                Doc.SelectOnly(Array.Empty<Stroke>());
+                SettleFrames(160);
+                ScreenProbe.SaveBmp("reports/b0-textbox-midfont-committed.bmp",
+                    (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
             }
 
             // 点击文字中间：caret 应落在点击处附近，而不是偏一截。

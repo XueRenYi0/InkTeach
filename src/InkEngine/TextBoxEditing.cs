@@ -24,8 +24,13 @@ public partial class InkEngine
     private bool _textBoxSnapshotPending;
     private int _textBoxSnapshotDelay;
     private RectF _textBoxEditScreenRect;
-    /// <summary>无窗口 RichEdit 开关；失败会自动回退到 RICHEDIT50W。</summary>
-    internal static bool UseWindowlessTextBox = true;
+    /// <summary>
+    /// 无窗口 RichEdit 开关；失败会自动回退到 RICHEDIT50W。
+    /// 2026-11-09 用户拍板：编辑态允许不透明背景（板色/纸色卡片），
+    /// 只要最终渲染保持透明即可。因此默认走窗口版 RichEdit：
+    /// 原生 caret/选区/点击命中，不再依赖画布快照。
+    /// </summary>
+    internal static bool UseWindowlessTextBox = false;
     private static Native.WndProcDelegate _textBoxEditHostProc;
     private static uint _textBoxEditTextColor;
     // 编辑底：**白板 = 当前板色**；文档/图片上退而求其次，用一块很淡的近白
@@ -928,6 +933,7 @@ public partial class InkEngine
         var b = s.PaddedBounds;
         float unit = MathF.Max(0.5f, box.Unit);
         float pad = 18f * unit;
+        float fontPx = MathF.Max(6f, box.FontSize * MathF.Max(0.5f, box.Unit));
         int x = (int)MathF.Round(b.MinX + 2f);
         int y = (int)MathF.Round(b.MinY + 2f + ViewOffsetY);
         int w = Math.Max(60, (int)MathF.Round(b.MaxX - b.MinX - 4f));
@@ -942,12 +948,20 @@ public partial class InkEngine
                             show | Native.SWP_NOACTIVATE);
         Native.SetWindowPos(_textBoxEditHwnd, IntPtr.Zero, 0, 0, w, h,
                             Native.SWP_NOZORDER | show);
+        int textTop = (int)MathF.Round(pad);
+        if (_windowlessText == null)
+        {
+            // RichEdit(GDI) 的首行字形比 D2D(DirectWrite) 多一段顶部留白
+            //（约 0.194em，小字号有取整差）。把文字区整体上移，提交后字体不往上跳。
+            int lead = (int)MathF.Round(0.194f * fontPx + 0.5f);
+            textTop = Math.Max(0, textTop - lead);
+        }
         var textRect = new Native.RECT
         {
             Left = (int)MathF.Round(pad),
-            Top = (int)MathF.Round(pad),
+            Top = textTop,
             Right = Math.Max((int)MathF.Round(pad) + 40, w - (int)MathF.Round(pad)),
-            Bottom = Math.Max((int)MathF.Round(pad) + 20, h - (int)MathF.Round(pad)),
+            Bottom = Math.Max(textTop + 20, h - (int)MathF.Round(pad)),
         };
         if (_windowlessText != null)
         {
