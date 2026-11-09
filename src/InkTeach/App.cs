@@ -6743,6 +6743,63 @@ internal sealed partial class App : InkEngine.InkEngine
                               $"json={vpKeep} undo={vpUndo}");
         }
 
+        // 新增：选中题目文字 → AI「识别作图」入口（提示词抽取自检 + 菜单截图）。
+        Doc.Clear();
+        Doc.ClearHistory();
+        InsertPlainTextBoxForTest("已知函数 f(x)=x^2-4x+3，请画出它的图象，并标出顶点。");
+        if (Doc.Strokes.Count > 0)
+        {
+            var tbPlot = Doc.Strokes[^1];
+            string plotPrompt = PlotPromptFromTextBox(tbPlot.TextBox);
+            bool textPromptOk = plotPrompt.Contains("x^2-4x+3", StringComparison.Ordinal);
+            Doc.SelectOnly(new[] { tbPlot });
+            SelAiMenuOpen = true;
+            SettleFrames(160);
+            ScreenProbe.SaveBmp("reports/aiplot-recognize-text.bmp",
+                (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+            SelAiMenuOpen = false;
+            Console.WriteLine($"识别作图/文字：prompt={textPromptOk} len={plotPrompt.Length}");
+        }
+
+        // 图片路径：先造一张二次函数图，再让模型看图反推并重画成矢量。
+        Doc.Clear();
+        Doc.ClearHistory();
+        var recogSpec = new PlotSpec { Title = "二次函数", XMin = -1f, XMax = 5f };
+        recogSpec.Series.Add(new PlotSeries { Expr = "x^2-4*x+3", Label = "y=x^2-4x+3" });
+        var recogImg = PlotRenderer.Render(recogSpec);
+        if (recogImg != null)
+        {
+            var recogSrc = InsertPlotImageForTest(recogImg, "reports/aiplot-recognize-src.bmp");
+            Doc.SelectOnly(new[] { recogSrc });
+            InsertAiPlotFromImageFromUi(recogSrc);
+            int iw = 0;
+            Stroke imagePlotFig = null;
+            while (iw++ < 200)
+            {
+                SettleFrames(40);
+                foreach (var st in Doc.Strokes)
+                    if (st.Kind == StrokeKind.Figure) { imagePlotFig = st; break; }
+                if (imagePlotFig != null) break;
+            }
+            SettleFrames(180);
+            ScreenProbe.SaveBmp("reports/aiplot-recognize-image.bmp",
+                (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+            Console.WriteLine($"识别作图/图片：figure={imagePlotFig != null} " +
+                              $"series={imagePlotFig?.Figure?.Series.Count ?? 0} frames={iw}");
+            if (imagePlotFig != null)
+            {
+                Doc.SelectOnly(new[] { imagePlotFig });
+                SelAiMenuOpen = true;
+                SettleFrames(160);
+                ScreenProbe.SaveBmp("reports/aiplot-ai-menu.bmp",
+                    (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+                SelAiMenuOpen = false;
+            }
+        }
+
+        Console.WriteLine("出图：reports/aiplot-recognize-text.bmp / " +
+                          "aiplot-recognize-image.bmp / aiplot-ai-menu.bmp");
+
         // v1.6 平面几何：AI 给点/线段，本地结构化渲染。
         var planeAi = cfg.IsConfigured
             ? Task.Run(() => AiPlotClient.ParseAsync(

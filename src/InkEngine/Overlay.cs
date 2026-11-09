@@ -6388,7 +6388,7 @@ internal sealed partial class OverlayWindow : IDisposable
 
         if (app.SelAiMenuOpen)
         {
-            string[] labels = { "📝 识别文本" };
+            string[] labels = { "📝 识别文本", "📈 识别作图" };
             for (int i = 0; i < labels.Length && i < rows; i++)
             {
                 var r = SelectionHandles.BarMenuRowRectIn(m, i, dpi);

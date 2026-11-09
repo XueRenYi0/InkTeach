@@ -5,8 +5,8 @@ using System.Text.Json;
 namespace InkEngine;
 
 /// <summary>
-/// AI 作图：把“画 y=ln(x)”/“画一个椭圆”/“画一个正方体”这类自然语言
-/// 解析成解析式或结构化图形；实际求值/采样/画图全在本地，避免让模型给像素。
+/// AI 作图：把“画 y=ln(x)”/“画一个椭圆”/“画一个正方体”这类自然语言，
+/// 或一张题目图片，解析成解析式/结构化图形；实际求值/采样/画图全在本地。
 /// </summary>
 internal static class AiPlotClient
 {
@@ -22,53 +22,98 @@ internal static class AiPlotClient
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(60) };
 
-    internal static async Task<Result> ParseAsync(string request, OcrClient.OcrConfig cfg,
-                                                   CancellationToken ct)
+    internal static Task<Result> ParseAsync(string request, OcrClient.OcrConfig cfg,
+                                            CancellationToken ct)
     {
         var res = new Result { Model = cfg?.Model ?? "" };
         if (cfg == null || !cfg.IsConfigured)
         {
             res.Error = "未配置 AI API";
-            return res;
+            return Task.FromResult(res);
         }
+        string body = BuildBody(cfg, BuildPrompt(request, false), null);
+        return SendAsync(body, cfg, res, ct);
+    }
+
+    /// <summary>选中题目图片 → 模型直接看图，反推函数/圆锥/几何并输出同一套 JSON。</summary>
+    internal static Task<Result> ParseImageAsync(byte[] png, string request,
+                                                 OcrClient.OcrConfig cfg,
+                                                 CancellationToken ct)
+    {
+        var res = new Result { Model = cfg?.Model ?? "" };
+        if (cfg == null || !cfg.IsConfigured)
+        {
+            res.Error = "未配置 AI API";
+            return Task.FromResult(res);
+        }
+        if (png == null || png.Length == 0)
+        {
+            res.Error = "图片为空";
+            return Task.FromResult(res);
+        }
+        string body = BuildBody(cfg, BuildPrompt(request, true), png);
+        return SendAsync(body, cfg, res, ct);
+    }
+
+    private static string BuildPrompt(string request, bool fromImage)
+    {
+        return
+            (fromImage
+                ? "先读图中的数学题目/图形，再解析成一个 JSON 对象。只输出 JSON，不要 markdown 或解释。\n"
+                : "把下面的作图要求解析成一个 JSON 对象。只输出 JSON，不要 markdown 或解释。\n") +
+            "kind 只能是 functions / conic / plane / solid。\n" +
+            "1) 函数（可含参数）：\n" +
+            "{\"kind\":\"functions\",\"functions\":[{\"expr\":\"a*x^2+b*x+c\"}]," +
+            "\"params\":{\"a\":1,\"b\":-2,\"c\":1},\"domain\":[-5,5],\"title\":\"含参二次函数\"}\n" +
+            "2) 圆锥曲线：\n" +
+            "{\"kind\":\"conic\",\"conic\":{\"type\":\"ellipse\",\"h\":0,\"k\":0,\"a\":3,\"b\":2," +
+            "\"axis\":\"right\",\"equation\":\"x^2/9+y^2/4=1\"},\"domain\":[-6,6],\"title\":\"椭圆\"}\n" +
+            "type 为 ellipse/hyperbola/parabola；抛物线用 axis=right/left/up/down、a=焦准距 p。\n" +
+            "3) 平面几何：\n" +
+            "{\"kind\":\"plane\",\"figure\":{\"kind\":\"geometry2d\"," +
+            "\"points\":{\"A\":[0,0],\"B\":[4,0],\"C\":[0,3]}," +
+            "\"segments\":[[\"A\",\"B\"],[\"B\",\"C\"],[\"C\",\"A\"]]," +
+            "\"labels\":{\"A\":\"A\",\"B\":\"B\",\"C\":\"C\"}},\"title\":\"直角三角形\"}\n" +
+            "4) 立体几何：\n" +
+            "{\"kind\":\"solid\",\"figure\":{\"kind\":\"geometry3d\"," +
+            "\"points\":{\"A\":[0,0,0],\"B\":[2,0,0],\"C\":[2,2,0],\"D\":[0,2,0]," +
+            "\"A1\":[0,0,2],\"B1\":[2,0,2],\"C1\":[2,2,2],\"D1\":[0,2,2]}," +
+            "\"edges\":[[\"A\",\"B\"],[\"B\",\"C\"],[\"C\",\"D\"],[\"D\",\"A\"]," +
+            "[\"A1\",\"B1\"],[\"B1\",\"C1\"],[\"C1\",\"D1\"],[\"D1\",\"A1\"]," +
+            "[\"A\",\"A1\"],[\"B\",\"B1\"],[\"C\",\"C1\"],[\"D\",\"D1\"]]," +
+            "\"labels\":{\"A\":\"A\",\"B\":\"B\"}},\"title\":\"正方体\"}\n" +
+            (fromImage
+                ? "如果图里是函数图象，反推出最可能的解析式；有参数就保留 a/b/c 并给默认值。" +
+                  "只选一个最贴近的 kind，不要把整张图当成几何点线硬拆。\n"
+                : "") +
+            "规则：只支持一个自变量 x；expr 用 * 表示乘法、^ 表示乘方；" +
+            "函数支持 sin/cos/tan/sqrt/exp/ln/log/abs。含参函数必须在 params 里给默认值，" +
+            "expr 里可以用参数名。定义域要避开 log/sqrt 的非法区间。" +
+            "几何点坐标取 0..10 的方便数值，连线要闭合完整。\n" +
+            (fromImage ? "图片：" + (request ?? "") : "用户要求：" + (request ?? ""));
+    }
+
+    private static string BuildBody(OcrClient.OcrConfig cfg, string prompt, byte[] png)
+    {
+        string J(string s) => "\"" + JsonEncodedText.Encode(s ?? "").ToString() + "\"";
+        string content = png == null
+            ? J(prompt)
+            : "[{\"type\":\"text\",\"text\":" + J(prompt) + "}," +
+              "{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64," +
+              Convert.ToBase64String(png) + "\"}}]";
+        return "{\"model\":" + J(cfg.Model) +
+               ",\"stream\":false,\"temperature\":0,\"max_tokens\":1200," +
+               "\"messages\":[{\"role\":\"system\",\"content\":" +
+               J("你是数学作图助手。只输出一个 JSON 对象，不要 markdown。") + "}," +
+               "{\"role\":\"user\",\"content\":" + content + "}]}";
+    }
+
+    private static async Task<Result> SendAsync(string body, OcrClient.OcrConfig cfg,
+                                                Result res, CancellationToken ct)
+    {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            string J(string s) => "\"" + JsonEncodedText.Encode(s ?? "").ToString() + "\"";
-            string prompt =
-                "把下面的作图要求解析成一个 JSON 对象。只输出 JSON，不要 markdown 或解释。\n" +
-                "kind 只能是 functions / conic / plane / solid。\n" +
-                "1) 函数（可含参数）：\n" +
-                "{\"kind\":\"functions\",\"functions\":[{\"expr\":\"a*x^2+b*x+c\"}]," +
-                "\"params\":{\"a\":1,\"b\":-2,\"c\":1},\"domain\":[-5,5],\"title\":\"含参二次函数\"}\n" +
-                "2) 圆锥曲线：\n" +
-                "{\"kind\":\"conic\",\"conic\":{\"type\":\"ellipse\",\"h\":0,\"k\":0,\"a\":3,\"b\":2," +
-                "\"axis\":\"right\",\"equation\":\"x^2/9+y^2/4=1\"},\"domain\":[-6,6],\"title\":\"椭圆\"}\n" +
-                "type 为 ellipse/hyperbola/parabola；抛物线用 axis=right/left/up/down、a=焦准距 p。\n" +
-                "3) 平面几何：\n" +
-                "{\"kind\":\"plane\",\"figure\":{\"kind\":\"geometry2d\"," +
-                "\"points\":{\"A\":[0,0],\"B\":[4,0],\"C\":[0,3]}," +
-                "\"segments\":[[\"A\",\"B\"],[\"B\",\"C\"],[\"C\",\"A\"]]," +
-                "\"labels\":{\"A\":\"A\",\"B\":\"B\",\"C\":\"C\"}},\"title\":\"直角三角形\"}\n" +
-                "4) 立体几何：\n" +
-                "{\"kind\":\"solid\",\"figure\":{\"kind\":\"geometry3d\"," +
-                "\"points\":{\"A\":[0,0,0],\"B\":[2,0,0],\"C\":[2,2,0],\"D\":[0,2,0]," +
-                "\"A1\":[0,0,2],\"B1\":[2,0,2],\"C1\":[2,2,2],\"D1\":[0,2,2]}," +
-                "\"edges\":[[\"A\",\"B\"],[\"B\",\"C\"],[\"C\",\"D\"],[\"D\",\"A\"]," +
-                "[\"A1\",\"B1\"],[\"B1\",\"C1\"],[\"C1\",\"D1\"],[\"D1\",\"A1\"]," +
-                "[\"A\",\"A1\"],[\"B\",\"B1\"],[\"C\",\"C1\"],[\"D\",\"D1\"]]," +
-                "\"labels\":{\"A\":\"A\",\"B\":\"B\"}},\"title\":\"正方体\"}\n" +
-                "规则：只支持一个自变量 x；expr 用 * 表示乘法、^ 表示乘方；" +
-                "函数支持 sin/cos/tan/sqrt/exp/ln/log/abs。含参函数必须在 params 里给默认值，" +
-                "expr 里可以用参数名。定义域要避开 log/sqrt 的非法区间。" +
-                "几何点坐标取 0..10 的方便数值，连线要闭合完整。\n" +
-                "用户要求：" + (request ?? "");
-            string body = "{\"model\":" + J(cfg.Model) +
-                          ",\"stream\":false,\"temperature\":0,\"max_tokens\":1200," +
-                          "\"messages\":[{\"role\":\"system\",\"content\":" +
-                          J("你是数学作图助手。只输出一个 JSON 对象，不要 markdown。") + "}," +
-                          "{\"role\":\"user\",\"content\":" + J(prompt) + "}]}";
-
             using var req = new HttpRequestMessage(HttpMethod.Post, cfg.Endpoint);
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", cfg.Key);
             req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -148,7 +193,6 @@ internal static class AiPlotClient
             }
             else
             {
-                // 本地验证表达式；有非法项就报错，避免画空图。
                 foreach (var s in spec.Series)
                 {
                     try { PlotExpression.Parse(s.Expr, spec.Params); }

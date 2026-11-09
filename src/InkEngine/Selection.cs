@@ -3201,7 +3201,7 @@ internal static class SelectionHandles
     public const float BarMenuStatusHeightLogical = 26f;
     public const float BarMenuPadLogical = 6f;
     /// <summary>AI 菜单当前只有「识别文本」一项；手写优化两项先隐藏，代码保留。</summary>
-    public const int BarAiMenuRows = 1;
+    public const int BarAiMenuRows = 2;
 
     /// <summary>弹层整块：默认贴操作条右下，下面放不下就翻到上面。</summary>
     public static RectF BarMenuRectIn(in RectF bar, float dpi, in RectF visible,

@@ -18688,6 +18688,7 @@ public partial class InkEngine
                 if (SelAiMenuOpen)
                 {
                     if (row == 0) RecognizeToTextBoxFromUi();
+                    else if (row == 1) RecognizePlotFromUi();
                 }
                 else if (SelMoreMenuOpen)
                 {

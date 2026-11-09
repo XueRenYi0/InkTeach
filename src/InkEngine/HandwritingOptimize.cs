@@ -16,7 +16,7 @@ namespace InkEngine;
 /// </summary>
 public partial class InkEngine
 {
-    private enum HandOcrMode { Handwriting, TextBox }
+    private enum HandOcrMode { Handwriting, TextBox, Plot }
 
     private sealed class HandOcrDone
     {
@@ -52,8 +52,54 @@ public partial class InkEngine
     internal void RecognizeToTextBoxFromUi()
         => StartHandOcr(HandOcrMode.TextBox, true);
 
-    private void StartHandOcr(HandOcrMode mode, bool includeFormulas)
+    /// <summary>
+    /// AI 菜单「识别作图」：
+    ///   · 选中图片 → 模型直接看图，反推函数/圆锥/几何；
+    ///   · 选中文本框/题卡 → 用现有文字直接解析；
+    ///   · 选中手写 → OCR 成文字后走同一套作图解析。
+    /// </summary>
+    internal void RecognizePlotFromUi()
     {
+        if (Doc.Selected.Count == 1)
+        {
+            var only = Doc.Selected[0];
+            if (only.Kind == StrokeKind.Image && only.Image != null)
+            {
+                InsertAiPlotFromImageFromUi(only);
+                return;
+            }
+            if (only.Kind == StrokeKind.Figure)
+            {
+                SetHandOcrStatus("已经是矢量图：选中后拖参数滑杆即可");
+                return;
+            }
+            if (only.Kind == StrokeKind.TextBox && only.TextBox != null)
+            {
+                string text = PlotPromptFromTextBox(only.TextBox);
+                if (text.Length > 0)
+                {
+                    SetHandOcrStatus("已读取题目，正在解析作图…");
+                    InsertAiPlotFromUi(text);
+                }
+                else SetHandOcrStatus("文本框里没有可作图的题目");
+                return;
+            }
+        }
+        StartHandOcr(HandOcrMode.Plot, true);
+    }
+
+    /// <summary>文本框/题卡 → 作图提示词（普通文本 + 所有题干）。</summary>
+    internal static string PlotPromptFromTextBox(TextBoxData b)
+    {
+        if (b == null) return "";
+        var sb = new System.Text.StringBuilder();
+        if (!string.IsNullOrWhiteSpace(b.Text)) sb.AppendLine(b.Text);
+        foreach (var q in b.Questions)
+            if (!string.IsNullOrWhiteSpace(q.Stem)) sb.AppendLine(q.Stem);
+        return sb.ToString().Trim();
+    }
+
+    private void StartHandOcr(HandOcrMode mode, bool includeFormulas)    {
         if (_handOcrBusy)
         {
             SetHandOcrStatus("正在识别，请稍候…");
@@ -71,7 +117,9 @@ public partial class InkEngine
         }
         if (selected.Count == 0)
         {
-            SetHandOcrStatus("先框选要优化的文字笔迹");
+            SetHandOcrStatus(mode == HandOcrMode.Plot
+                ? "请选中题目文字/手写题，或单张题目图片"
+                : "先框选要优化的文字笔迹");
             return;
         }
 
@@ -88,8 +136,8 @@ public partial class InkEngine
             return;
         }
 
-        // 「识别到文本框」只需要文字：把图形长线从 OCR 图里剔掉（公式分式线一般 <350）。
-        if (mode == HandOcrMode.TextBox)
+        // 「识别到文本框」/「识别作图」只需要题目文字：把图形长线从 OCR 图里剔掉（公式分式线一般 <350）。
+        if (mode is HandOcrMode.TextBox or HandOcrMode.Plot)
         {
             var textOnly = new List<Stroke>();
             foreach (var s in selected)
@@ -109,7 +157,7 @@ public partial class InkEngine
         }
 
         string font = GlyphText.BundledFontPath;
-        if (string.IsNullOrEmpty(font))
+        if (mode != HandOcrMode.Plot && string.IsNullOrEmpty(font))
         {
             SetHandOcrStatus("缺少手写字体文件");
             return;
@@ -134,7 +182,9 @@ public partial class InkEngine
         _handOcrBusy = true;
         SetHandOcrStatus(mode == HandOcrMode.TextBox
             ? "识别中…（文本框）"
-            : includeFormulas ? "识别中…（含公式）" : "识别中…（约 2–5 秒）");
+            : mode == HandOcrMode.Plot
+                ? "识别作图中…（先认题，再解析）"
+                : includeFormulas ? "识别中…（含公式）" : "识别中…（约 2–5 秒）");
 
         _handOcrCts?.Cancel();
         _handOcrCts = new CancellationTokenSource();
@@ -145,9 +195,11 @@ public partial class InkEngine
         {
             string prompt = mode == HandOcrMode.TextBox
                 ? OcrClient.BoxPrompt
-                : includeFormulas ? OcrClient.BoxPrompt : OcrClient.BoardPrompt;
+                : mode == HandOcrMode.Plot
+                    ? OcrClient.BoardPrompt
+                    : includeFormulas ? OcrClient.BoxPrompt : OcrClient.BoardPrompt;
             var result = await OcrClient.RecognizeAsync(png, cfg, prompt, ct,
-                                        withBoxes: mode == HandOcrMode.TextBox || includeFormulas)
+                                        withBoxes: mode == HandOcrMode.TextBox)
                                         .ConfigureAwait(false);
             if (gen != Volatile.Read(ref _handOcrGeneration)) return;
             var done = new HandOcrDone { Selected = selected, Region = region, Result = result,
@@ -195,6 +247,20 @@ public partial class InkEngine
                 SetHandOcrStatus("选区已变化，已取消");
                 return;
             }
+
+        if (done.Mode == HandOcrMode.Plot)
+        {
+            string text = string.Join("\n", done.Result.Lines);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                SetHandOcrStatus("没认出题目文字，请只框选题目");
+                return;
+            }
+            SetHandOcrStatus("已认出题目，正在解析作图…");
+            Console.WriteLine($"[识别作图] OCR {done.Result.Lines.Length} 行，{done.Result.Seconds:F1}s");
+            InsertAiPlotFromUi(text);
+            return;
+        }
 
         if (done.Mode == HandOcrMode.TextBox)
         {

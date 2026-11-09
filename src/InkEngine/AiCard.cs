@@ -1567,7 +1567,58 @@ public partial class InkEngine
         });
     }
 
-    /// <summary>主循环调用：把后台作好的图插到画布（只在主线程做一次 AddStroke）。</summary>
+    /// <summary>选中图片 → 模型直接看图，反推函数/圆锥/几何，插入 Figure/Image。</summary>
+    internal void InsertAiPlotFromImageFromUi(Stroke image)
+    {
+        if (_aiPlotBusy)
+        {
+            ShowToast("AI 正在作图，请稍等");
+            return;
+        }
+        if (image?.Image == null)
+        {
+            ShowToast("请先选中一张图片");
+            return;
+        }
+        var cfg = OcrClient.LoadConfig();
+        if (!cfg.IsConfigured)
+        {
+            ShowToast("AI 未配置：先设置 API Key/模型");
+            return;
+        }
+        _aiPlotBusy = true;
+        ShowToast("AI 识别作图中…", 3000);
+        _ = Task.Run(async () =>
+        {
+            byte[] png = ExportFormats.Encode("plot-sel.png", image.Image.Bgra,
+                                              image.Image.Width, image.Image.Height, 0,
+                                              out _);
+            AiPlotClient.Result r;
+            if (png == null || png.Length == 0)
+                r = new AiPlotClient.Result { Error = "图片编码失败" };
+            else
+                r = await AiPlotClient.ParseImageAsync(
+                        png, "这是一道数学题或数学图形，请根据图中的函数/圆锥/几何关系作图。",
+                        cfg, CancellationToken.None).ConfigureAwait(false);
+            bool vector = r.Ok && r.Spec != null
+                          && r.Spec.Kind is "functions" or "conic";
+            ImageData img = null;
+            if (r.Ok && r.Spec != null && !vector) img = PlotRenderer.Render(r.Spec);
+            var done = new AiPlotDone
+            {
+                Ok = r.Ok && (vector || img != null),
+                Error = r.Ok
+                    ? (vector || img != null ? "" : "没有可渲染的数据")
+                    : r.Error,
+                Image = img,
+                Spec = r.Spec,
+                Seconds = r.Seconds,
+            };
+            Interlocked.Exchange(ref _aiPlotDone, done);
+        });
+    }
+
+    /// <summary>主循环调用：把后台作好的图/矢量对象插到画布（只在主线程改 Doc）。</summary>
     internal void StepAiPlot()
     {
         var done = Interlocked.Exchange(ref _aiPlotDone, null);
