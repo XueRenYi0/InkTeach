@@ -6320,11 +6320,11 @@ internal sealed partial class App : InkEngine.InkEngine
                 Analysis = gen.Analysis,
                 Figure = figure,
             });
-            b.Width = 700f * u;
+            b.Width = 560f * u;
             b.AutoWidth = false;
             b.InvalidateLayout();
             _ = b.EnsureLayout();
-            float x = _virtualX + _virtualW * 0.5f - b.Width * 0.5f;
+            float x = _virtualX + 80f;
             float y = MathF.Max(_virtualY - ViewOffsetY + 16f * u,
                                 (_virtualY + _virtualH) * 0.5f - ViewOffsetY - b.Height * 0.5f);
             card.SetTextBoxRect(new Vector2(x, y), b.Width, b.Height);
@@ -6335,7 +6335,54 @@ internal sealed partial class App : InkEngine.InkEngine
         SettleFrames(300);
         ScreenProbe.SaveBmp("reports/figure-live.bmp",
             (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
-        Console.WriteLine("出图：reports/figure-live.bmp");
+
+        // 真实模型场景 → 本地可拖动三角形对象：
+        // AI 只给点坐标，本地用现有 Triangle 对象创建，顶点手柄/移动/撤销全部复用。
+        Stroke tri = null;
+        var ptsSpec = gen.Figure?.Points2D;
+        if (ptsSpec != null && ptsSpec.Count >= 3)
+        {
+            var names = new List<string>();
+            if (ptsSpec.ContainsKey("A") && ptsSpec.ContainsKey("B") && ptsSpec.ContainsKey("C"))
+            { names.Add("A"); names.Add("B"); names.Add("C"); }
+            else
+            {
+                foreach (var k in ptsSpec.Keys) { names.Add(k); if (names.Count == 3) break; }
+            }
+            var pts = names.Select(n => ptsSpec[n]).ToList();
+            float minX = pts.Min(p => p.X), maxX = pts.Max(p => p.X);
+            float minY = pts.Min(p => p.Y), maxY = pts.Max(p => p.Y);
+            float bw = MathF.Max(0.001f, maxX - minX), bh = MathF.Max(0.001f, maxY - minY);
+            const float rw = 760f, rh = 600f, ox = 1420f, oy = 360f;
+            float sc = MathF.Min(rw / bw, rh / bh);
+            tri = new Stroke
+            {
+                Tool = Tool.Triangle,
+                Kind = StrokeKind.Triangle,
+                Color = new Color4(0.12f, 0.14f, 0.18f, 1f),
+                Width = 5f * u,
+            };
+            foreach (var p in pts)
+            {
+                tri.AddPoint(ox + (p.X - minX) * sc,
+                             oy + rh - (p.Y - minY) * sc, 1f, 0);
+            }
+            Doc.AddStroke(tri);
+            Doc.SelectOnly(new[] { tri });
+            SettleFrames(300);
+            ScreenProbe.SaveBmp("reports/figure-live-editable.bmp",
+                (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+
+            var from = SelectionHandles.ShapeHandleCanvasPosition(tri, ShapeHandle.Vertex0);
+            VertexDragForTest(tri, ShapeHandle.Vertex0, from.X, from.Y,
+                              from.X + 90f * u, from.Y + 40f * u);
+            SettleFrames(300);
+            ScreenProbe.SaveBmp("reports/figure-live-dragged.bmp",
+                (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+            Console.WriteLine($"AI 场景 → 可拖动三角形：points=3 handleDrag=True");
+        }
+
+        Console.WriteLine("出图：reports/figure-live.bmp / figure-live-editable.bmp / figure-live-dragged.bmp");
     }
 
     private static string ClipText(string s, int n)
