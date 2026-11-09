@@ -12,6 +12,8 @@ internal sealed partial class App
         Console.WriteLine();
         Console.WriteLine("=== 识别文本 ===");
         InkSerializer.LoadInto(Doc, File.ReadAllBytes(inPath));
+        // 自检固定从“白纸”开始，避免上一次背景偏好影响结果。
+        SetSelectedTextBackgroundFromUi(1);
         Doc.Selected.Clear();
         foreach (var s in Doc.Strokes)
         {
@@ -37,6 +39,17 @@ internal sealed partial class App
             Console.WriteLine($"文本长度：{t.Length}，前 80 字：{(t.Length > 80 ? t[..80] : t).Replace("\n", " / ")}");
         }
 
+        // 2026-11-09：识别后原墨迹应删除；这一下撤回应同时恢复墨迹、移除文本框。
+        Doc.Undo();
+        int undoBoxes = 0, undoInk = 0;
+        foreach (var s in Doc.Strokes)
+        {
+            if (s.Kind == StrokeKind.TextBox) undoBoxes++;
+            else if (s.Kind == StrokeKind.Freehand) undoInk++;
+        }
+        Console.WriteLine($"撤销识别：文本框 {undoBoxes}，手写 {undoInk}");
+        Doc.Redo();
+
         bool paperOk = false;
         try
         {
@@ -48,6 +61,16 @@ internal sealed partial class App
             Console.WriteLine(paperOk ? "存盘：文本框纸面 OK" : "存盘：纸面丢失");
         }
         catch (Exception ex) { Console.WriteLine("存盘失败：" + ex.Message); }
+
+        // 背景策略：默认白纸；改成透明后，记忆为“上一次调整”。
+        if (first?.TextBox != null)
+        {
+            Doc.SelectOnly(new[] { first });
+            SetSelectedTextBackgroundFromUi(0);
+            bool bgFollow = first.TextBox.Fill.A < 0.01f && !first.TextBox.Paper;
+            Console.WriteLine($"背景跟随上次调整（透明）：{bgFollow}");
+            SetSelectedTextBackgroundFromUi(1);   // 还原白纸，截图/后续运行不受影响
+        }
 
         var box = EditRegion.Of(Doc.Strokes);
         if (!box.IsEmpty)

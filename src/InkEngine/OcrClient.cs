@@ -220,42 +220,35 @@ internal static class OcrClient
         try
         {
             string b64 = Convert.ToBase64String(png);
-            var body = new Dictionary<string, object>
-            {
-                ["model"] = cfg.Model,
-                ["stream"] = false,
-                ["temperature"] = 0,
-                ["max_tokens"] = withBoxes ? 4096 : 2400,
-                ["messages"] = new object[]
-                {
-                    new
-                    {
-                        role = "user",
-                        content = new object[]
-                        {
-                            new { type = "text", text = prompt },
-                            new { type = "image_url", image_url = new { url = "data:image/png;base64," + b64 } },
-                        },
-                    },
-                },
-            };
-
+            // 手写 JSON：AOT 下 JsonSerializer 的反射序列化被禁用（2026-11-09 实测
+            // --handtextbox 在 AOT 里直接报 "Reflection-based serialization..."）。
+            string J(string s) => "\"" + JsonEncodedText.Encode(s ?? "").ToString() + "\"";
             string think = (cfg.Thinking ?? "auto").Trim().ToLowerInvariant();
             string host = (cfg.BaseUrl ?? "").ToLowerInvariant();
             if (think == "auto")
                 think = (host.Contains("deepseek") || host.Contains("bigmodel") ||
                          host.Contains("volces") || host.Contains("ark.cn"))
                         ? "disabled" : "none";
+
+            var sb = new StringBuilder(b64.Length + 512);
+            sb.Append("{\"model\":").Append(J(cfg.Model))
+              .Append(",\"stream\":false,\"temperature\":0,\"max_tokens\":")
+              .Append(withBoxes ? 4096 : 2400)
+              .Append(",\"messages\":[{\"role\":\"user\",\"content\":[")
+              .Append("{\"type\":\"text\",\"text\":").Append(J(prompt)).Append("},")
+              .Append("{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,")
+              .Append(b64).Append("\"}}]}]");
             if (think == "disabled")
-                body["thinking"] = new { type = "disabled" };
+                sb.Append(",\"thinking\":{\"type\":\"disabled\"}");
             else if (think == "low")
-                body["reasoning_effort"] = "low";
+                sb.Append(",\"reasoning_effort\":\"low\"");
             // none：百炼 qwen3-vl-plus 这类本来不思考的，什么都不发。
+            sb.Append('}');
 
             using var req = new HttpRequestMessage(HttpMethod.Post, cfg.Endpoint);
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", cfg.Key);
             req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            req.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+            req.Content = new StringContent(sb.ToString(), Encoding.UTF8, "application/json");
 
             using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseContentRead, ct)
                                        .ConfigureAwait(false);

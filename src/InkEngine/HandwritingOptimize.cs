@@ -250,7 +250,10 @@ public partial class InkEngine
 
         if (done.Mode == HandOcrMode.Plot)
         {
-            string text = string.Join("\n", done.Result.Lines);
+            var plotLines = new List<string>();
+            foreach (var line in done.Result.Lines)
+                if (!IsEmptyOcrLine(line)) plotLines.Add(line);
+            string text = string.Join("\n", plotLines);
             if (string.IsNullOrWhiteSpace(text))
             {
                 SetHandOcrStatus("没认出题目文字，请只框选题目");
@@ -276,6 +279,21 @@ public partial class InkEngine
                 SetHandOcrStatus("创建文本框失败");
                 return;
             }
+            // 识别成功：原墨迹删除 + 新文本框加入，**一步撤销**。
+            // 之前只加框不删墨：98% 白纸底下会透出原笔迹（2026-11-09 实测“鬼影”）。
+            var remove = new RemoveStrokesAction();
+            var seen = new HashSet<Stroke>();
+            foreach (var s in done.Selected)
+            {
+                if (!seen.Add(s)) continue;
+                int idx = Doc.Strokes.IndexOf(s);
+                if (idx >= 0) remove.Items.Add((idx, s));
+            }
+            var add = new AddStrokesAction();
+            add.Strokes.AddRange(boxes);
+            remove.Redo(Doc);
+            add.Redo(Doc);
+            Doc.CommitCompound(remove, add);
             // 2026-11-08 用户定：识别完**默认不选中**新文本框。
             // 选中会立刻弹出操作条 + 手柄，把刚识别出来的字盖住，编辑反而更别扭；
             // 不选中时它就是页面上的普通文字，单击选中、双击编辑。
@@ -397,6 +415,7 @@ public partial class InkEngine
         var lines = new List<string>();
         if (useItems) foreach (var item in items) lines.Add(item.Text);
         else lines.AddRange(done.Result.Lines);
+        lines.RemoveAll(IsEmptyOcrLine);
         string text = string.Join("\n", lines);
         if (string.IsNullOrWhiteSpace(text)) return null;
 
@@ -496,15 +515,12 @@ public partial class InkEngine
                               $"中位行高 {medianH:F1} → 字号 {fontPx / u:F1}px，行距 {spacing:F2}×");
         }
         var card = CreatePlainTextBoxAt(text, target, done.InkColor, TextBoxFace.YaHei,
-                                        spacing, fontPx / u, colors);
+                                        spacing, fontPx / u, colors, addToDoc: false);
         if (card?.TextBox != null)
         {
             // OCR 结果是**只读富文本卡**：文字 + 公式混排，但不进文字编辑。
             card.TextBox.Rich = true;
             card.TextBox.ReadOnly = true;
-            card.TextBox.Paper = true;
-            card.TextBox.Fill = TextBoxBackground.Fill(1, BoardColor, card: true);
-            card.TextBox.Border = TextBoxBackground.Border(1, BoardColor, card: true);
             card.TextBox.FitToContent(card.TextBox.Width, 0f, fitWidth: false);
             card.SyncTextBoxBounds();
         }
@@ -764,8 +780,15 @@ public partial class InkEngine
         return ExportFormats.Encode("ocr.png", bgra, w, h, 0, out _);
     }
 
-    private static string Clip(string s, int n)
+    /// <summary>模型有时把"没识别到"回成 [] / {}，不能当文字建框。</summary>
+    private static bool IsEmptyOcrLine(string s)
     {
+        if (string.IsNullOrWhiteSpace(s)) return true;
+        string t = s.Trim();
+        return t is "[]" or "{}" or "null" or "None";
+    }
+
+    private static string Clip(string s, int n)    {
         s = (s ?? "").Replace('\r', ' ').Replace('\n', ' ').Trim();
         return s.Length <= n ? s : s.Substring(0, n) + "…";
     }

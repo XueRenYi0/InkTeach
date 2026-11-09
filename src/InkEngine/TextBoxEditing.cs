@@ -70,6 +70,8 @@ public partial class InkEngine
     private Matrix3x2 _textBoxEditOriginalXf = Matrix3x2.Identity;
     // 2026-11-01 按 ClassIn 的常用档定：默认 **18**，不再用 15。
     private float _textFontSize = 18f;
+    /// <summary>文本框背景档（0 透明 / 1 白纸 / 2 板色 / 3 浅色）；默认白纸，改过之后新建的识别框沿用。</summary>
+    private int _textBgPreset = 1;
     private Color4 _textColor = InkPalette.PenBand[0].Color;
     private bool _textPrefsLoaded;
     private bool _textColorExplicit;
@@ -169,9 +171,12 @@ public partial class InkEngine
             SetUiPref("textFont", _textFontSize.ToString(CultureInfo.InvariantCulture));
         }
 
+        if (int.TryParse(GetUiPref("textBg"), out int bg)
+            && bg >= 0 && bg < TextBoxBackground.PresetCount)
+            _textBgPreset = bg;
+
         bool hadSwatches = false;
-        string savedSwatches = GetUiPref("textSwatches");
-        if (!string.IsNullOrEmpty(savedSwatches))
+        string savedSwatches = GetUiPref("textSwatches");        if (!string.IsNullOrEmpty(savedSwatches))
         {
             var parts = savedSwatches.Split(';');
             for (int i = 0; i < _textSwatchColors.Length && i < parts.Length; i++)
@@ -367,6 +372,11 @@ public partial class InkEngine
     /// <summary>下面板的「背景」档：透明 / 白纸 / 板色 / 浅色。</summary>
     internal void SetSelectedTextBackgroundFromUi(int preset)
     {
+        if (preset >= 0 && preset < TextBoxBackground.PresetCount)
+        {
+            _textBgPreset = preset;
+            SetUiPref("textBg", preset.ToString(CultureInfo.InvariantCulture));
+        }
         if (Doc.Selected.Count != 1) { NotifyUiStateChanged(); return; }
         var s = Doc.Selected[0];
         var box = s.TextBox;
@@ -388,9 +398,11 @@ public partial class InkEngine
         float beforeRadius = box.Radius;
         var beforeInk = box.Ink;
         var beforeColor = s.Color;
+        bool beforePaper = box.Paper;
 
         box.Fill = fill;
         box.Border = border;
+        box.Paper = preset != 0;
         if (!card)
         {
             // 底色和字色太接近时自动换字色；透明背景按下面的板色/纸色算。
@@ -418,7 +430,8 @@ public partial class InkEngine
         NotifyUiStateChanged();
 
         Doc.CommitInteractive(new TextBoxBackgroundAction(
-            s, beforeFill, beforeBorder, beforeRadius, beforeInk, beforeColor, oldBounds));
+            s, beforeFill, beforeBorder, beforeRadius, beforeInk, beforeColor, beforePaper,
+            oldBounds));
     }
 
     internal void CommitTextEditFromUi()
@@ -621,8 +634,10 @@ public partial class InkEngine
     /// **先设样式再排版**——公式图是按墨色烘的，晚设颜色会出现“文字红、公式黑”。
     /// </summary>
     private Stroke CreatePlainTextBoxAt(string text, RectF target, Color4 ink,
-                                        TextBoxFace face, float lineSpacing, float fontSizeLogical,
-                                        IReadOnlyList<Color4> lineColors)
+                                        TextBoxFace face, float lineSpacing,
+                                        float fontSizeLogical,
+                                        IReadOnlyList<Color4> lineColors,
+                                        bool addToDoc = true)
     {
         EnsureTextPrefs();
         var screen = ScreenRectPhysical();
@@ -634,9 +649,9 @@ public partial class InkEngine
         data.Face = face;
         data.LineSpacing = TextBoxFaces.ClampSpacing(lineSpacing);
         data.Ink = ink;
-        data.Paper = true;
-        data.Fill = TextBoxBackground.Fill(1, BoardColor, card: true);
-        data.Border = TextBoxBackground.Border(1, BoardColor, card: true);
+        data.Paper = _textBgPreset != 0;
+        data.Fill = TextBoxBackground.Fill(_textBgPreset, BoardColor, card: true);
+        data.Border = TextBoxBackground.Border(_textBgPreset, BoardColor, card: true);
         data.AutoWidth = false;
         data.AutoHeight = true;
         if (lineColors != null)
@@ -669,7 +684,7 @@ public partial class InkEngine
 
         s.SetTextBoxRect(new Vector2(target.MinX, target.MinY), data.Width, data.Height);
         ClampTextBoxIntoView(s);
-        Doc.AddStroke(s);
+        if (addToDoc) Doc.AddStroke(s);
         return s;
     }
 

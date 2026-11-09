@@ -419,15 +419,17 @@ internal sealed class TextBoxBackgroundAction : EditAction
     private readonly Color4 _beforeFill, _beforeBorder, _beforeInk, _beforeColor;
     private readonly Color4 _afterFill, _afterBorder, _afterInk, _afterColor;
     private readonly float _beforeRadius, _afterRadius;
+    private readonly bool _beforePaper, _afterPaper;
     private readonly RectF _beforeBounds, _afterBounds;
 
     public TextBoxBackgroundAction(Stroke s, Color4 beforeFill, Color4 beforeBorder,
                                    float beforeRadius, Color4 beforeInk, Color4 beforeColor,
-                                   RectF beforeBounds)
+                                   bool beforePaper, RectF beforeBounds)
     {
         _stroke = s;
         _beforeFill = beforeFill; _beforeBorder = beforeBorder;
         _beforeRadius = beforeRadius; _beforeInk = beforeInk; _beforeColor = beforeColor;
+        _beforePaper = beforePaper;
         _beforeBounds = beforeBounds;
         var box = s.TextBox;
         _afterFill = box?.Fill ?? beforeFill;
@@ -435,6 +437,7 @@ internal sealed class TextBoxBackgroundAction : EditAction
         _afterRadius = box?.Radius ?? beforeRadius;
         _afterInk = box?.Ink ?? beforeInk;
         _afterColor = s.Color;
+        _afterPaper = box?.Paper ?? beforePaper;
         _afterBounds = s.PaddedBounds;
     }
 
@@ -443,13 +446,13 @@ internal sealed class TextBoxBackgroundAction : EditAction
     public override RectF AffectedAfter => _afterBounds;
 
     public override void Undo(InkDocument doc) => Apply(doc, _beforeFill, _beforeBorder,
-        _beforeRadius, _beforeInk, _beforeColor);
+        _beforeRadius, _beforeInk, _beforeColor, _beforePaper);
 
     public override void Redo(InkDocument doc) => Apply(doc, _afterFill, _afterBorder,
-        _afterRadius, _afterInk, _afterColor);
+        _afterRadius, _afterInk, _afterColor, _afterPaper);
 
     private void Apply(InkDocument doc, Color4 fill, Color4 border, float radius,
-                       Color4 ink, Color4 color)
+                       Color4 ink, Color4 color, bool paper)
     {
         var box = _stroke.TextBox;
         if (box == null) return;
@@ -457,6 +460,7 @@ internal sealed class TextBoxBackgroundAction : EditAction
         box.Border = border;
         box.Radius = radius;
         box.Ink = ink;
+        box.Paper = paper;
         _stroke.Color = color;
         box.InvalidateLayout();
         _stroke.SyncTextBoxBounds();
