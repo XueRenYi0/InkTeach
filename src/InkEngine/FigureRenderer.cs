@@ -122,6 +122,9 @@ internal sealed class FigureSpec
 /// <summary>
 /// 把 FigureSpec 画成一张高分辨率透明 PNG/BGRA：自动缩放到画布、居中、点小圆、线宽、标签。
 /// 2D 直接画；3D 先做等轴测投影，再按 2D 画。
+///
+/// ⚠ 这是**原型/卡片快照**用的离屏栅格器（Skia）。主画布一直是 D2D；
+/// 交互图形不应长期走“Skia 位图再交给 D2D”，目标是在 FigureScene 渲染层直接用 D2D。
 /// </summary>
 internal static class FigureRenderer
 {
