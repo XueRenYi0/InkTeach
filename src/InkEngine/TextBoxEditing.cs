@@ -8,13 +8,24 @@ namespace InkEngine;
 /// <summary>
 /// 普通文本框的插入与编辑。
 ///
-/// 编辑用系统原生多行 EDIT：中文/输入法/选区/复制粘贴都由 Windows 处理，
-/// 不自绘光标、不处理 WM_CHAR。Ctrl+Enter 结束，Esc 取消；点别处失焦也按结束处理。
+/// 编辑优先用无窗口 RichEdit（`WindowlessTextControl`）：系统负责
+/// 中文/输入法/选区/复制粘贴/撤销，宿主自绘背景和纸面；失败时回退到
+/// `RICHEDIT50W` 窗口。Ctrl+Enter 结束，Esc 取消；点别处失焦也按结束处理。
 /// </summary>
 public partial class InkEngine
 {
     private IntPtr _textBoxEditHwnd;
     private IntPtr _textBoxEditHost;
+    private WindowlessTextControl _windowlessText;
+    private int _hostRgnW = -1, _hostRgnH = -1, _hostRgnR = -1;
+    private int _editRgnW = -1, _editRgnH = -1, _editRgnR = -1;
+    private bool _textBoxEditVisible;
+    private bool _textBoxEditWantSnapshot;
+    private bool _textBoxSnapshotPending;
+    private int _textBoxSnapshotDelay;
+    private RectF _textBoxEditScreenRect;
+    /// <summary>无窗口 RichEdit 开关；失败会自动回退到 RICHEDIT50W。</summary>
+    internal static bool UseWindowlessTextBox = true;
     private static Native.WndProcDelegate _textBoxEditHostProc;
     private static uint _textBoxEditTextColor;
     // 编辑底：**白板 = 当前板色**；文档/图片上退而求其次，用一块很淡的近白
@@ -82,6 +93,11 @@ public partial class InkEngine
     }
 
     internal bool TextBoxEditing => _textBoxEditing;
+    internal bool TextBoxEditHasImmContextForTest => _windowlessText?.HasImmContext() == true;
+    internal bool IsTextBoxEditingStroke(Stroke s)
+        => _textBoxEditing && _textBoxEditStroke != null
+           && (ReferenceEquals(s, _textBoxEditStroke)
+               || ReferenceEquals(s.TextBox, _textBoxEditStroke.TextBox));
     internal int TextBoxEditCaretForTest => _textBoxEditCaretIndex;
 
     /// <summary>文本工具当前该显示的字号/颜色：选中了普通文本框就用它的，否则用默认值。</summary>
@@ -691,6 +707,16 @@ public partial class InkEngine
             ? new Vector2(s.Points[0].X, s.Points[0].Y) : Vector2.Zero;
         _textBoxEditOriginalXf = s.Transform;
         _textBoxEditing = true;
+        // 透明框要截一块画布当背景；纸面框直接铺纸，不用截屏。
+        // 截屏期间编辑窗先不显示，等主画布把“正在编辑的框”隐藏并重绘后再抓。
+        _textBoxEditWantSnapshot = _windowlessText != null && !s.TextBox.Paper;
+        _textBoxEditVisible = !_textBoxEditWantSnapshot;
+        _textBoxSnapshotPending = _textBoxEditWantSnapshot;
+        _textBoxSnapshotDelay = 1;
+        _windowlessText?.ClearBackgroundSnapshot();
+        // 必须赶在第一次 TxSetText / TxDraw 之前设好内缩；RichEdit 会缓存 view inset。
+        if (_windowlessText != null)
+            _windowlessText.ViewInset = (int)MathF.Round(18f * MathF.Max(0.5f, s.TextBox.Unit));
         // 原生编辑窗总是从顶部显示：把内容也回到顶部，编辑和显示同一位置。
         if (s.TextBox.ScrollY > 0.5f)
         {
@@ -723,7 +749,18 @@ public partial class InkEngine
             _textBoxEditCaretIndex = len2;
         }
         KeepTextBoxEditInView(s);
-        FocusTextBoxEditWindow();
+        if (_textBoxEditVisible) FocusTextBoxEditWindow();
+        else
+        {
+            // 让主画布先重绘一帧（Overlay 会跳过正在编辑的文本框），
+            // Present 之后再截取编辑框下面的画布。
+            Doc.Dirty.Add(s.PaddedBounds);
+            Doc.StructureChangedSinceRender = true;
+            Doc.Version++;
+            // 分块缓存里可能还留着旧文本框；截快照前必须整层重画一次。
+            Doc.InvalidateAll();
+            InvalidateUi();
+        }
         _dirty = true;
         NotifyUiStateChanged();
     }
@@ -884,10 +921,15 @@ public partial class InkEngine
         int y = (int)MathF.Round(b.MinY + 2f + ViewOffsetY);
         int w = Math.Max(60, (int)MathF.Round(b.MaxX - b.MinX - 4f));
         int h = Math.Max(40, (int)MathF.Round(b.MaxY - b.MinY - 4f));
-        Native.SetWindowPos(_textBoxEditHost, Native.HWND_TOPMOST, x, y, w, h,
-                            Native.SWP_SHOWWINDOW);
+        _textBoxEditScreenRect = new RectF
+        {
+            MinX = x, MinY = y, MaxX = x + w, MaxY = y + h,
+        };
+        uint show = _textBoxEditVisible ? Native.SWP_SHOWWINDOW : 0;
+        // 宿主必须是 TOPMOST：主画布也是置顶窗口，NOZORDER 会让编辑窗藏在它下面。
+        Native.SetWindowPos(_textBoxEditHost, Native.HWND_TOPMOST, x, y, w, h, show);
         Native.SetWindowPos(_textBoxEditHwnd, IntPtr.Zero, 0, 0, w, h,
-                            Native.SWP_SHOWWINDOW);
+                            Native.SWP_NOZORDER | show);
         var textRect = new Native.RECT
         {
             Left = (int)MathF.Round(pad),
@@ -895,13 +937,42 @@ public partial class InkEngine
             Right = Math.Max((int)MathF.Round(pad) + 40, w - (int)MathF.Round(pad)),
             Bottom = Math.Max((int)MathF.Round(pad) + 20, h - (int)MathF.Round(pad)),
         };
-        Native.SendMessageRect(_textBoxEditHwnd, Native.EM_SETRECT, IntPtr.Zero, ref textRect);
+        if (_windowlessText != null)
+        {
+            // windowless RichEdit 的 TxGetViewInset 才是真正的文字内缩；
+            // EM_SETRECT 在这条路径上不参与 TxDraw 排版。
+            _windowlessText.ViewInset = (int)MathF.Round(pad);
+        }
+        else
+        {
+            Native.SendMessageRect(_textBoxEditHwnd, Native.EM_SETRECT, IntPtr.Zero, ref textRect);
+        }
+        // 原生控件是矩形；文本框纸面是圆角。把编辑窗和宿主一起裁圆角，
+        // 否则四角会盖住画布/纸面，看起来像突然多了一块方底。
+        int radius = Math.Max(0, (int)MathF.Round(10f * unit));
+        ApplyTextBoxEditRegion(_textBoxEditHost, w, h, radius,
+            ref _hostRgnW, ref _hostRgnH, ref _hostRgnR);
+        ApplyTextBoxEditRegion(_textBoxEditHwnd, w, h, radius,
+            ref _editRgnW, ref _editRgnH, ref _editRgnR);
         // 宽度自动长的时候，RichEdit 偶尔会把内部视图横向滚到光标处，
         // 于是"字在长、前面的字却看不见"。这里只把 X 钉回 0，Y 保留
         //（长文本编辑时视口仍跟着光标上下走）。
         ResetRichEditScroll();
         Native.InvalidateRect(_textBoxEditHwnd, IntPtr.Zero, true);
         Native.UpdateWindow(_textBoxEditHwnd);
+    }
+
+    private static void ApplyTextBoxEditRegion(IntPtr hwnd, int w, int h, int radius,
+        ref int cachedW, ref int cachedH, ref int cachedR)
+    {
+        if (hwnd == IntPtr.Zero) return;
+        if (w == cachedW && h == cachedH && radius == cachedR) return;
+        cachedW = w; cachedH = h; cachedR = radius;
+        IntPtr rgn = radius > 0
+            ? Native.CreateRoundRectRgn(0, 0, w + 1, h + 1, radius * 2, radius * 2)
+            : IntPtr.Zero;
+        if (Native.SetWindowRgn(hwnd, rgn, true) == 0 && rgn != IntPtr.Zero)
+            Native.DeleteObject(rgn);
     }
 
     /// <summary>
@@ -1013,6 +1084,21 @@ public partial class InkEngine
     internal void TypeTextBoxEditCharForTest(char c)
     {
         if (!_textBoxEditing || _textBoxEditHwnd == IntPtr.Zero) return;
+        // 自检逐字输入发生在 Begin 后立刻；若还在等快照，先把宿主显示/聚焦，
+        // 否则 WM_CHAR 落在隐藏窗口上，表现就是“再编辑不长宽”。
+        if (_textBoxSnapshotPending)
+        {
+            _textBoxSnapshotPending = false;
+            _textBoxEditVisible = true;
+            if (_textBoxEditHost != IntPtr.Zero)
+                Native.ShowWindow(_textBoxEditHost, Native.SW_SHOW);
+            FocusTextBoxEditWindow();
+        }
+        // 自检模拟“在末尾继续输入”，和普通用户的续写一致；双击点在中间时
+        // 光标可能停在中间，不应拿这个来判自动宽。
+        int end = Native.GetWindowTextLengthW(_textBoxEditHwnd);
+        Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL,
+                           new IntPtr(end), new IntPtr(end));
         Native.SendMessageW(_textBoxEditHwnd, (uint)Native.WM_CHAR,
                             new IntPtr(c), new IntPtr(1));
         // 不再手动调 OnTextBoxEditChanged：这里要验证 WndProc 自己会边打边长。
@@ -1213,10 +1299,48 @@ public partial class InkEngine
         return true;
     }
 
+    /// <summary>Present 之后调用：主画布已经跳过当前文本框，截取它下面的画布当编辑背景。</summary>
+    internal void CapturePendingTextBoxSnapshot()
+    {
+        if (!_textBoxSnapshotPending || !_textBoxEditing) return;
+        if (_textBoxSnapshotDelay-- > 0) return;
+        _textBoxSnapshotPending = false;
+        if (_textBoxEditStroke == null)
+        {
+            HideTextBoxEdit();
+            return;
+        }
+
+        var r = _textBoxEditScreenRect;
+        int x = (int)MathF.Round(r.MinX);
+        int y = (int)MathF.Round(r.MinY);
+        int w = (int)MathF.Round(r.MaxX - r.MinX);
+        int h = (int)MathF.Round(r.MaxY - r.MinY);
+        byte[] bgra = null;
+        if (w > 0 && h > 0)
+        {
+            Native.DwmFlush();
+            bgra = ScreenCapture.Grab(x, y, w, h);
+        }
+        if (bgra != null) _windowlessText?.SetBackgroundSnapshot(bgra, w, h);
+
+        _textBoxEditVisible = true;
+        if (_textBoxEditHost != IntPtr.Zero)
+            Native.ShowWindow(_textBoxEditHost, Native.SW_SHOW);
+        if (_textBoxEditStroke.TextBox is { } box) RefreshTextBoxEditWindow(box);
+        FocusTextBoxEditWindow();
+
+        _dirty = true;
+        InvalidateUi();
+    }
+
     private void HideTextBoxEdit()
     {
         bool was = _textBoxEditing;
         _textBoxEditing = false;
+        _textBoxEditVisible = false;
+        _textBoxSnapshotPending = false;
+        _textBoxEditWantSnapshot = false;
         if (_textBoxEditHost != IntPtr.Zero)
             Native.ShowWindow(_textBoxEditHost, Native.SW_HIDE);
         if (_textBoxEditHwnd != IntPtr.Zero)
@@ -1231,9 +1355,14 @@ public partial class InkEngine
         RegisterTextBoxEditHost();
         long exStyle = Native.WS_EX_TOPMOST | Native.WS_EX_TOOLWINDOW;
         long hostStyle = 0x80000000L /* WS_POPUP */ | 0x02000000L /* WS_CLIPCHILDREN */;
+        // 用主画布做 owner：owned popup 始终在 owner 之上，
+        // 避免 DirectComposition 的主窗口把编辑窗压在下面。
+        IntPtr owner = _windows.Count > 0 ? _windows[0].Hwnd : IntPtr.Zero;
         _textBoxEditHost = Native.CreateWindowEx(exStyle, "InkTeachEditHost", "InkTeachTextBoxHost",
-            hostStyle, 0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, _hInstance, IntPtr.Zero);
+            hostStyle, 0, 0, 1, 1, owner, IntPtr.Zero, _hInstance, IntPtr.Zero);
         if (_textBoxEditHost == IntPtr.Zero) return;
+        _hostRgnW = _hostRgnH = _hostRgnR = -1;
+        _editRgnW = _editRgnH = _editRgnR = -1;
 
         if (_msftedit == IntPtr.Zero)
         {
@@ -1241,32 +1370,51 @@ public partial class InkEngine
             _richEditReady = _msftedit != IntPtr.Zero;
         }
 
-        // WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN
-        // ??????????? 17px ????????????????????
-        long style = 0x40000000L | 0x10000000L | 0x0004L | 0x0040L | 0x1000L;
-        string cls = _richEditReady ? "RICHEDIT50W" : "EDIT";
-        _textBoxEditHwnd = Native.CreateWindowEx(0, cls, "InkTeachTextBox",
-            style, 0, 0, 1, 1, _textBoxEditHost, IntPtr.Zero, _hInstance, IntPtr.Zero);
-        if (_textBoxEditHwnd == IntPtr.Zero && _richEditReady)
+        // 先试无窗口 RichEdit：同一个子窗 HWND，内部用 ITextServices + 自绘背景。
+        // 这样 TextBoxEditing 现有消息/边打边长/选区逻辑不用重写。
+        if (UseWindowlessTextBox)
         {
-            _richEditReady = false;
-            _textBoxEditHwnd = Native.CreateWindowEx(0, "EDIT", "InkTeachTextBox",
+            _windowlessText = WindowlessTextControl.TryCreate(_textBoxEditHost, _hInstance,
+                (int)MathF.Round(18f * MathF.Max(0.75f, DpiScale)));
+            if (_windowlessText != null)
+            {
+                _textBoxEditHwnd = _windowlessText.Hwnd;
+                _richEditReady = true;
+                _windowlessText.PaintBackground = PaintTextBoxEditBackground;
+            }
+        }
+
+        if (_textBoxEditHwnd == IntPtr.Zero)
+        {
+            _windowlessText = null;
+            // WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN
+            long style = 0x40000000L | 0x10000000L | 0x0004L | 0x0040L | 0x1000L;
+            string cls = _richEditReady ? "RICHEDIT50W" : "EDIT";
+            _textBoxEditHwnd = Native.CreateWindowEx(0, cls, "InkTeachTextBox",
                 style, 0, 0, 1, 1, _textBoxEditHost, IntPtr.Zero, _hInstance, IntPtr.Zero);
+            if (_textBoxEditHwnd == IntPtr.Zero && _richEditReady)
+            {
+                _richEditReady = false;
+                _textBoxEditHwnd = Native.CreateWindowEx(0, "EDIT", "InkTeachTextBox",
+                    style, 0, 0, 1, 1, _textBoxEditHost, IntPtr.Zero, _hInstance, IntPtr.Zero);
+            }
+            if (_textBoxEditHwnd == IntPtr.Zero) return;
+            // 明确关掉横向滚动：RichEdit 默认若不关，长行会一直往右长、不换行，
+            // 和下面文本框的排版（到边就折行）对不上。
+            long editStyle = Native.GetWindowLongPtr(_textBoxEditHwnd, -16 /* GWL_STYLE */).ToInt64();
+            editStyle &= ~0x80L;                    // ES_AUTOHSCROLL
+            Native.SetWindowLongPtr(_textBoxEditHwnd, -16 /* GWL_STYLE */, new IntPtr(editStyle));
+            // **RichEdit 还有一份自己的 options**（和窗口 style 分开）：只清 GWL_STYLE 不够。
+            // 不清 ECO_AUTOHSCROLL，每打一个字它会把文本**向右滚 10 个字符**，
+            // 表现就是"前一个字被滚走、只看得到末尾"——正是 ES_AUTOHSCROLL 的文档行为。
+            if (_richEditReady)
+            {
+                Native.SendMessage(_textBoxEditHwnd, (uint)Native.EM_SETOPTIONS,
+                    new IntPtr(Native.ECOOP_AND), new IntPtr(~Native.ECO_AUTOHSCROLL));
+            }
         }
-        if (_textBoxEditHwnd == IntPtr.Zero) return;
-        // 明确关掉横向滚动：RichEdit 默认若不关，长行会一直往右长、不换行，
-        // 和下面文本框的排版（到边就折行）对不上。
-        long editStyle = Native.GetWindowLongPtr(_textBoxEditHwnd, -16 /* GWL_STYLE */).ToInt64();
-        editStyle &= ~0x80L;                    // ES_AUTOHSCROLL
-        Native.SetWindowLongPtr(_textBoxEditHwnd, -16 /* GWL_STYLE */, new IntPtr(editStyle));
-        // **RichEdit 还有一份自己的 options**（和窗口 style 分开）：只清 GWL_STYLE 不够。
-        // 不清 ECO_AUTOHSCROLL，每打一个字它会把文本**向右滚 10 个字符**，
-        // 表现就是"前一个字被滚走、只看得到末尾"——正是 ES_AUTOHSCROLL 的文档行为。
-        if (_richEditReady)
-        {
-            Native.SendMessage(_textBoxEditHwnd, (uint)Native.EM_SETOPTIONS,
-                new IntPtr(Native.ECOOP_AND), new IntPtr(~Native.ECO_AUTOHSCROLL));
-        }
+        if (_windowlessText == null)
+            Console.WriteLine("[文本框] 无窗口 RichEdit 失败，回退 RichEdit 窗口：" + WindowlessTextControl.LastError);
         _textBoxEditOwner = this;
         _textBoxEditWndProc = TextBoxEditWndProc;
         _textBoxEditOldProc = Native.SetWindowLongPtr(
@@ -1296,6 +1444,8 @@ public partial class InkEngine
         {
             case Native.WM_ERASEBKGND:
             {
+                // 无窗口 RichEdit 自己会在 WM_PAINT 里画背景+文字，宿主不要再刷一遍。
+                if (_textBoxEditOwner?._windowlessText != null) return new IntPtr(1);
                 Native.GetClientRect(hWnd, out var rc);
                 IntPtr brush = _textBoxEditBgBrush != IntPtr.Zero
                     ? _textBoxEditBgBrush
@@ -1337,7 +1487,8 @@ public partial class InkEngine
         {
             case Native.WM_ERASEBKGND:
             {
-                // 顶层 EDIT 默认不刷底色，会透出下面的 PPT/浏览器；编辑时铺白底。
+                // 无窗口 RichEdit 自己画背景；普通 EDIT 才需要这里铺底色。
+                if (_windowlessText != null) return new IntPtr(1);
                 Native.GetClientRect(hWnd, out var rc);
                 IntPtr brush = _textBoxEditBgBrush != IntPtr.Zero
                     ? _textBoxEditBgBrush
@@ -1388,6 +1539,8 @@ public partial class InkEngine
             case Native.WM_KILLFOCUS:
                 // 点底部文字色带 / 面板只丢焦点，不结束编辑；点画布外面由 Engine 判断提交。
                 // （以前这里直接 End，导致“编辑中选一段改色”永远点不到色带。）
+                // 无窗口 RichEdit 自己不会收到这个 WM_KILLFOCUS（被子类挡掉了），手动通知它。
+                _windowlessText?.OnHostKillFocus();
                 return IntPtr.Zero;
             case Native.WM_GETDLGCODE:
                 return new IntPtr(Native.DLGC_WANTALLKEYS);
@@ -1438,32 +1591,29 @@ public partial class InkEngine
     {
         if (s?.TextBox == null) return;
         var c = s.Color;
-        _textBoxEditTextColor = ((uint)(c.R * 255f) & 0xFF)
-                              | (((uint)(c.G * 255f) & 0xFF) << 8)
-                              | (((uint)(c.B * 255f) & 0xFF) << 16);
+        int er = Math.Clamp((int)MathF.Round(c.R * 255f), 0, 255);
+        int eg = Math.Clamp((int)MathF.Round(c.G * 255f), 0, 255);
+        int eb = Math.Clamp((int)MathF.Round(c.B * 255f), 0, 255);
+        // 纯白 0xFFFFFF 在 windowless RichEdit 的某些绘制路径里会退成黑字；
+        // 编辑态压到 250，视觉仍是白色，提交后的最终稿不受影响。
+        if (er >= 253 && eg >= 253 && eb >= 253) er = eg = eb = 250;
+        _textBoxEditTextColor = ((uint)er & 0xFF)
+                              | (((uint)eg & 0xFF) << 8)
+                              | (((uint)eb & 0xFF) << 16);
 
         float textLuma = 0.299f * c.R + 0.587f * c.G + 0.114f * c.B;
-        bool lightText = textLuma > 0.65f;
-        Color4 bg;
-        if (Doc.PageKey == InkDocument.BoardPageKey)
-        {
-            float boardLuma = 0.299f * BoardColor.R + 0.587f * BoardColor.G
-                            + 0.114f * BoardColor.B;
-            // 板色优先；只有"字和板几乎同色"（白字白板、黑字黑板）才临时换一块
-            // 高对比底，否则编辑时连字都看不见。
-            if (MathF.Abs(textLuma - boardLuma) < 0.28f)
-                bg = textLuma > 0.5f
-                    ? new Color4(0.32f, 0.34f, 0.36f, 1f)
-                    : new Color4(0.95f, 0.95f, 0.94f, 1f);
-            else
-                bg = BoardColor;
-        }
-        else
-        {
-            bg = lightText
-                ? new Color4(0.44f, 0.46f, 0.49f, 1f)
-                : new Color4(0.95f, 0.95f, 0.94f, 1f);
-        }
+        // 纸面文本框就是白纸；透明文本框才融进板色/页色。
+        // 这样 PPT/PDF/图片上不再突然出现一块 0.44 灰/0.95 白灰。
+        Color4 basis = s.TextBox.Paper
+            ? new Color4(1f, 1f, 1f, 0.98f)
+            : (Doc.PageKey == InkDocument.BoardPageKey ? BoardColor : DocPaperColor);
+        float basisLuma = 0.299f * basis.R + 0.587f * basis.G + 0.114f * basis.B;
+        // 字和底几乎同色才临时换一块高对比底，否则连字都看不见。
+        Color4 bg = MathF.Abs(textLuma - basisLuma) < 0.28f
+            ? (textLuma > 0.5f
+                ? new Color4(0.32f, 0.34f, 0.36f, 1f)
+                : new Color4(0.95f, 0.95f, 0.94f, 1f))
+            : basis;
 
         uint cref = ((uint)(bg.R * 255f) & 0xFF)
                   | (((uint)(bg.G * 255f) & 0xFF) << 8)
@@ -1472,13 +1622,28 @@ public partial class InkEngine
         _textBoxEditBackColor = cref;
         if (_textBoxEditBgBrush != IntPtr.Zero) Native.DeleteObject(_textBoxEditBgBrush);
         _textBoxEditBgBrush = Native.CreateSolidBrush(cref);
+        Native.InvalidateRect(_textBoxEditHwnd, IntPtr.Zero, false);
+    }
+
+    /// <summary>无窗口 RichEdit 的背景回调：在宿主 DC 上先铺编辑底色。</summary>
+    private void PaintTextBoxEditBackground(IntPtr hdc)
+    {
+        if (_textBoxEditHwnd == IntPtr.Zero) return;
+        Native.GetClientRect(_textBoxEditHwnd, out var rc);
+        Native.FillRect(hdc, ref rc, _textBoxEditBgBrush != IntPtr.Zero
+            ? _textBoxEditBgBrush
+            : Native.GetStockObject(0 /*WHITE_BRUSH*/));
     }
 
     private void ApplyRichEditFormat(Stroke s)
     {        if (!_richEditReady || s?.TextBox == null) return;
         float fontPx = MathF.Max(6f, s.TextBox.FontSize * MathF.Max(0.5f, s.TextBox.Unit));
         float dpi = MathF.Max(1f, DpiScale);
-        int fontTwips = Math.Max(80, (int)MathF.Round(fontPx * 15f / dpi));
+        // 普通 RichEdit 窗口走 DPI 感知的 GDI；windowless 路径按 96 DPI 解释 twips，
+        // 这里直接用物理像素换算，否则 2x 屏上字会只有一半大。
+        float twipsPerPx = _windowlessText != null ? 15f : 15f / dpi;
+        int fontTwips = Math.Max(80, (int)MathF.Round(fontPx * twipsPerPx));
+        // 日志别加在这里：每敲一个字都会调用。
 
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETBKGNDCOLOR,
                            IntPtr.Zero, new IntPtr(_textBoxEditBackColor));
@@ -1492,12 +1657,15 @@ public partial class InkEngine
             bCharSet = 1,
             szFaceName = TextBoxFaces.DirectWrite(s.TextBox.Face),
         };
+        // 先设默认格式，再刷已有文字：否则下一次 SetWindowText / 新输入会退回系统黑字。
+        Native.SendMessageCharFormat(_textBoxEditHwnd, Native.EM_SETCHARFORMAT,
+                                     IntPtr.Zero /*SCF_DEFAULT*/, ref cf);
         Native.SendMessageCharFormat(_textBoxEditHwnd, Native.EM_SETCHARFORMAT,
                                      new IntPtr(Native.SCF_ALL), ref cf);
 
         // 行距和显示端一致：用文本框自己的 LineSpacing（不再固定 1.55）。
         int lineTwips = Math.Max(80, (int)MathF.Round(
-            fontPx * TextBoxFaces.ClampSpacing(s.TextBox.LineSpacing) * 15f / dpi));
+            fontPx * TextBoxFaces.ClampSpacing(s.TextBox.LineSpacing) * twipsPerPx));
         var pf = new Native.PARAFORMAT2
         {
             cbSize = System.Runtime.InteropServices.Marshal.SizeOf<Native.PARAFORMAT2>(),
@@ -1506,6 +1674,8 @@ public partial class InkEngine
             bLineSpacingRule = 3,
             rgxTabs = new int[32],
         };
+        // 无窗口 RichEdit 的默认格式要由宿主提供；否则空框第一次输入会用系统默认字体。
+        _windowlessText?.SetDefaultFormats(ref cf, ref pf);
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETSEL, IntPtr.Zero, new IntPtr(-1));
         Native.SendMessageParaFormat(_textBoxEditHwnd, Native.EM_SETPARAFORMAT, IntPtr.Zero, ref pf);
 

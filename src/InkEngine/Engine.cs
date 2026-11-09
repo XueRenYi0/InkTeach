@@ -4104,6 +4104,10 @@ public partial class InkEngine
         foreach (var w in _windows)
             w.Present();
 
+        // 文本框编辑：透明背景要等这一拍把“正在编辑的框”隐藏并 Present 后，
+        // 才能从屏幕截到它下面的画布。
+        CapturePendingTextBoxSnapshot();
+
         // 这一拍已经把"激光淡完后的空画面"贴上去了，欠账可以销掉。
         // 必须放在 Present 之后：提前销掉的话，NeedsFrame 会在下一拍放行，
         // 而后缓冲里仍然留着最后一帧激光——表现就是那道红影忽然定住不消失。

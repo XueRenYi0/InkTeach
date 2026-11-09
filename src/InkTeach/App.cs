@@ -330,6 +330,94 @@ internal sealed partial class App : InkEngine.InkEngine
             ExitCode = ok == total && total > 0 ? 0 : 1;
             _quit = true;
         }
+        else if (mode == "--b0textbox")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            Doc.Clear();
+            Doc.ClearHistory();
+            SetBoardFromUi(true);
+            SetBoardColorFromUi(new Vortice.Mathematics.Color4(0.10f, 0.18f, 0.22f, 1f));
+            // 在文本框下面铺一条亮绿粗线：编辑背景真透明时，线应从文字后面透出来。
+            var band = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Vortice.Mathematics.Color4(0.20f, 0.85f, 0.55f, 1f),
+                Width = 44f,
+            };
+            float midY = _virtualY + _virtualH * 0.5f;
+            for (int i = 0; i <= 20; i++)
+                band.AddPoint(_virtualX + _virtualW * 0.30f + i * (_virtualW * 0.40f / 20f),
+                              midY, 0.5f, i * 8);
+            Doc.AddStroke(band);
+            Doc.InvalidateAll();
+            SettleFrames(180);
+
+            InsertPlainTextBoxForTest("");
+            var tr = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
+            if (tr?.TextBox != null)
+            {
+                tr.Color = new Vortice.Mathematics.Color4(1f, 1f, 1f, 1f);
+                tr.TextBox.Ink = tr.Color;
+                tr.TextBox.Paper = false;
+                BeginTextBoxEdit(tr);
+                Console.WriteLine("B0 IME context=" + TextBoxEditHasImmContextForTest);
+                SetTextBoxEditTextForTest("透明文本框：白字压在深色板上\n第二行 ABC 123\n第三行：光标、选区、IME 都由 RichEdit 负责。");
+                SettleFrames(220);
+                ScreenProbe.SaveBmp("reports/b0-textbox-dark.bmp",
+                    (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+                SetTextBoxEditSelectionForTest(0, 6);
+                SettleFrames(160);
+                ScreenProbe.SaveBmp("reports/b0-textbox-selection.bmp",
+                    (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                for (int i = 0; i < 100; i++) TypeTextBoxEditCharForTest('字');
+                sw.Stop();
+                Console.WriteLine($"B0 输入 100 字耗时：{sw.ElapsedMilliseconds} ms");
+                EndTextBoxEditFromUi(true);
+                SettleFrames(160);
+                ScreenProbe.SaveBmp("reports/b0-textbox-committed.bmp",
+                    (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+            }
+
+            Doc.Clear();
+            Doc.ClearHistory();
+            InsertPlainTextBoxForTest("纸面文本框：Paper=true\n第二行：圆角、底色和画布一致");
+            var paper = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
+            if (paper?.TextBox != null)
+            {
+                paper.TextBox.Paper = true;
+                paper.Color = new Vortice.Mathematics.Color4(0.1f, 0.1f, 0.12f, 1f);
+                paper.TextBox.Ink = paper.Color;
+                BeginTextBoxEdit(paper);
+                SetTextBoxEditTextForTest("纸面文本框：Paper=true\n第二行：圆角、底色和画布一致");
+                SettleFrames(220);
+                ScreenProbe.SaveBmp("reports/b0-textbox-paper.bmp",
+                    (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+                EndTextBoxEditFromUi(true);
+            }
+
+            // 已有文字的重新编辑：快照里不能残留旧字（否则会出现双份/重影）。
+            Doc.Clear();
+            Doc.ClearHistory();
+            InsertPlainTextBoxForTest("旧文字：重新编辑不应有残影\n第二行 ABC");
+            var again = Doc.Strokes.Count > 0 ? Doc.Strokes[^1] : null;
+            if (again?.TextBox != null)
+            {
+                again.Color = new Vortice.Mathematics.Color4(1f, 1f, 1f, 1f);
+                again.TextBox.Ink = again.Color;
+                again.TextBox.Paper = false;
+                BeginTextBoxEdit(again);
+                SetTextBoxEditTextForTest("旧文字：重新编辑不应有残影\n第二行 ABC\n第三行：快照里不能有旧字");
+                SettleFrames(240);
+                ScreenProbe.SaveBmp("reports/b0-textbox-reedit.bmp",
+                    (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+                EndTextBoxEditFromUi(true);
+            }
+            Console.WriteLine("B0 出图：reports/b0-textbox-*.bmp");
+            _quit = true;
+        }
         else if (mode == "--textboxsim")
         {
             _autoExitAt = double.MaxValue;

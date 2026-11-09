@@ -2488,6 +2488,9 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private void DrawTextBox(Stroke s)
     {
+        // 正在编辑的文本框由无窗口 RichEdit 宿主完整绘制（纸面/背景 + 文字）；
+        // 这里必须跳过，否则透明背景时会出现“旧字/双份字”。
+        if (_app != null && _app.TextBoxEditing && _app.IsTextBoxEditingStroke(s)) return;
         var card = s.TextBox;
         if (card == null) return;
         if (s.Points.Count == 0) return;
