@@ -239,6 +239,10 @@ public sealed partial class FullUi
 
     private void ApiPointerDown(int hit, float x, float y)
     {
+        // 原生 EDIT 是置顶窗口；开下拉前先把输入提交并隐藏，否则它会盖在下拉上面。
+        if ((hit == ApiHitProvider || hit == ApiHitModelMenu) && _host?.TextInput?.IsEditing == true)
+            _host.TextInput.Commit();
+
         if (_apiModelMenuOpen)
         {
             int n = ApiModelVisibleCount;
@@ -311,6 +315,7 @@ public sealed partial class FullUi
 
     private void SelectApiProvider(int index)
     {
+        _host?.TextInput?.Commit();
         _apiProviderMenuOpen = false;
         _apiModelMenuOpen = false;
         _apiModels.Clear();
@@ -341,6 +346,7 @@ public sealed partial class FullUi
 
     private void SelectApiModel(int index)
     {
+        _host?.TextInput?.Commit();
         _apiModelMenuOpen = false;
         if (index < 0 || index >= _apiModels.Count) return;
         _apiModel = _apiModels[index];
@@ -427,8 +433,9 @@ public sealed partial class FullUi
             {
                 Background = ApiFieldBg,
                 Text = InkCol,
-                FontSize = 13f,
+                FontSize = 12.5f,
                 Padding = 8f,
+                CornerRadius = 6f,
             },
             OnCommit = text =>
             {
@@ -735,6 +742,8 @@ public sealed partial class FullUi
     internal string ApiSelectedProviderIdForTest => _apiSelectedId;
     internal int ApiModelCountForTest => _apiModels.Count;
     internal bool ApiModelMenuOpenForTest => _apiModelMenuOpen;
+    internal bool ApiProviderMenuOpenForTest => _apiProviderMenuOpen;
+    internal bool ApiInputEditingForTest => _host?.TextInput?.IsEditing == true;
     internal string ApiModelForTest => _apiModel;
     internal RectF ApiModelItemRectForTest(int i) => ApiModelItemRect(i);
     internal string ApiStatusForTest => _apiStatus;

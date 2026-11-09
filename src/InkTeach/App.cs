@@ -668,13 +668,44 @@ internal sealed partial class App : InkEngine.InkEngine
             }
             ui.OpenApiPageForTest();
             SettleFrames(300);
-            ui.ApiClickForTest(401);      // 服务地址输入框：进入编辑态，截原生 EDIT
+            int hit = 401;
+            if (args.Length > 2 && int.TryParse(args[2], out int h)) hit = h;
+            ui.ApiClickForTest(hit);      // 默认服务地址输入框：进入编辑态，截原生 EDIT
             SettleFrames(300);
             string path = args.Length > 1 ? args[1] : "reports/api-input-align.bmp";
             bool ok = ScreenProbe.SaveBmp(path, (int)_virtualX, (int)_virtualY,
                                           (int)_virtualW, (int)_virtualH);
             Console.WriteLine((ok ? "已写出 " : "写出失败 ") + path);
             ExitCode = ok ? 0 : 1;
+            _quit = true;
+        }
+        else if (mode == "--apimenushot")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SetUiFactory(() => new InkUi.FullUi());
+            SettleFrames(200);
+            if (CurrentUi is not InkUi.FullUi ui)
+            {
+                Console.WriteLine("FAIL：UI 不是 FullUi");
+                ExitCode = 1;
+                _quit = true;
+                return ExitCode;
+            }
+            ui.OpenApiPageForTest();
+            SettleFrames(300);
+            ui.ApiClickForTest(402);      // 先进入 Key 编辑
+            SettleFrames(200);
+            ui.ApiClickForTest(400);      // 再开服务商下拉：EDIT 必须收起
+            SettleFrames(300);
+            string path = args.Length > 1 ? args[1] : "reports/api-menu.bmp";
+            bool ok = ScreenProbe.SaveBmp(path, (int)_virtualX, (int)_virtualY,
+                                          (int)_virtualW, (int)_virtualH);
+            bool inputClosed = !ui.ApiInputEditingForTest;
+            bool menuOpen = ui.ApiProviderMenuOpenForTest;
+            Console.WriteLine($"inputClosed={inputClosed} menuOpen={menuOpen}");
+            Console.WriteLine((ok ? "已写出 " : "写出失败 ") + path);
+            ExitCode = ok && inputClosed && menuOpen ? 0 : 1;
             _quit = true;
         }
         else if (mode == "--aiapishow")

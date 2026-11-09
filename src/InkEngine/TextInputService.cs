@@ -18,6 +18,11 @@ public sealed class TextInputVisual
     public Color4 Text { get; init; } = new(0f, 0f, 0f, 1f);
     public float FontSize { get; init; } = 14f;
     public float Padding { get; init; } = 8f;
+
+    /// <summary>
+    /// 圆角半径（逻辑像素）；0 = 方形。设置页字段用 6，和 D2D 字段的 8 圆角内缩 2 对齐。
+    /// </summary>
+    public float CornerRadius { get; init; }
 }
 
 /// <summary>
@@ -100,6 +105,8 @@ public partial class InkEngine
         private bool _multiLine;
         private int _clientW, _clientH;
         private int _padPx;
+        private int _cornerPx;
+        private int _rgnW = -1, _rgnH = -1, _rgnR = -1;
 
         public TextInputService(InkEngine engine) => _engine = engine;
 
@@ -239,6 +246,7 @@ public partial class InkEngine
             else
                 style |= 0x0080L /*ES_AUTOHSCROLL*/;
 
+            _rgnW = _rgnH = _rgnR = -1;
             _hostWndProc = HostWndProc;
             _hostHwnd = Native.CreateWindowEx(
                 Native.WS_EX_TOPMOST | Native.WS_EX_TOOLWINDOW,
@@ -287,6 +295,7 @@ public partial class InkEngine
 
             int pad = (int)MathF.Round(v.Padding * _engine.UiUnit);
             _padPx = pad;
+            _cornerPx = Math.Max(0, (int)MathF.Round(v.CornerRadius * _engine.UiUnit));
             Native.SendMessage(_hwnd, Native.EM_SETMARGINS,
                 new IntPtr(Native.EC_LEFTMARGIN | Native.EC_RIGHTMARGIN),
                 new IntPtr(pad | (pad << 16)));
@@ -315,7 +324,35 @@ public partial class InkEngine
             _clientW = w; _clientH = h;
             Native.SetWindowPos(_hostHwnd, Native.HWND_TOPMOST, x, y, w, h, 0);
             Native.SetWindowPos(_hwnd, IntPtr.Zero, 0, 0, w, h, Native.SWP_NOZORDER);
+            ApplyRegions(w, h);
             UpdateTextRect();
+        }
+
+        /// <summary>
+        /// EDIT 是矩形；设置页字段是圆角。给宿主和 EDIT 都裁成同样的圆角，
+        /// 否则四角会盖住 D2D 字段的圆角/边框，看起来像“突然一块方框”。
+        /// </summary>
+        private void ApplyRegions(int w, int h)
+        {
+            if (_hostHwnd == IntPtr.Zero || _hwnd == IntPtr.Zero) return;
+            int r = Math.Min(_cornerPx, Math.Min(w, h) / 2);
+            if (w == _rgnW && h == _rgnH && r == _rgnR) return;
+            _rgnW = w; _rgnH = h; _rgnR = r;
+
+            if (r <= 0)
+            {
+                Native.SetWindowRgn(_hostHwnd, IntPtr.Zero, true);
+                Native.SetWindowRgn(_hwnd, IntPtr.Zero, true);
+                return;
+            }
+
+            IntPtr hostRgn = Native.CreateRoundRectRgn(0, 0, w + 1, h + 1, r * 2, r * 2);
+            if (hostRgn != IntPtr.Zero && Native.SetWindowRgn(_hostHwnd, hostRgn, true) == 0)
+                Native.DeleteObject(hostRgn);
+
+            IntPtr editRgn = Native.CreateRoundRectRgn(0, 0, w + 1, h + 1, r * 2, r * 2);
+            if (editRgn != IntPtr.Zero && Native.SetWindowRgn(_hwnd, editRgn, true) == 0)
+                Native.DeleteObject(editRgn);
         }
 
         /// <summary>
@@ -446,8 +483,11 @@ public partial class InkEngine
                     int w = (int)(lParam.ToInt64() & 0xFFFF);
                     int h = (int)((lParam.ToInt64() >> 16) & 0xFFFF);
                     if (_hwnd != IntPtr.Zero)
+                    {
                         Native.SetWindowPos(_hwnd, IntPtr.Zero, 0, 0,
                             Math.Max(1, w), Math.Max(1, h), Native.SWP_NOZORDER);
+                        ApplyRegions(Math.Max(1, w), Math.Max(1, h));
+                    }
                     return IntPtr.Zero;
                 }
                 case 0x0007 /*WM_SETFOCUS*/:

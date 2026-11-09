@@ -917,6 +917,14 @@ internal static class Native
     public static extern IntPtr CreateSolidBrush(uint color);
 
     [DllImport("gdi32.dll")]
+    public static extern IntPtr CreateRoundRectRgn(int left, int top, int right, int bottom,
+        int widthEllipse, int heightEllipse);
+
+    /// <summary>给窗口设置区域；成功后区域归系统所有，不要再 DeleteObject。</summary>
+    [DllImport("user32.dll")]
+    public static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool redraw);
+
+    [DllImport("gdi32.dll")]
     public static extern uint SetBkColor(IntPtr hdc, uint color);
 
     [DllImport("gdi32.dll")]
