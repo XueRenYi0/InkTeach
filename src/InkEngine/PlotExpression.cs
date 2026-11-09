@@ -25,18 +25,29 @@ internal sealed class PlotExpression
         return double.IsFinite(v) ? v : double.NaN;
     }
 
-    public static PlotExpression Parse(string text)
+    public static PlotExpression Parse(string text,
+                                       IReadOnlyDictionary<string, double> parameters = null)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
-        text = text.Trim();
+        text = Normalize(text.Trim());
         if (text.StartsWith("y=", StringComparison.OrdinalIgnoreCase))
             text = text[2..].Trim();
         else if (text.StartsWith("y =", StringComparison.OrdinalIgnoreCase))
             text = text[3..].Trim();
-        var p = new Parser(text);
+        var p = new Parser(text, parameters);
         var root = p.ParseExpression();
         p.ExpectEnd();
         return new PlotExpression(root, text);
+    }
+
+    /// <summary>把常见的 Unicode 数学写法换成解析器认识的 ASCII 写法。</summary>
+    private static string Normalize(string s)
+    {
+        return s.Replace("²", "^2", StringComparison.Ordinal)
+                .Replace("³", "^3", StringComparison.Ordinal)
+                .Replace('×', '*').Replace('÷', '/')
+                .Replace('−', '-').Replace('（', '(').Replace('）', ')')
+                .Replace("**", "^", StringComparison.Ordinal);
     }
 
     private abstract class Node
@@ -100,7 +111,7 @@ internal sealed class PlotExpression
         }
     }
 
-    private sealed class Parser(string text)
+    private sealed class Parser(string text, IReadOnlyDictionary<string, double> parameters)
     {
         private int _i;
 
@@ -190,6 +201,8 @@ internal sealed class PlotExpression
                 if (name == "x") return new VariableNode();
                 if (name == "e") return new NumberNode(Math.E);
                 if (name == "pi") return new NumberNode(Math.PI);
+                if (parameters != null && parameters.TryGetValue(name, out double pv))
+                    return new NumberNode(pv);
                 if (IsFunction(name))
                 {
                     if (!Take('(')) throw new FormatException($"函数 {name} 缺少括号");
@@ -197,7 +210,10 @@ internal sealed class PlotExpression
                     if (!Take(')')) throw new FormatException($"函数 {name} 缺少右括号");
                     return new FunctionNode(name, arg);
                 }
-                throw new FormatException("未知标识符：" + name);
+                throw new FormatException(
+                    name.Length == 1
+                        ? $"未知参数 {name}（含参函数要在 params 里给默认值）"
+                        : "未知标识符：" + name);
             }
 
             throw new FormatException("表达式无法解析");

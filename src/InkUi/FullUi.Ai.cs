@@ -363,7 +363,7 @@ public sealed partial class FullUi
         _ai.Jump(0f);
     }
 
-    /// <summary>提示词像“画函数图”就走向 AI 作图；否则走 AI 出题。</summary>
+    /// <summary>提示词像“画函数图/圆锥曲线/几何图”就走向 AI 作图；否则走 AI 出题。</summary>
     private static bool LooksLikePlotPrompt(string p)
     {
         if (string.IsNullOrWhiteSpace(p)) return false;
@@ -373,9 +373,26 @@ public sealed partial class FullUi
         bool draw = s.Contains("画", StringComparison.Ordinal)
                     || s.Contains("作图", StringComparison.Ordinal)
                     || s.Contains("图象", StringComparison.Ordinal)
-                    || s.Contains("图像", StringComparison.Ordinal);
+                    || s.Contains("图像", StringComparison.Ordinal)
+                    || s.Contains("绘制", StringComparison.Ordinal);
         bool math = s.Contains("函数", StringComparison.Ordinal)
-                    || s.Contains("曲线", StringComparison.Ordinal);
+                    || s.Contains("曲线", StringComparison.Ordinal)
+                    || s.Contains("椭圆", StringComparison.Ordinal)
+                    || s.Contains("双曲线", StringComparison.Ordinal)
+                    || s.Contains("抛物线", StringComparison.Ordinal)
+                    || s.Contains("三角形", StringComparison.Ordinal)
+                    || s.Contains("四边形", StringComparison.Ordinal)
+                    || s.Contains("正方体", StringComparison.Ordinal)
+                    || s.Contains("长方体", StringComparison.Ordinal)
+                    || s.Contains("棱柱", StringComparison.Ordinal)
+                    || s.Contains("棱锥", StringComparison.Ordinal)
+                    || s.Contains("棱台", StringComparison.Ordinal)
+                    || s.Contains("圆柱", StringComparison.Ordinal)
+                    || s.Contains("圆锥", StringComparison.Ordinal)
+                    || s.Contains("圆台", StringComparison.Ordinal)
+                    || s.Contains("球", StringComparison.Ordinal)
+                    || s.Contains("几何", StringComparison.Ordinal)
+                    || s.Contains("坐标", StringComparison.Ordinal);
         return draw && math;
     }
 }

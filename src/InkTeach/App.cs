@@ -6349,15 +6349,22 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine($"作图：{img.Width}×{img.Height}px，采样/绘制 {sw.Elapsed.TotalMilliseconds:F1}ms，" +
                           $"内存 {img.ByteSize / 1024 / 1024.0:F1}MB");
 
-        // 性能：首次包含字体加载；再测 5 次热渲染，给后续缓存/批量做参考。
-        var warm = System.Diagnostics.Stopwatch.StartNew();
+        // 性能：首次包含字体加载；先丢弃一次预热，再测 5 次热渲染。
+        var warmSpec = PlotRenderer.Render(spec);
+        warmSpec?.Release();
+        var warmTimes = new List<double>(5);
         for (int i = 0; i < 5; i++)
         {
+            var t = System.Diagnostics.Stopwatch.StartNew();
             var tmp = PlotRenderer.Render(spec);
+            t.Stop();
             tmp?.Release();
+            warmTimes.Add(t.Elapsed.TotalMilliseconds);
         }
-        warm.Stop();
-        Console.WriteLine($"热渲染 5 次：平均 {warm.Elapsed.TotalMilliseconds / 5:F1}ms");
+        warmTimes.Sort();
+        Console.WriteLine($"热渲染 5 次：中位 {warmTimes[2]:F1}ms / " +
+                          $"平均 {warmTimes.Sum() / warmTimes.Count:F1}ms / " +
+                          $"最快 {warmTimes[0]:F1}ms");
         Console.WriteLine("出图：reports/aiplot.bmp");
 
         // 产品路径：AI 面板异步入口（不阻塞 UI），完成后再插 Image。
@@ -6446,15 +6453,209 @@ internal sealed partial class App : InkEngine.InkEngine
             Color = new Color4(0.12f, 0.38f, 0.86f, 1f) });
         perfSpec.Series.Add(new PlotSeries { Expr = "x", Label = "y=x",
             Color = new Color4(0.82f, 0.16f, 0.16f, 1f) });
-        var warm3 = System.Diagnostics.Stopwatch.StartNew();
+        var warm3Spec = PlotRenderer.Render(perfSpec);
+        warm3Spec?.Release();
+        var warm3Times = new List<double>(5);
         for (int i = 0; i < 5; i++)
         {
+            var t = System.Diagnostics.Stopwatch.StartNew();
             var tmp = PlotRenderer.Render(perfSpec);
+            t.Stop();
             tmp?.Release();
+            warm3Times.Add(t.Elapsed.TotalMilliseconds);
         }
-        warm3.Stop();
-        Console.WriteLine($"3 曲线热渲染：平均 {warm3.Elapsed.TotalMilliseconds / 5:F1}ms");
+        warm3Times.Sort();
+        Console.WriteLine($"3 曲线热渲染：中位 {warm3Times[2]:F1}ms / " +
+                          $"平均 {warm3Times.Sum() / warm3Times.Count:F1}ms / " +
+                          $"最快 {warm3Times[0]:F1}ms");
         Console.WriteLine("出图：reports/aiplot-multi.bmp");
+
+        // v1.4 含参函数：a/b/c 默认值，图上显示参数行。
+        var paramAi = cfg.IsConfigured
+            ? Task.Run(() => AiPlotClient.ParseAsync(
+                "画含参二次函数 y=a*x^2+b*x+c 的图象，其中 a=-1，b=4，c=-1，" +
+                "定义域 [-1,5]，标题写“含参二次函数”。",
+                cfg, CancellationToken.None)).GetAwaiter().GetResult()
+            : new AiPlotClient.Result { Error = "AI 未配置" };
+        var paramSpec = paramAi.Spec;
+        if (paramSpec == null || paramSpec.Kind != "functions" || paramSpec.Params.Count == 0)
+        {
+            paramSpec = new PlotSpec { Title = "含参二次函数", XMin = -1f, XMax = 5f };
+            paramSpec.Params["a"] = -1;
+            paramSpec.Params["b"] = 4;
+            paramSpec.Params["c"] = -1;
+            paramSpec.Series.Add(new PlotSeries
+            {
+                Expr = "a*x^2+b*x+c",
+                Label = "y=a*x^2+b*x+c",
+            });
+        }
+        var paramSw = System.Diagnostics.Stopwatch.StartNew();
+        var paramImg = PlotRenderer.Render(paramSpec);
+        paramSw.Stop();
+        if (paramImg != null)
+        {
+            InsertPlotImageForTest(paramImg, "reports/aiplot-param.bmp");
+            Console.WriteLine($"含参：kind={paramSpec.Kind} series={paramSpec.Series.Count} " +
+                              $"params={paramSpec.Params.Count} ai={paramAi.Seconds:F1}s " +
+                              $"render={paramSw.Elapsed.TotalMilliseconds:F1}ms");
+        }
+
+        // v1.5 圆锥曲线：椭圆（焦点/准线），真实 AI 解析。
+        var conicAi = cfg.IsConfigured
+            ? Task.Run(() => AiPlotClient.ParseAsync(
+                "画椭圆 x^2/9 + y^2/4 = 1 的图象，标出焦点和准线，标题写“椭圆”。",
+                cfg, CancellationToken.None)).GetAwaiter().GetResult()
+            : new AiPlotClient.Result { Error = "AI 未配置" };
+        var conicSpec = conicAi.Spec;
+        if (conicSpec == null || conicSpec.Kind != "conic")
+        {
+            conicSpec = new PlotSpec
+            {
+                Kind = "conic",
+                Title = "椭圆",
+                XMin = -6f,
+                XMax = 6f,
+                Conic = new PlotConic
+                {
+                    Type = "ellipse", H = 0, K = 0, A = 3f, B = 2f,
+                    Equation = "x^2/9+y^2/4=1",
+                },
+            };
+        }
+        var conicSw = System.Diagnostics.Stopwatch.StartNew();
+        var conicImg = PlotRenderer.Render(conicSpec);
+        conicSw.Stop();
+        if (conicImg != null)
+        {
+            InsertPlotImageForTest(conicImg, "reports/aiplot-conic.bmp");
+            Console.WriteLine($"圆锥：kind={conicSpec.Kind} type={conicSpec.Conic?.Type} " +
+                              $"a={conicSpec.Conic?.A} b={conicSpec.Conic?.B} " +
+                              $"ai={conicAi.Seconds:F1}s render={conicSw.Elapsed.TotalMilliseconds:F1}ms");
+        }
+
+        // v1.5 双曲线/抛物线（本地固定参数，保证每次都有可复现截图）。
+        var hyperSpec = new PlotSpec
+        {
+            Kind = "conic",
+            Title = "双曲线",
+            XMin = -6f,
+            XMax = 6f,
+            Conic = new PlotConic
+            {
+                Type = "hyperbola", H = 0, K = 0, A = 2f, B = 1.5f,
+                Equation = "x^2/4-y^2/2.25=1",
+            },
+        };
+        var hyperImg = PlotRenderer.Render(hyperSpec);
+        if (hyperImg != null)
+            InsertPlotImageForTest(hyperImg, "reports/aiplot-hyperbola.bmp");
+
+        var parabolaSpec = new PlotSpec
+        {
+            Kind = "conic",
+            Title = "抛物线",
+            XMin = -2f,
+            XMax = 8f,
+            Conic = new PlotConic
+            {
+                Type = "parabola", H = 0, K = 0, A = 2f, Axis = "right",
+                Equation = "y^2=4x",
+            },
+        };
+        var parabolaImg = PlotRenderer.Render(parabolaSpec);
+        if (parabolaImg != null)
+            InsertPlotImageForTest(parabolaImg, "reports/aiplot-parabola.bmp");
+        Console.WriteLine("出图：reports/aiplot-param.bmp / aiplot-conic.bmp / " +
+                          "aiplot-hyperbola.bmp / aiplot-parabola.bmp");
+
+        // v1.6 平面几何：AI 给点/线段，本地结构化渲染。
+        var planeAi = cfg.IsConfigured
+            ? Task.Run(() => AiPlotClient.ParseAsync(
+                "画一个平面几何示意图：直角三角形 ABC，A(0,0)，B(4,0)，C(0,3)，" +
+                "标出 A/B/C，标题写“直角三角形”。",
+                cfg, CancellationToken.None)).GetAwaiter().GetResult()
+            : new AiPlotClient.Result { Error = "AI 未配置" };
+        var planeSpec = planeAi.Spec;
+        if (planeSpec == null || planeSpec.Kind != "plane")
+        {
+            planeSpec = new PlotSpec
+            {
+                Kind = "plane",
+                Title = "直角三角形",
+                Figure = FigureRenderer.SampleTriangle(),
+            };
+        }
+        var planeSw = System.Diagnostics.Stopwatch.StartNew();
+        var planeImg = PlotRenderer.Render(planeSpec);
+        planeSw.Stop();
+        if (planeImg != null)
+        {
+            InsertPlotImageForTest(planeImg, "reports/aiplot-plane.bmp");
+            Console.WriteLine($"平面几何：kind={planeSpec.Kind} " +
+                              $"points={planeSpec.Figure?.Points2D.Count ?? 0} " +
+                              $"segments={planeSpec.Figure?.Segments.Count ?? 0} " +
+                              $"ai={planeAi.Seconds:F1}s render={planeSw.Elapsed.TotalMilliseconds:F1}ms");
+        }
+
+        // v1.6 立体几何：AI 给三维点/棱，本地等轴测投影。
+        var solidAi = cfg.IsConfigured
+            ? Task.Run(() => AiPlotClient.ParseAsync(
+                "画一个棱长为 2 的正方体 ABCD-A1B1C1D1 的立体几何示意图，" +
+                "标出 8 个顶点，标题写“正方体”。",
+                cfg, CancellationToken.None)).GetAwaiter().GetResult()
+            : new AiPlotClient.Result { Error = "AI 未配置" };
+        var solidSpec = solidAi.Spec;
+        if (solidSpec == null || solidSpec.Kind != "solid")
+        {
+            solidSpec = new PlotSpec
+            {
+                Kind = "solid",
+                Title = "正方体",
+                Figure = FigureRenderer.SampleCube(),
+            };
+        }
+        var solidSw = System.Diagnostics.Stopwatch.StartNew();
+        var solidImg = PlotRenderer.Render(solidSpec);
+        solidSw.Stop();
+        if (solidImg != null)
+        {
+            InsertPlotImageForTest(solidImg, "reports/aiplot-solid.bmp");
+            Console.WriteLine($"立体几何：kind={solidSpec.Kind} " +
+                              $"points={solidSpec.Figure?.Points3D.Count ?? 0} " +
+                              $"edges={solidSpec.Figure?.Segments.Count ?? 0} " +
+                              $"ai={solidAi.Seconds:F1}s render={solidSw.Elapsed.TotalMilliseconds:F1}ms");
+        }
+        Console.WriteLine("出图：reports/aiplot-plane.bmp / aiplot-solid.bmp");
+    }
+
+    /// <summary>自检：清空画布，把 AI 图插到屏幕中心并截图。</summary>
+    private Stroke InsertPlotImageForTest(ImageData img, string shot)
+    {
+        Doc.Clear();
+        Doc.ClearHistory();
+        var s = new Stroke
+        {
+            Tool = Tool.Capture,
+            Kind = StrokeKind.Image,
+            Color = new Color4(1f, 1f, 1f, 1f),
+            Width = 0f,
+            Image = img,
+        };
+        s.SetPoints(new[]
+        {
+            new Vector2(0f, 0f),
+            new Vector2(img.Width, img.Height),
+        });
+        float x = _virtualX + (_virtualW - img.Width) * 0.5f;
+        float y = _virtualY + (_virtualH - img.Height) * 0.5f;
+        s.Transform = Matrix3x2.CreateTranslation(x, y);
+        Doc.AddStroke(s);
+        Doc.SelectOnly(new[] { s });
+        SettleFrames(200);
+        ScreenProbe.SaveBmp(shot, (int)_virtualX, (int)_virtualY,
+                            (int)_virtualW, (int)_virtualH);
+        return s;
     }
 
     /// <summary>二次函数：AI 给 a/b/c，本地创建可缩放的抛物线对象。</summary>

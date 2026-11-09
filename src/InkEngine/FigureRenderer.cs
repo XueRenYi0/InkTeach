@@ -85,7 +85,7 @@ internal sealed class FigureSpec
             if (root.TryGetProperty("labels", out var labels) && labels.ValueKind == JsonValueKind.Object)
                 foreach (var l in labels.EnumerateObject())
                     if (l.Value.ValueKind == JsonValueKind.String)
-                        spec.Labels[l.Name] = l.Value.GetString();
+                        spec.Labels[l.Name] = NormalizeLabel(l.Value.GetString());
 
             // 二次函数：AI 只给 a/b/c，曲线由本地采样/现有抛物线对象画。
             if (spec.Kind == "quadratic")
@@ -117,6 +117,26 @@ internal sealed class FigureSpec
 
     private static string Str(JsonElement e, string name)
         => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    /// <summary>把 ₁/² 之类的上下标换成普通字符，避免字体缺字显示成方框。</summary>
+    internal static string NormalizeLabel(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return s;
+        var sb = new System.Text.StringBuilder(s.Length);
+        foreach (char ch in s)
+        {
+            sb.Append(ch switch
+            {
+                '₀' => '0', '₁' => '1', '₂' => '2', '₃' => '3', '₄' => '4',
+                '₅' => '5', '₆' => '6', '₇' => '7', '₈' => '8', '₉' => '9',
+                '⁰' => '0', '¹' => '1', '²' => '2', '³' => '3', '⁴' => '4',
+                '⁵' => '5', '⁶' => '6', '⁷' => '7', '⁸' => '8', '⁹' => '9',
+                '−' => '-', '–' => '-', '—' => '-',
+                _ => ch,
+            });
+        }
+        return sb.ToString();
+    }
 }
 
 /// <summary>
@@ -128,7 +148,19 @@ internal sealed class FigureSpec
 /// </summary>
 internal static class FigureRenderer
 {
+    private static readonly SKTypeface Face =
+        SKTypeface.FromFamilyName("Microsoft YaHei UI") ?? SKTypeface.Default;
+
     public static ImageData Render(FigureSpec spec, int width = 820, int height = 600)
+        => RenderCore(spec, width, height, null, false);
+
+    /// <summary>白底圆角卡片版本：用于 AI 作图的平面/立体几何快照。</summary>
+    public static ImageData RenderCard(FigureSpec spec, string title,
+                                       int width = 1100, int height = 760)
+        => RenderCore(spec, width, height, title, true);
+
+    private static ImageData RenderCore(FigureSpec spec, int width, int height,
+                                        string title, bool card)
     {
         if (spec == null || width <= 0 || height <= 0) return null;
 
@@ -136,9 +168,10 @@ internal static class FigureRenderer
         foreach (var p in spec.Points2D) projected[p.Key] = p.Value;
         foreach (var p in spec.Points3D)
         {
-            // 等轴测：x 向右下、y 向左下、z 向上。
-            float sx = (p.Value.X - p.Value.Y) * 0.866f;
-            float sy = (p.Value.X + p.Value.Y) * 0.5f - p.Value.Z;
+            // 斜二测（cabinet）：x 向右、z 向上、y 向后上方 45°，深度减半。
+            // 不用等轴测，避免正方体体对角线两端在屏幕上重合。
+            float sx = p.Value.X + p.Value.Y * 0.5f * 0.70710678f;
+            float sy = p.Value.Z + p.Value.Y * 0.5f * 0.70710678f;
             projected[p.Key] = new Vector2(sx, sy);
         }
         if (projected.Count == 0) return null;
@@ -152,7 +185,7 @@ internal static class FigureRenderer
         }
         float bw = MathF.Max(0.001f, maxX - minX);
         float bh = MathF.Max(0.001f, maxY - minY);
-        const float pad = 64f;
+        float pad = card ? 96f : 64f;
         float scale = MathF.Min((width - pad * 2f) / bw, (height - pad * 2f) / bh);
         if (!float.IsFinite(scale) || scale <= 0f) scale = 1f;
 
@@ -169,6 +202,16 @@ internal static class FigureRenderer
         using (var canvas = new SKCanvas(bmp))
         {
             canvas.Clear(SKColors.Transparent);
+            float radius = 26f;
+            if (card)
+            {
+                using var bg = new SKPaint { Color = SKColors.White, IsAntialias = true };
+                canvas.DrawRoundRect(new SKRect(0, 0, width, height), radius, radius, bg);
+                canvas.Save();
+                canvas.ClipRoundRect(new SKRoundRect(new SKRect(1, 1, width - 1, height - 1),
+                                                     radius, radius),
+                                     SKClipOperation.Intersect, true);
+            }
 
             using var line = new SKPaint
             {
@@ -209,14 +252,12 @@ internal static class FigureRenderer
                 canvas.DrawCircle(sc.X, sc.Y, MathF.Max(1f, c.Radius * scale), circleLine);
             }
 
-            using var typeface = SKTypeface.FromFamilyName("Microsoft YaHei UI")
-                                 ?? SKTypeface.Default;
             using var text = new SKPaint
             {
                 Color = new SKColor(24, 28, 36),
                 IsAntialias = true,
-                TextSize = 34f,
-                Typeface = typeface,
+                TextSize = MathF.Max(26f, MathF.Min(width, height) * 0.045f),
+                Typeface = Face,
                 TextAlign = SKTextAlign.Center,
             };
 
@@ -236,6 +277,17 @@ internal static class FigureRenderer
                 float ox = dir.X * 28f;
                 float oy = -dir.Y * 28f;
                 canvas.DrawText(label, s.X + ox, s.Y + oy + 12f, text);
+            }
+
+            if (card && !string.IsNullOrWhiteSpace(title))
+            {
+                using var titlePaint = new SKPaint
+                {
+                    Color = new SKColor(34, 38, 46), IsAntialias = true,
+                    TextSize = 28f, Typeface = Face,
+                };
+                canvas.DrawText(title, pad * 0.5f, 52f, titlePaint);
+                canvas.Restore();
             }
         }
 
@@ -269,6 +321,29 @@ internal static class FigureRenderer
         s.Labels["A"] = "A";
         s.Labels["B"] = "B";
         s.Labels["C"] = "C";
+        return s;
+    }
+
+    /// <summary>自检/兜底：棱长 2 的正方体 ABCD-A1B1C1D1。</summary>
+    public static FigureSpec SampleCube()
+    {
+        var s = new FigureSpec { Kind = "geometry3d" };
+        s.Points3D["A"] = new Vector3(0, 0, 0);
+        s.Points3D["B"] = new Vector3(2, 0, 0);
+        s.Points3D["C"] = new Vector3(2, 2, 0);
+        s.Points3D["D"] = new Vector3(0, 2, 0);
+        s.Points3D["A1"] = new Vector3(0, 0, 2);
+        s.Points3D["B1"] = new Vector3(2, 0, 2);
+        s.Points3D["C1"] = new Vector3(2, 2, 2);
+        s.Points3D["D1"] = new Vector3(0, 2, 2);
+        foreach (var e in new[]
+                 {
+                     ("A", "B"), ("B", "C"), ("C", "D"), ("D", "A"),
+                     ("A1", "B1"), ("B1", "C1"), ("C1", "D1"), ("D1", "A1"),
+                     ("A", "A1"), ("B", "B1"), ("C", "C1"), ("D", "D1"),
+                 })
+            s.Segments.Add(e);
+        foreach (var k in s.Points3D.Keys) s.Labels[k] = k;
         return s;
     }
 }

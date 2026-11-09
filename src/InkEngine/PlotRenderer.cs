@@ -11,14 +11,33 @@ internal sealed class PlotSeries
     public string Expr = "";
     public Color4 Color = new(0.12f, 0.14f, 0.18f, 1f);
     public string Label = "";
+    /// <summary>非空时直接用预采样点（圆锥曲线/参数曲线），不走 PlotExpression。</summary>
+    public List<(float X, float Y)> Precomputed;
 }
 
-/// <summary>AI 作图请求：解析式 + 定义域 + 标题。</summary>
+internal sealed class PlotConic
+{
+    /// <summary>ellipse / hyperbola / parabola</summary>
+    public string Type = "ellipse";
+    public float H, K;       // 中心/顶点
+    public float A = 3f, B = 2f;
+    /// <summary>抛物线开口方向：right / left / up / down。</summary>
+    public string Axis = "right";
+    public string Equation = "";
+    public Color4 Color = new(0.12f, 0.14f, 0.18f, 1f);
+    public string Label = "";
+}
+
+/// <summary>AI 作图请求：函数 / 圆锥曲线 / 平面几何 / 立体几何。</summary>
 internal sealed class PlotSpec
 {
+    public string Kind = "functions"; // functions / conic / plane / solid
     public string Title = "";
     public float XMin = -5f, XMax = 5f;
     public readonly List<PlotSeries> Series = new();
+    public readonly Dictionary<string, double> Params = new();
+    public PlotConic Conic;
+    public FigureSpec Figure;
 }
 
 /// <summary>
@@ -36,7 +55,14 @@ internal static class PlotRenderer
 
     public static ImageData Render(PlotSpec spec, int width = 1100, int height = 760)
     {
-        if (spec == null || spec.Series.Count == 0) return null;
+        if (spec == null) return null;
+        if (spec.Kind is "plane" or "solid")
+            return FigureRenderer.RenderCard(spec.Figure, spec.Title, width, height);
+
+        if (spec.Kind == "conic" && spec.Conic != null && spec.Series.Count == 0)
+            BuildConicSeries(spec);
+        if (spec.Series.Count == 0) return null;
+
         width = Math.Clamp(width, 400, 2000);
         height = Math.Clamp(height, 300, 1400);
 
@@ -46,22 +72,36 @@ internal static class PlotRenderer
         float yMin = float.MaxValue, yMax = float.MinValue;
         foreach (var s in spec.Series)
         {
-            PlotExpression expr;
-            try { expr = PlotExpression.Parse(s.Expr); }
-            catch { continue; }
-            if (expr == null) continue;
-            var pts = new List<(float, float)>(samples);
-            for (int i = 0; i <= samples; i++)
+            List<(float, float)> pts;
+            if (s.Precomputed is { Count: > 0 })
             {
-                float x = spec.XMin + (spec.XMax - spec.XMin) * i / samples;
-                double y = expr.Eval(x);
-                if (!double.IsFinite(y)) continue;
-                if (Math.Abs(y) > 1e6) continue;
-                pts.Add((x, (float)y));
-                if (y < yMin) yMin = (float)y;
-                if (y > yMax) yMax = (float)y;
+                pts = s.Precomputed;
             }
-            if (pts.Count > 0) curves.Add((s, pts));
+            else
+            {
+                PlotExpression expr;
+                try { expr = PlotExpression.Parse(s.Expr, spec.Params); }
+                catch { continue; }
+                if (expr == null) continue;
+                pts = new List<(float, float)>(samples);
+                for (int i = 0; i <= samples; i++)
+                {
+                    float x = spec.XMin + (spec.XMax - spec.XMin) * i / samples;
+                    double y = expr.Eval(x);
+                    if (!double.IsFinite(y)) continue;
+                    if (Math.Abs(y) > 1e6) continue;
+                    pts.Add((x, (float)y));
+                }
+            }
+            int valid = 0;
+            foreach (var (x, y) in pts)
+            {
+                if (!float.IsFinite(x) || !float.IsFinite(y)) continue;
+                if (y < yMin) yMin = y;
+                if (y > yMax) yMax = y;
+                valid++;
+            }
+            if (valid > 0) curves.Add((s, pts));
         }
         if (curves.Count == 0) return null;
 
@@ -70,10 +110,39 @@ internal static class PlotRenderer
         if (yMax - yMin < 1e-4f) { yMin -= 1; yMax += 1; }
         float pad = (yMax - yMin) * 0.15f;
         yMin -= pad; yMax += pad;
-        // 防止 exp 之类把图压扁：显示范围限制在 ±30，曲线出界就裁掉。
-        yMin = MathF.Max(yMin, -30f);
-        yMax = MathF.Min(yMax, 30f);
+        // 防止 exp 之类把图压扁：显示范围限制在 ±50，曲线出界就裁掉。
+        yMin = MathF.Max(yMin, -50f);
+        yMax = MathF.Min(yMax, 50f);
         if (yMax - yMin < 0.5f) { yMin -= 0.5f; yMax += 0.5f; }
+
+        // 含参函数在标题下再留一行显示参数默认值。
+        float top = spec.Params.Count > 0 ? 94f : 64f;
+        float left = 92f, right = 44f, bottom = 74f;
+        float pw = width - left - right;
+        float ph = height - top - bottom;
+        if (pw < 50 || ph < 50) return null;
+
+        // 圆锥曲线必须等比例：否则椭圆会被画成圆、抛物线会变形。
+        // 同时保证采样出来的曲线全部落在视窗内，不够就扩大 x/y 范围。
+        if (spec.Kind == "conic" && spec.Conic != null)
+        {
+            float xSpan = spec.XMax - spec.XMin;
+            float ySpan = yMax - yMin;
+            float yc = (yMin + yMax) * 0.5f;
+            float xc = (spec.XMin + spec.XMax) * 0.5f;
+            if (xSpan * ph / pw < ySpan)
+            {
+                xSpan = ySpan * pw / ph;
+                spec.XMin = xc - xSpan * 0.5f;
+                spec.XMax = xc + xSpan * 0.5f;
+            }
+            else
+            {
+                ySpan = xSpan * ph / pw;
+                yMin = yc - ySpan * 0.5f;
+                yMax = yc + ySpan * 0.5f;
+            }
+        }
 
         var bmp = new SKBitmap(new SKImageInfo(width, height, SKColorType.Bgra8888,
                                                SKAlphaType.Premul));
@@ -88,11 +157,6 @@ internal static class PlotRenderer
             canvas.Save();
             canvas.ClipRoundRect(new SKRoundRect(new SKRect(1, 1, width - 1, height - 1),
                                                  radius, radius), SKClipOperation.Intersect, true);
-
-            float left = 92f, right = 44f, top = 64f, bottom = 74f;
-            float pw = width - left - right;
-            float ph = height - top - bottom;
-            if (pw < 50 || ph < 50) { canvas.Restore(); bmp.Dispose(); return null; }
 
             float X(float x) => left + (x - spec.XMin) / (spec.XMax - spec.XMin) * pw;
             float Y(float y) => top + (yMax - y) / (yMax - yMin) * ph;
@@ -181,11 +245,7 @@ internal static class PlotRenderer
             {
                 using var pen = new SKPaint
                 {
-                    Color = new SKColor(
-                        (byte)Math.Clamp((int)(s.Color.R * 255f), 0, 255),
-                        (byte)Math.Clamp((int)(s.Color.G * 255f), 0, 255),
-                        (byte)Math.Clamp((int)(s.Color.B * 255f), 0, 255),
-                        (byte)Math.Clamp((int)(s.Color.A * 255f), 0, 255)),
+                    Color = ToSK(s.Color),
                     IsAntialias = true,
                     Style = SKPaintStyle.Stroke,
                     StrokeWidth = 3.2f,
@@ -197,6 +257,11 @@ internal static class PlotRenderer
                 float prevY = 0f;
                 foreach (var (x, y) in pts)
                 {
+                    if (!float.IsFinite(x) || !float.IsFinite(y))
+                    {
+                        started = false;
+                        continue;
+                    }
                     float sx = X(x), sy = Y(y);
                     bool jump = started && MathF.Abs(sy - prevY) > ph * 1.4f;
                     if (!started || jump) { path.MoveTo(sx, sy); started = true; }
@@ -205,10 +270,16 @@ internal static class PlotRenderer
                 }
                 canvas.DrawPath(path, pen);
             }
+
+            if (spec.Kind == "conic" && spec.Conic != null)
+                DrawConicFeatures(canvas, spec.Conic, X, Y, left, top, pw, ph,
+                                  spec.XMin, spec.XMax);
             canvas.Restore();
 
             // 多条曲线：右上角图例（色线 + 解析式）
-            if (curves.Count > 1)
+            bool wantLegend = curves.Count > 1
+                              || (spec.Kind == "conic" && curves.Count > 0);
+            if (wantLegend)
             {
                 using var legendText = new SKPaint
                 {
@@ -242,11 +313,7 @@ internal static class PlotRenderer
                     float yy = ly + 8f + 13f + i * 26f;
                     using var swatch = new SKPaint
                     {
-                        Color = new SKColor(
-                            (byte)Math.Clamp((int)(s.Color.R * 255f), 0, 255),
-                            (byte)Math.Clamp((int)(s.Color.G * 255f), 0, 255),
-                            (byte)Math.Clamp((int)(s.Color.B * 255f), 0, 255),
-                            (byte)Math.Clamp((int)(s.Color.A * 255f), 0, 255)),
+                        Color = ToSK(s.Color),
                         IsAntialias = true, Style = SKPaintStyle.Stroke,
                         StrokeWidth = 3.2f, StrokeCap = SKStrokeCap.Round,
                     };
@@ -266,6 +333,21 @@ internal static class PlotRenderer
                 };
                 canvas.DrawText(spec.Title, left, 38, titlePaint);
             }
+
+            // 含参函数：标题下显示参数默认值（v1 静态；拖动在 v2 FigureScene）。
+            if (spec.Params.Count > 0)
+            {
+                var keys = new List<string>(spec.Params.Keys);
+                keys.Sort(StringComparer.Ordinal);
+                var parts = new List<string>(keys.Count);
+                foreach (var k in keys) parts.Add(k + " = " + Fmt((float)spec.Params[k]));
+                using var paramPaint = new SKPaint
+                {
+                    Color = new SKColor(92, 96, 104), IsAntialias = true,
+                    TextSize = 18f, Typeface = Face,
+                };
+                canvas.DrawText("参数：" + string.Join("，", parts), left, 64, paramPaint);
+            }
             canvas.Restore();
         }
 
@@ -282,6 +364,211 @@ internal static class PlotRenderer
         }
         finally { bmp.Dispose(); }
     }
+
+    // ---- 圆锥曲线 ----------------------------------------------------------
+
+    private static void BuildConicSeries(PlotSpec spec)
+    {
+        var c = spec.Conic;
+        var pts = new List<(float, float)>();
+        switch ((c.Type ?? "").ToLowerInvariant())
+        {
+            case "hyperbola":
+            {
+                float a = MathF.Max(0.05f, MathF.Abs(c.A));
+                float b = MathF.Max(0.05f, MathF.Abs(c.B));
+                float dx = MathF.Max(MathF.Abs(spec.XMax - c.H), MathF.Abs(spec.XMin - c.H));
+                float tMax = MathF.Min(3.6f, MathF.Max(0.8f, MathF.Asinh(dx / a)));
+                const int n = 220;
+                for (int branch = -1; branch <= 1; branch += 2)
+                {
+                    for (int i = 0; i <= n; i++)
+                    {
+                        float t = -tMax + 2f * tMax * i / n;
+                        pts.Add((c.H + branch * a * MathF.Cosh(t),
+                                 c.K + b * MathF.Sinh(t)));
+                    }
+                    pts.Add((float.NaN, float.NaN));
+                }
+                break;
+            }
+            case "parabola":
+            {
+                float p = MathF.Max(0.05f, MathF.Abs(c.A));
+                string axis = (c.Axis ?? "right").ToLowerInvariant();
+                float tMax;
+                if (axis is "up" or "down")
+                    tMax = MathF.Min(18f, MathF.Sqrt(2f * p * 16f));
+                else
+                {
+                    float dx = axis == "left"
+                        ? MathF.Max(0.5f, c.H - spec.XMin)
+                        : MathF.Max(0.5f, spec.XMax - c.H);
+                    tMax = MathF.Min(18f, MathF.Sqrt(2f * p * dx));
+                }
+                const int n = 320;
+                for (int i = 0; i <= n; i++)
+                {
+                    float t = -tMax + 2f * tMax * i / n;
+                    switch (axis)
+                    {
+                        case "left":
+                            pts.Add((c.H - t * t / (2f * p), c.K + t));
+                            break;
+                        case "up":
+                            pts.Add((c.H + t, c.K + t * t / (2f * p)));
+                            break;
+                        case "down":
+                            pts.Add((c.H + t, c.K - t * t / (2f * p)));
+                            break;
+                        default:
+                            pts.Add((c.H + t * t / (2f * p), c.K + t));
+                            break;
+                    }
+                }
+                break;
+            }
+            default: // ellipse
+            {
+                float a = MathF.Max(0.05f, MathF.Abs(c.A));
+                float b = MathF.Max(0.05f, MathF.Abs(c.B));
+                const int n = 720;
+                for (int i = 0; i <= n; i++)
+                {
+                    float t = MathF.PI * 2f * i / n;
+                    pts.Add((c.H + a * MathF.Cos(t), c.K + b * MathF.Sin(t)));
+                }
+                break;
+            }
+        }
+
+        string label = c.Label;
+        if (string.IsNullOrWhiteSpace(label))
+        {
+            string name = (c.Type ?? "").ToLowerInvariant() switch
+            {
+                "hyperbola" => "双曲线",
+                "parabola" => "抛物线",
+                _ => "椭圆",
+            };
+            label = string.IsNullOrWhiteSpace(c.Equation) ? name : name + "  " + c.Equation;
+        }
+        spec.Series.Add(new PlotSeries
+        {
+            Precomputed = pts,
+            Label = label,
+            Expr = c.Equation,
+            Color = c.Color,
+        });
+    }
+
+    private static void DrawConicFeatures(SKCanvas canvas, PlotConic c,
+                                          Func<float, float> X, Func<float, float> Y,
+                                          float left, float top, float pw, float ph,
+                                          float xMin, float xMax)
+    {
+        float a = MathF.Max(0.0001f, MathF.Abs(c.A));
+        float b = MathF.Max(0.0001f, MathF.Abs(c.B));
+        string type = (c.Type ?? "").ToLowerInvariant();
+        using var dashFx = SKPathEffect.CreateDash(new[] { 7f, 6f }, 0f);
+        using var dash = new SKPaint
+        {
+            Color = new SKColor(122, 128, 140, 210), IsAntialias = true,
+            Style = SKPaintStyle.Stroke, StrokeWidth = 1.6f,
+            PathEffect = dashFx,
+        };
+        using var dot = new SKPaint
+        {
+            Color = new SKColor(196, 76, 60), IsAntialias = true,
+            Style = SKPaintStyle.Fill,
+        };
+        using var tiny = new SKPaint
+        {
+            Color = new SKColor(170, 68, 54), IsAntialias = true,
+            TextSize = 15f, Typeface = Face,
+        };
+
+        void Vertical(float x, string text)
+        {
+            float sx = X(x);
+            if (sx < left - 4 || sx > left + pw + 4) return;
+            canvas.DrawLine(sx, top, sx, top + ph, dash);
+            canvas.DrawText(text, sx + 4, top + ph - 8, tiny);
+        }
+        void Horizontal(float y, string text)
+        {
+            float sy = Y(y);
+            if (sy < top - 4 || sy > top + ph + 4) return;
+            canvas.DrawLine(left, sy, left + pw, sy, dash);
+            canvas.DrawText(text, left + 6, sy - 5, tiny);
+        }
+        void Focus(float x, float y, string text)
+        {
+            float sx = X(x), sy = Y(y);
+            if (sx < left - 8 || sx > left + pw + 8 || sy < top - 8 || sy > top + ph + 8)
+                return;
+            canvas.DrawCircle(sx, sy, 5f, dot);
+            canvas.DrawText(text, sx + 7, sy - 7, tiny);
+        }
+
+        if (type == "ellipse")
+        {
+            float cc = MathF.Sqrt(MathF.Max(0f, a * a - b * b));
+            if (cc > 0.001f)
+            {
+                Focus(c.H - cc, c.K, "F1");
+                Focus(c.H + cc, c.K, "F2");
+                Vertical(c.H - a * a / cc, "准线");
+                Vertical(c.H + a * a / cc, "准线");
+            }
+        }
+        else if (type == "hyperbola")
+        {
+            float cc = MathF.Sqrt(a * a + b * b);
+            Focus(c.H - cc, c.K, "F1");
+            Focus(c.H + cc, c.K, "F2");
+            Vertical(c.H - a * a / cc, "准线");
+            Vertical(c.H + a * a / cc, "准线");
+            // 渐近线 y - k = ±(b/a)(x - h)
+            float slope = b / a;
+            foreach (float sgn in new[] { -1f, 1f })
+            {
+                float y1 = c.K + sgn * slope * (xMin - c.H);
+                float y2 = c.K + sgn * slope * (xMax - c.H);
+                canvas.DrawLine(X(xMin), Y(y1), X(xMax), Y(y2), dash);
+            }
+        }
+        else // parabola
+        {
+            float p = a;
+            float half = p * 0.5f;
+            switch ((c.Axis ?? "right").ToLowerInvariant())
+            {
+                case "left":
+                    Focus(c.H - half, c.K, "F");
+                    Vertical(c.H + half, "准线");
+                    break;
+                case "up":
+                    Focus(c.H, c.K + half, "F");
+                    Horizontal(c.K - half, "准线");
+                    break;
+                case "down":
+                    Focus(c.H, c.K - half, "F");
+                    Horizontal(c.K + half, "准线");
+                    break;
+                default:
+                    Focus(c.H + half, c.K, "F");
+                    Vertical(c.H - half, "准线");
+                    break;
+            }
+        }
+    }
+
+    private static SKColor ToSK(Color4 c) => new(
+        (byte)Math.Clamp((int)(c.R * 255f), 0, 255),
+        (byte)Math.Clamp((int)(c.G * 255f), 0, 255),
+        (byte)Math.Clamp((int)(c.B * 255f), 0, 255),
+        (byte)Math.Clamp((int)(c.A * 255f), 0, 255));
 
     private static float NiceStep(float range, int target)
     {
