@@ -8,6 +8,8 @@
 #include <textserv.h>
 #include <imm.h>
 #include <ole2.h>
+#include <d2d1.h>
+#include <wincodec.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <string>
@@ -15,7 +17,10 @@
 static const wchar_t* kClass = L"B0SpikeWindow";
 static bool g_selfTest = false;
 static bool g_bench = false;
+static bool g_d2dTest = false;
 static HMODULE g_msft = nullptr;
+
+template <class T> static void SafeRelease(T*& p) { if (p) { p->Release(); p = nullptr; } }
 // textserv.h only declares IID_ITextHost; define it locally for the spike.
 static const GUID kITextHostIID =
     { 0x13e670f4, 0x1a5a, 0x11cf, { 0xab, 0xeb, 0x00, 0xaa, 0x00, 0xb6, 0x5e, 0xa1 } };
@@ -312,6 +317,98 @@ static void RunBench(HWND hwnd)
     ReleaseDC(hwnd, screen);
 }
 
+static HRESULT SaveWicPng(IWICImagingFactory* wic, IWICBitmap* bmp, const wchar_t* path)
+{
+    IWICStream* stream = nullptr;
+    IWICBitmapEncoder* enc = nullptr;
+    IWICBitmapFrameEncode* frame = nullptr;
+    IPropertyBag2* props = nullptr;
+    HRESULT hr = wic->CreateStream(&stream);
+    if (SUCCEEDED(hr)) hr = stream->InitializeFromFilename(path, GENERIC_WRITE);
+    if (SUCCEEDED(hr)) hr = wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, &enc);
+    if (SUCCEEDED(hr)) hr = enc->Initialize(stream, WICBitmapEncoderNoCache);
+    if (SUCCEEDED(hr)) hr = enc->CreateNewFrame(&frame, &props);
+    if (SUCCEEDED(hr)) hr = frame->Initialize(props);
+    UINT w = 0, h = 0;
+    if (SUCCEEDED(hr)) hr = bmp->GetSize(&w, &h);
+    if (SUCCEEDED(hr)) hr = frame->SetSize(w, h);
+    WICPixelFormatGUID fmt = GUID_WICPixelFormat32bppPBGRA;
+    if (SUCCEEDED(hr)) hr = frame->SetPixelFormat(&fmt);
+    if (SUCCEEDED(hr)) hr = frame->WriteSource(bmp, nullptr);
+    if (SUCCEEDED(hr)) hr = frame->Commit();
+    if (SUCCEEDED(hr)) hr = enc->Commit();
+    SafeRelease(frame);
+    SafeRelease(props);
+    SafeRelease(enc);
+    SafeRelease(stream);
+    return hr;
+}
+
+static void RunD2D(HWND hwnd)
+{
+    const UINT w = 900, h = 560;
+    HRESULT hr;
+    IWICImagingFactory* wic = nullptr;
+    hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                          IID_PPV_ARGS(&wic));
+    IWICBitmap* bmp = nullptr;
+    if (SUCCEEDED(hr)) hr = wic->CreateBitmap(w, h, GUID_WICPixelFormat32bppPBGRA,
+                                              WICBitmapCacheOnLoad, &bmp);
+    ID2D1Factory* fac = nullptr;
+    if (SUCCEEDED(hr)) hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &fac);
+    ID2D1RenderTarget* rt = nullptr;
+    if (SUCCEEDED(hr))
+        hr = fac->CreateWicBitmapRenderTarget(bmp, D2D1::RenderTargetProperties(), &rt);
+
+    HRESULT hrDraw = E_FAIL, hrEnd = E_FAIL;
+    if (SUCCEEDED(hr))
+    {
+        rt->BeginDraw();
+        rt->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+        rt->Clear(D2D1::ColorF(0.96f, 0.92f, 0.82f, 1.0f));
+        ID2D1SolidColorBrush* blue = nullptr;
+        ID2D1SolidColorBrush* red = nullptr;
+        rt->CreateSolidColorBrush(D2D1::ColorF(0.80f, 0.88f, 0.98f, 1.0f), &blue);
+        rt->CreateSolidColorBrush(D2D1::ColorF(0.90f, 0.31f, 0.27f, 1.0f), &red);
+        if (blue)
+        {
+            for (UINT y = 0; y < h; y += 64)
+                for (UINT x = 0; x < w; x += 64)
+                    if (((x / 64) + (y / 64)) % 2)
+                        rt->FillRectangle(D2D1::RectF((float)x, (float)y, (float)(x + 64), (float)(y + 64)), blue);
+        }
+        if (red) rt->FillRectangle(D2D1::RectF(40, 40, 56, (float)h - 60), red);
+
+        g_svc->TxSetText(L"D2D 透明背景测试\r\n中文 / English / 12345\r\n第三行：选区、光标、IME 由 RichEdit 负责。");
+
+        auto iid2 = g_msft ? (const IID*)GetProcAddress(g_msft, "IID_ITextServices2") : nullptr;
+        ITextServices2* svc2 = nullptr;
+        if (iid2) g_svc->QueryInterface(*iid2, (void**)&svc2);
+        if (svc2)
+        {
+            RECTL rcl{ 0, 0, (LONG)w, (LONG)h };
+            RECT upd{ 0, 0, (LONG)w, (LONG)h };
+            hrDraw = svc2->TxDrawD2D(rt, &rcl, &upd, 0);
+            svc2->Release();
+        }
+        hrEnd = rt->EndDraw();
+        SafeRelease(blue);
+        SafeRelease(red);
+    }
+
+    HRESULT hrSave = E_FAIL;
+    if (SUCCEEDED(hr) && bmp)
+        hrSave = SaveWicPng(wic, bmp, L"b0-d2d.png");
+
+    LogLine("d2d: setup=0x%08lX draw=0x%08lX end=0x%08lX save=0x%08lX\r\n",
+            (unsigned long)hr, (unsigned long)hrDraw, (unsigned long)hrEnd, (unsigned long)hrSave);
+
+    SafeRelease(rt);
+    SafeRelease(fac);
+    SafeRelease(bmp);
+    SafeRelease(wic);
+}
+
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg)
@@ -464,6 +561,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int)
 {
     g_selfTest = cmdLine && wcsstr(cmdLine, L"--selftest") != nullptr;
     g_bench = cmdLine && wcsstr(cmdLine, L"--bench") != nullptr;
+    g_d2dTest = cmdLine && wcsstr(cmdLine, L"--d2d") != nullptr;
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
     wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -504,6 +603,12 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int)
         HRESULT hr2 = iid2 ? g_svc->QueryInterface(*iid2, (void**)&svc2) : E_NOINTERFACE;
         LogLine("ITextServices2 QI hr=0x%08lX ptr=%p\r\n", (unsigned long)hr2, (void*)svc2);
         if (svc2) svc2->Release();
+    }
+
+    if (g_d2dTest && g_svc)
+    {
+        RunD2D(hwnd);
+        return 0;
     }
 
     if (g_bench && g_svc)
