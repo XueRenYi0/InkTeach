@@ -2775,18 +2775,38 @@ internal sealed partial class OverlayWindow : IDisposable
         else if (type == "hyperbola")
         {
             float cc = MathF.Sqrt(a * a + b * b);
-            Focus(c.H - cc, c.K, "F1");
-            Focus(c.H + cc, c.K, "F2");
-            Vertical(c.H - a * a / cc, "准线");
-            Vertical(c.H + a * a / cc, "准线");
-            float slope = b / a;
-            foreach (float sgn in new[] { -1f, 1f })
+            bool vertical = (c.Axis ?? "x").ToLowerInvariant() is "y" or "vertical";
+            if (vertical)
             {
-                float y1 = c.K + sgn * slope * (xMin - c.H);
-                float y2 = c.K + sgn * slope * (xMax - c.H);
-                _ctx.DrawLine(new Vector2(X(xMin), Y(y1)),
-                              new Vector2(X(xMax), Y(y2)),
-                              Brush(dashColor), 1.6f, dashStyle);
+                Focus(c.H, c.K - cc, "F1");
+                Focus(c.H, c.K + cc, "F2");
+                Horizontal(c.K - a * a / cc, "准线");
+                Horizontal(c.K + a * a / cc, "准线");
+                float slope = a / b;
+                foreach (float sgn in new[] { -1f, 1f })
+                {
+                    float y1 = c.K + sgn * slope * (xMin - c.H);
+                    float y2 = c.K + sgn * slope * (xMax - c.H);
+                    _ctx.DrawLine(new Vector2(X(xMin), Y(y1)),
+                                  new Vector2(X(xMax), Y(y2)),
+                                  Brush(dashColor), 1.6f, dashStyle);
+                }
+            }
+            else
+            {
+                Focus(c.H - cc, c.K, "F1");
+                Focus(c.H + cc, c.K, "F2");
+                Vertical(c.H - a * a / cc, "准线");
+                Vertical(c.H + a * a / cc, "准线");
+                float slope = b / a;
+                foreach (float sgn in new[] { -1f, 1f })
+                {
+                    float y1 = c.K + sgn * slope * (xMin - c.H);
+                    float y2 = c.K + sgn * slope * (xMax - c.H);
+                    _ctx.DrawLine(new Vector2(X(xMin), Y(y1)),
+                                  new Vector2(X(xMax), Y(y2)),
+                                  Brush(dashColor), 1.6f, dashStyle);
+                }
             }
         }
         else

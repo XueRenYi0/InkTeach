@@ -89,6 +89,7 @@ internal static class PlotSampling
                         }
                         int n = Math.Clamp((int)((b - a) / MathF.Max(1e-6f,
                                             spec.XMax - spec.XMin) * samples), 40, samples);
+                        bool gap = false;
                         for (int i = 0; i <= n; i++)
                         {
                             float x = a + (b - a) * i / n;
@@ -99,7 +100,13 @@ internal static class PlotSampling
                                 && x >= piece.MaxX.Value)
                                 x = MathF.Max(a, piece.MaxX.Value - (b - a) * 0.001f);
                             double y = pe.Eval(x);
-                            if (!double.IsFinite(y) || Math.Abs(y) > 1e6) continue;
+                            if (!double.IsFinite(y) || Math.Abs(y) > 1e6)
+                            {
+                                if (!gap && pts.Count > 0) pts.Add((float.NaN, float.NaN));
+                                gap = true;
+                                continue;
+                            }
+                            gap = false;
                             pts.Add((x, (float)y));
                         }
                         pts.Add((float.NaN, float.NaN));   // 段与段之间断线
@@ -113,11 +120,18 @@ internal static class PlotSampling
                     catch { continue; }
                     if (expr == null) continue;
                     pts = new List<(float, float)>(samples);
+                    bool gap = false;
                     for (int i = 0; i <= samples; i++)
                     {
                         float x = spec.XMin + (spec.XMax - spec.XMin) * i / samples;
                         double y = expr.Eval(x);
-                        if (!double.IsFinite(y) || Math.Abs(y) > 1e6) continue;
+                        if (!double.IsFinite(y) || Math.Abs(y) > 1e6)
+                        {
+                            if (!gap && pts.Count > 0) pts.Add((float.NaN, float.NaN));
+                            gap = true;
+                            continue;
+                        }
+                        gap = false;
                         pts.Add((x, (float)y));
                     }
                 }
@@ -179,16 +193,23 @@ internal static class PlotSampling
             {
                 float a = MathF.Max(0.05f, MathF.Abs(c.A));
                 float b = MathF.Max(0.05f, MathF.Abs(c.B));
-                float dx = MathF.Max(MathF.Abs(viewMax - c.H), MathF.Abs(viewMin - c.H));
-                float tMax = MathF.Min(3.6f, MathF.Max(0.8f, MathF.Asinh(dx / a)));
+                bool vertical = (c.Axis ?? "x").ToLowerInvariant() is "y" or "vertical";
+                float span = vertical
+                    ? MathF.Max(MathF.Abs(viewMax - c.H), MathF.Abs(viewMin - c.H)) / b
+                    : MathF.Max(MathF.Abs(viewMax - c.H), MathF.Abs(viewMin - c.H)) / a;
+                float tMax = MathF.Min(3.6f, MathF.Max(0.8f, MathF.Asinh(span)));
                 const int n = 220;
                 for (int branch = -1; branch <= 1; branch += 2)
                 {
                     for (int i = 0; i <= n; i++)
                     {
                         float t = -tMax + 2f * tMax * i / n;
-                        pts.Add((c.H + branch * a * MathF.Cosh(t),
-                                 c.K + b * MathF.Sinh(t)));
+                        if (vertical)
+                            pts.Add((c.H + b * MathF.Sinh(t),
+                                     c.K + branch * a * MathF.Cosh(t)));
+                        else
+                            pts.Add((c.H + branch * a * MathF.Cosh(t),
+                                     c.K + b * MathF.Sinh(t)));
                     }
                     pts.Add((float.NaN, float.NaN));
                 }
@@ -285,6 +306,8 @@ internal static class PlotSampling
         switch ((c.Type ?? "").ToLowerInvariant())
         {
             case "hyperbola":
+                if ((c.Axis ?? "x").ToLowerInvariant() is "y" or "vertical")
+                    return $"{Y}/{F(a * a)} - {X}/{F(b * b)} = 1";
                 return $"{X}/{F(a * a)} - {Y}/{F(b * b)} = 1";
             case "parabola":
             {

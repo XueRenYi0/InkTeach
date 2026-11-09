@@ -82,9 +82,29 @@ internal sealed class PlotExpression
                 '-' => a - b,
                 '*' => a * b,
                 '/' => b == 0 ? double.NaN : a / b,
-                '^' => Math.Pow(a, b),
+                '^' => PowSmart(a, b),
                 _ => double.NaN,
             };
+        }
+
+        /// <summary>
+        /// 高中数学里的有理次幂：x^(1/3)、x^(2/3)、x^(4/3) 在负数区间也有定义。
+        /// Math.Pow 对负数 + 分数指数一律 NaN，会把左半支整段吞掉。
+        /// 只补常见分母 3 的情况；1/2、3/2 仍按实数域限制（负数无定义）。
+        /// </summary>
+        private static double PowSmart(double a, double b)
+        {
+            if (a >= 0 || double.IsNaN(b) || double.IsInfinity(b))
+                return Math.Pow(a, b);
+            // 找最近的 n/3（n 为奇数时负数结果，偶数时正数）
+            for (int n = -8; n <= 8; n++)
+            {
+                if (n == 0) continue;
+                if (Math.Abs(b - n / 3.0) > 1e-3) continue;
+                double mag = Math.Pow(-a, b);
+                return (Math.Abs(n) % 2 == 1) ? -mag : mag;
+            }
+            return Math.Pow(a, b);
         }
     }
 
@@ -98,6 +118,9 @@ internal sealed class PlotExpression
                 "sin" => Math.Sin(v),
                 "cos" => Math.Cos(v),
                 "tan" => Math.Tan(v),
+                "cot" => Math.Abs(Math.Tan(v)) < 1e-12 ? double.NaN : 1.0 / Math.Tan(v),
+                "sec" => Math.Abs(Math.Cos(v)) < 1e-12 ? double.NaN : 1.0 / Math.Cos(v),
+                "csc" => Math.Abs(Math.Sin(v)) < 1e-12 ? double.NaN : 1.0 / Math.Sin(v),
                 "asin" => Math.Asin(v),
                 "acos" => Math.Acos(v),
                 "atan" => Math.Atan(v),
@@ -106,6 +129,8 @@ internal sealed class PlotExpression
                 "exp" => Math.Exp(v),
                 "ln" => v <= 0 ? double.NaN : Math.Log(v),
                 "log" or "log10" => v <= 0 ? double.NaN : Math.Log10(v),
+                "log2" or "log_2" => v <= 0 ? double.NaN : Math.Log2(v),
+                "cbrt" => Math.Cbrt(v),
                 _ => double.NaN,
             };
         }
@@ -226,7 +251,9 @@ internal sealed class PlotExpression
         }
 
         private static bool IsFunction(string n)
-            => n is "sin" or "cos" or "tan" or "asin" or "acos" or "atan"
-                 or "sqrt" or "abs" or "exp" or "ln" or "log" or "log10";
+            => n is "sin" or "cos" or "tan" or "cot" or "sec" or "csc"
+                 or "asin" or "acos" or "atan"
+                 or "sqrt" or "abs" or "exp" or "ln" or "log" or "log10"
+                 or "log2" or "log_2" or "cbrt";
     }
 }

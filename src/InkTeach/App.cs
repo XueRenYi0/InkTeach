@@ -526,6 +526,13 @@ internal sealed partial class App : InkEngine.InkEngine
             AiPlotTest();
             _quit = true;
         }
+        else if (mode == "--plottest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PlotSuiteTest(args.Length > 1 ? args[1] : null);
+            _quit = true;
+        }
         else if (mode == "--figurelive")
         {
             _autoExitAt = double.MaxValue;

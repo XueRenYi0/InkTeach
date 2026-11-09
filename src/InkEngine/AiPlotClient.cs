@@ -73,7 +73,8 @@ internal static class AiPlotClient
             "2) 圆锥曲线：\n" +
             "{\"kind\":\"conic\",\"conic\":{\"type\":\"ellipse\",\"h\":0,\"k\":0,\"a\":3,\"b\":2," +
             "\"axis\":\"right\",\"equation\":\"x^2/9+y^2/4=1\"},\"domain\":[-6,6],\"title\":\"椭圆\"}\n" +
-            "type 为 ellipse/hyperbola/parabola；抛物线用 axis=right/left/up/down、a=焦准距 p。\n" +
+            "type 为 ellipse/hyperbola/parabola；双曲线用 axis=x 或 y（实轴方向）；" +
+            "抛物线用 axis=right/left/up/down、a=焦准距 p。\n" +
             "3) 平面几何：\n" +
             "{\"kind\":\"plane\",\"figure\":{\"kind\":\"geometry2d\"," +
             "\"points\":{\"A\":[0,0],\"B\":[4,0],\"C\":[0,3]}," +
@@ -92,7 +93,7 @@ internal static class AiPlotClient
                   "只选一个最贴近的 kind，不要把整张图当成几何点线硬拆。\n"
                 : "") +
             "规则：只支持一个自变量 x；expr 用 * 表示乘法、^ 表示乘方；" +
-            "函数支持 sin/cos/tan/sqrt/exp/ln/log/abs。含参函数必须在 params 里给默认值，" +
+            "函数支持 sin/cos/tan/cot/sec/csc/sqrt/abs/exp/ln/log/log2/cbrt。含参函数必须在 params 里给默认值，" +
             "expr 里可以用参数名。定义域要避开 log/sqrt 的非法区间。" +
             "分段函数必须用 pieces（每段自己的 min/max），不能只写一个 expr；" +
             "几何点坐标取 0..10 的方便数值，连线要闭合完整。\n" +
