@@ -6335,8 +6335,25 @@ internal sealed partial class App : InkEngine.InkEngine
         // y = a x² + b x + c → 现有 Parabola 对象（顶点 + 过点），可直接缩放/移动。
         float h = -spec.Qb / (2f * MathF.Max(0.0001f, spec.Qa));
         float k = spec.Qc - spec.Qb * spec.Qb / (4f * spec.Qa);
-        float sUnit = 60f * u;
+        float sUnit = 45f * u;
         float ox = 1850f, oy = 820f;
+
+        // 函数图需要坐标系：x∈[-5,5]、y∈[-2,8]，网格步长 = 1 个单位。
+        var axes = new Stroke
+        {
+            Tool = Tool.Coordinate,
+            Kind = StrokeKind.Coordinate,
+            Color = new Color4(0.55f, 0.58f, 0.62f, 1f),
+            Width = 3f * u,
+            Grid = true,
+            AxisGridStep = sUnit,
+        };
+        axes.AddPoint(ox - 5f * sUnit, oy - 8f * sUnit, 1f, 0);
+        axes.AddPoint(ox + 5f * sUnit, oy + 2f * sUnit, 1f, 0);
+        axes.AddPoint(ox, oy, 1f, 0);
+        Doc.AddStroke(axes);
+
+        // y = a x² + b x + c → 现有 Parabola 对象（顶点 + 过点），可直接缩放/移动。
         var sh = new Stroke
         {
             Tool = Tool.Parabola,
