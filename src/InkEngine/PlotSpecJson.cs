@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Vortice.Mathematics;
 
 namespace InkEngine;
@@ -147,6 +148,9 @@ internal static class PlotSpecJson
                     ? e.GetString()
                     : Str(e, "expr");
                 var pieces = ReadPieces(e);
+                if (pieces.Count == 0 && !string.IsNullOrWhiteSpace(expr)
+                    && TryParseCases(expr, out var casePieces))
+                    pieces = casePieces;
                 if (string.IsNullOrWhiteSpace(expr) && pieces.Count == 0) continue;
                 var s = new PlotSeries
                 {
@@ -170,6 +174,9 @@ internal static class PlotSpecJson
             {
                 string expr = f.ValueKind == JsonValueKind.String ? f.GetString() : Str(f, "expr");
                 var pieces = ReadPieces(f);
+                if (pieces.Count == 0 && !string.IsNullOrWhiteSpace(expr)
+                    && TryParseCases(expr, out var casePieces))
+                    pieces = casePieces;
                 if (string.IsNullOrWhiteSpace(expr) && pieces.Count == 0) continue;
                 var s = new PlotSeries
                 {
@@ -256,9 +263,123 @@ internal static class PlotSpecJson
                 piece.MinX = (float)mn.GetDouble();
             if (p.TryGetProperty("max", out var mx) && mx.ValueKind == JsonValueKind.Number)
                 piece.MaxX = (float)mx.GetDouble();
+            if (!piece.MinX.HasValue && !piece.MaxX.HasValue)
+            {
+                string cond = Str(p, "condition");
+                if (!string.IsNullOrWhiteSpace(cond)) ApplyCondition(piece, cond);
+                else if (p.TryGetProperty("domain", out var pd)
+                         && pd.ValueKind == JsonValueKind.Array)
+                {
+                    var nums = new List<float>();
+                    foreach (var n in pd.EnumerateArray())
+                        if (n.ValueKind == JsonValueKind.Number) nums.Add((float)n.GetDouble());
+                    if (nums.Count >= 2)
+                    {
+                        piece.MinX = nums[0]; piece.MaxX = nums[1];
+                        piece.MinInclusive = true; piece.MaxInclusive = true;
+                    }
+                }
+            }
             result.Add(piece);
         }
         return result;
+    }
+
+    /// <summary>把 "x&gt;0" / "x≤0" / "0&lt;x" 这类条件翻译成 min/max。</summary>
+    private static void ApplyCondition(PlotPiece piece, string condition)
+    {
+        string s = (condition ?? "").Trim()
+            .Replace("≥", ">=").Replace("≤", "<=")
+            .Replace("\\ge", ">=").Replace("\\le", "<=")
+            .Replace("\\gt", ">").Replace("\\lt", "<")
+            .Replace(" ", "").Replace("\t", "");
+        if (s.Length < 3) return;
+        int x = s.IndexOf('x');
+        if (x == 0)
+            ApplyOp(piece, s[1..], false);
+        else if (x == s.Length - 1)
+            ApplyOp(piece, s[..x], true);
+    }
+
+    private static void ApplyOp(PlotPiece piece, string opExpr, bool reversed)
+    {
+        string op;
+        string num;
+        if (opExpr.StartsWith(">=", StringComparison.Ordinal)) { op = ">="; num = opExpr[2..]; }
+        else if (opExpr.StartsWith("<=", StringComparison.Ordinal)) { op = "<="; num = opExpr[2..]; }
+        else if (opExpr.StartsWith(">", StringComparison.Ordinal)) { op = ">"; num = opExpr[1..]; }
+        else if (opExpr.StartsWith("<", StringComparison.Ordinal)) { op = "<"; num = opExpr[1..]; }
+        else return;
+        if (!float.TryParse(num, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out float v))
+            return;
+        if (reversed)
+            op = op switch
+            {
+                ">" => "<", ">=" => "<=", "<" => ">", "<=" => ">=", _ => op,
+            };
+        switch (op)
+        {
+            case ">": piece.MinX = v; piece.MinInclusive = false; break;
+            case ">=": piece.MinX = v; piece.MinInclusive = true; break;
+            case "<": piece.MaxX = v; piece.MaxInclusive = false; break;
+            case "<=": piece.MaxX = v; piece.MaxInclusive = true; break;
+        }
+    }
+
+    /// <summary>兼容模型把分段写成 expr:"\\begin{cases}2^x,&amp;x&gt;0\\\\x^2,&amp;x\\le0\\end{cases}"。</summary>
+    private static bool TryParseCases(string expr, out List<PlotPiece> pieces)
+    {
+        pieces = new List<PlotPiece>();
+        if (string.IsNullOrWhiteSpace(expr)) return false;
+        string s = expr.Trim();
+        if (s.StartsWith("y=", StringComparison.OrdinalIgnoreCase))
+            s = s[2..].Trim();
+        int a = s.IndexOf("\\begin{cases}", StringComparison.Ordinal);
+        if (a < 0) return false;
+        int b = s.IndexOf("\\end{cases}", a, StringComparison.Ordinal);
+        if (b < 0) b = s.Length;
+        string body = s[(a + 13)..b];
+        var rows = body.Split(new[] { "\\\\" }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var raw in rows)
+        {
+            string row = raw.Trim();
+            if (row.Length == 0) continue;
+            string left, right;
+            int amp = row.IndexOf('&');
+            if (amp >= 0)
+            {
+                left = row[..amp];
+                right = row[(amp + 1)..];
+            }
+            else
+            {
+                int comma = FindConditionComma(row);
+                if (comma < 0) { left = row; right = ""; }
+                else { left = row[..comma]; right = row[(comma + 1)..]; }
+            }
+            left = left.Trim().Trim(',', '，', ';', ' ');
+            right = right.Trim().Trim(',', '，', ';', ' ');
+            if (string.IsNullOrWhiteSpace(left)) continue;
+            var piece = new PlotPiece { Expr = left };
+            if (!string.IsNullOrWhiteSpace(right)) ApplyCondition(piece, right);
+            pieces.Add(piece);
+        }
+        return pieces.Count > 0;
+    }
+
+    private static int FindConditionComma(string row)
+    {
+        for (int i = 0; i < row.Length; i++)
+        {
+            if (row[i] != ',' && row[i] != '，') continue;
+            string rest = row[(i + 1)..];
+            if (rest.Contains('x') && (rest.Contains('>') || rest.Contains('<')
+                || rest.Contains('≥') || rest.Contains('≤')
+                || rest.Contains("\\ge") || rest.Contains("\\le")))
+                return i;
+        }
+        return -1;
     }
 
     private static string PieceLabel(IReadOnlyList<PlotPiece> pieces)

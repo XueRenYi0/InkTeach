@@ -1547,22 +1547,31 @@ public partial class InkEngine
         ShowToast("AI 作图中…", 3000);
         _ = Task.Run(async () =>
         {
-            var r = await AiPlotClient.ParseAsync(prompt, cfg, CancellationToken.None)
-                                 .ConfigureAwait(false);
-            bool vector = r.Ok && r.Spec != null
-                          && r.Spec.Kind is "functions" or "conic";
-            ImageData img = null;
-            if (r.Ok && r.Spec != null && !vector) img = PlotRenderer.Render(r.Spec);
-            var done = new AiPlotDone
+            AiPlotDone done;
+            try
             {
-                Ok = r.Ok && (vector || img != null),
-                Error = r.Ok
-                    ? (vector || img != null ? "" : "没有可渲染的数据")
-                    : r.Error,
-                Image = img,
-                Spec = r.Spec,
-                Seconds = r.Seconds,
-            };
+                var r = await AiPlotClient.ParseAsync(prompt, cfg, CancellationToken.None)
+                                     .ConfigureAwait(false);
+                bool vector = r.Ok && r.Spec != null
+                              && r.Spec.Kind is "functions" or "conic";
+                ImageData img = null;
+                if (r.Ok && r.Spec != null && !vector) img = PlotRenderer.Render(r.Spec);
+                done = new AiPlotDone
+                {
+                    Ok = r.Ok && (vector || img != null),
+                    Error = r.Ok
+                        ? (vector || img != null ? "" : "没有可渲染的数据")
+                        : r.Error,
+                    Image = img,
+                    Spec = r.Spec,
+                    Seconds = r.Seconds,
+                };
+            }
+            catch (Exception ex)
+            {
+                // 后台线程绝不能把 _aiPlotBusy 永久卡在 true；否则下一次点“识别作图”只会提示忙。
+                done = new AiPlotDone { Ok = false, Error = ex.Message };
+            }
             Interlocked.Exchange(ref _aiPlotDone, done);
         });
     }
@@ -1570,14 +1579,28 @@ public partial class InkEngine
     /// <summary>选中图片 → 模型直接看图，反推函数/圆锥/几何，插入 Figure/Image。</summary>
     internal void InsertAiPlotFromImageFromUi(Stroke image)
     {
+        if (image?.Image == null)
+        {
+            ShowToast("请先选中一张图片");
+            return;
+        }
+        byte[] png = ExportFormats.Encode("plot-sel.png", image.Image.Bgra,
+                                          image.Image.Width, image.Image.Height, 0, out _);
+        InsertAiPlotFromPngFromUi(
+            png, "这是一道数学题或数学图形，请根据图中的函数/圆锥/几何关系作图。");
+    }
+
+    /// <summary>手写选区/图片 PNG → 模型直接看图（不再强制先 OCR 成文字）。</summary>
+    internal void InsertAiPlotFromPngFromUi(byte[] png, string prompt)
+    {
         if (_aiPlotBusy)
         {
             ShowToast("AI 正在作图，请稍等");
             return;
         }
-        if (image?.Image == null)
+        if (png == null || png.Length == 0)
         {
-            ShowToast("请先选中一张图片");
+            ShowToast("选区渲染失败");
             return;
         }
         var cfg = OcrClient.LoadConfig();
@@ -1590,44 +1613,46 @@ public partial class InkEngine
         ShowToast("AI 识别作图中…", 3000);
         _ = Task.Run(async () =>
         {
-            byte[] png = ExportFormats.Encode("plot-sel.png", image.Image.Bgra,
-                                              image.Image.Width, image.Image.Height, 0,
-                                              out _);
-            AiPlotClient.Result r;
-            if (png == null || png.Length == 0)
-                r = new AiPlotClient.Result { Error = "图片编码失败" };
-            else
-                r = await AiPlotClient.ParseImageAsync(
-                        png, "这是一道数学题或数学图形，请根据图中的函数/圆锥/几何关系作图。",
+            AiPlotDone done;
+            try
+            {
+                AiPlotClient.Result r = await AiPlotClient.ParseImageAsync(
+                        png, prompt ?? "根据图中的数学内容作图。",
                         cfg, CancellationToken.None).ConfigureAwait(false);
-            // 模型不支持看图/看图失败：退回 OCR 文字，再走同一套解析。
-            if (!r.Ok)
-            {
-                var ocr = await OcrClient.RecognizeAsync(
-                        png, cfg, OcrClient.BoardPrompt, CancellationToken.None,
-                        withBoxes: false).ConfigureAwait(false);
-                if (ocr.Ok)
+                // 模型不支持看图/看图失败：退回 OCR 文字，再走同一套解析。
+                if (!r.Ok)
                 {
-                    string text = string.Join("\n", ocr.Lines);
-                    if (!string.IsNullOrWhiteSpace(text))
-                        r = await AiPlotClient.ParseAsync(text, cfg, CancellationToken.None)
-                                         .ConfigureAwait(false);
+                    var ocr = await OcrClient.RecognizeAsync(
+                            png, cfg, OcrClient.BoardPrompt, CancellationToken.None,
+                            withBoxes: false).ConfigureAwait(false);
+                    if (ocr.Ok)
+                    {
+                        string text = string.Join("\n", ocr.Lines);
+                        if (!string.IsNullOrWhiteSpace(text))
+                            r = await AiPlotClient.ParseAsync(text, cfg, CancellationToken.None)
+                                             .ConfigureAwait(false);
+                    }
                 }
+                bool vector = r.Ok && r.Spec != null
+                              && r.Spec.Kind is "functions" or "conic";
+                ImageData img = null;
+                if (r.Ok && r.Spec != null && !vector) img = PlotRenderer.Render(r.Spec);
+                done = new AiPlotDone
+                {
+                    Ok = r.Ok && (vector || img != null),
+                    Error = r.Ok
+                        ? (vector || img != null ? "" : "没有可渲染的数据")
+                        : r.Error,
+                    Image = img,
+                    Spec = r.Spec,
+                    Seconds = r.Seconds,
+                };
             }
-            bool vector = r.Ok && r.Spec != null
-                          && r.Spec.Kind is "functions" or "conic";
-            ImageData img = null;
-            if (r.Ok && r.Spec != null && !vector) img = PlotRenderer.Render(r.Spec);
-            var done = new AiPlotDone
+            catch (Exception ex)
             {
-                Ok = r.Ok && (vector || img != null),
-                Error = r.Ok
-                    ? (vector || img != null ? "" : "没有可渲染的数据")
-                    : r.Error,
-                Image = img,
-                Spec = r.Spec,
-                Seconds = r.Seconds,
-            };
+                // 后台线程绝不能把 _aiPlotBusy 永久卡在 true。
+                done = new AiPlotDone { Ok = false, Error = ex.Message };
+            }
             Interlocked.Exchange(ref _aiPlotDone, done);
         });
     }

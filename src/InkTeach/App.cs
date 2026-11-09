@@ -6833,6 +6833,71 @@ internal sealed partial class App : InkEngine.InkEngine
             Console.WriteLine("出图：reports/aiplot-piecewise-ai.bmp");
         }
 
+        // 用户实际题面（含 y=kx + 分段 + “交点个数”）：只作图，不求交点。
+        string userPlotPrompt =
+            "画图：y=kx 与 y=\\begin{cases}2^x,&x>0\\\\x^2,&x\\le0\\end{cases} " +
+            "的交点个数；我只需要图，不需要求交点。";
+        var userAi = cfg.IsConfigured
+            ? Task.Run(() => AiPlotClient.ParseAsync(userPlotPrompt, cfg,
+                                                     CancellationToken.None))
+                    .GetAwaiter().GetResult()
+            : new AiPlotClient.Result { Error = "AI 未配置" };
+        int userPieces = 0, userSeries = 0;
+        if (userAi.Spec != null)
+        {
+            userSeries = userAi.Spec.Series.Count;
+            foreach (var s in userAi.Spec.Series) userPieces += s.Pieces.Count;
+        }
+        Console.WriteLine($"用户例：ok={userAi.Ok} kind={userAi.Spec?.Kind} " +
+                          $"series={userSeries} pieces={userPieces} " +
+                          $"params={userAi.Spec?.Params.Count ?? 0} error={userAi.Error}");
+        if (userAi.Spec != null && userSeries > 0)
+        {
+            InsertPlotFigureForTest(userAi.Spec, "reports/aiplot-user-piecewise.bmp");
+            Console.WriteLine("出图：reports/aiplot-user-piecewise.bmp");
+        }
+
+        // 真实题目图片（如果有这张临时截图）：直接走“选中图片 → 识别作图”的模型路径。
+        string userShot = Path.Combine(Path.GetTempPath(),
+            "ScreenShot_2026-11-09_212833_557.png");
+        if (cfg.IsConfigured && File.Exists(userShot))
+        {
+            var imgAi = Task.Run(() => AiPlotClient.ParseImageAsync(
+                File.ReadAllBytes(userShot),
+                "这是一道数学题，只需要画出图中的函数图象，不求交点。",
+                cfg, CancellationToken.None)).GetAwaiter().GetResult();
+            int ip = 0, isr = 0;
+            if (imgAi.Spec != null)
+            {
+                isr = imgAi.Spec.Series.Count;
+                foreach (var s in imgAi.Spec.Series) ip += s.Pieces.Count;
+            }
+            Console.WriteLine($"用户图片：ok={imgAi.Ok} kind={imgAi.Spec?.Kind} " +
+                              $"series={isr} pieces={ip} " +
+                              $"params={imgAi.Spec?.Params.Count ?? 0} error={imgAi.Error}");
+            if (imgAi.Spec != null && isr > 0)
+            {
+                InsertPlotFigureForTest(imgAi.Spec, "reports/aiplot-user-image.bmp");
+                Console.WriteLine("出图：reports/aiplot-user-image.bmp");
+            }
+        }
+
+        // 条件/LaTeX cases 两种模型写法都要能落到 pieces。
+        string condJson = """
+        {"kind":"functions","functions":[{"pieces":[
+          {"expr":"2^x","condition":"x>0"},
+          {"expr":"x^2","condition":"x<=0"}]}],"domain":[-5,5]}
+        """;
+        string casesJson = """
+        {"kind":"functions","functions":[{"expr":"\\begin{cases}2^x,&x>0\\\\x^2,&x\\le0\\end{cases}"}],"domain":[-5,5]}
+        """;
+        var condSpec = PlotSpecJson.Read(condJson);
+        var casesSpec = PlotSpecJson.Read(casesJson);
+        Console.WriteLine($"条件解析：pieces={condSpec?.Series[0].Pieces.Count ?? 0} " +
+                          $"min0={condSpec?.Series[0].Pieces[0].MinInclusive} " +
+                          $"max0={condSpec?.Series[0].Pieces[1].MaxInclusive}");
+        Console.WriteLine($"cases解析：pieces={casesSpec?.Series[0].Pieces.Count ?? 0}");
+
         // v1.6 平面几何：AI 给点/线段，本地结构化渲染。
         var planeAi = cfg.IsConfigured
             ? Task.Run(() => AiPlotClient.ParseAsync(

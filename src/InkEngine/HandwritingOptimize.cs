@@ -85,6 +85,29 @@ public partial class InkEngine
                 return;
             }
         }
+
+        // 手写选区：直接把笔迹渲染成 PNG 让模型看图，不再先 OCR 再解析。
+        // 这样大括号/分段/上下标不会在“OCR → 文本 → 再解析”两步里丢一次。
+        var ink = new List<Stroke>();
+        foreach (var s in Doc.Selected)
+        {
+            if (s == null || s.Kind != StrokeKind.Freehand || s.Tool == Tool.Highlighter
+                || s.Locked || s.IsImage || s.IsShape) continue;
+            ink.Add(s);
+        }
+        if (ink.Count > 0)
+        {
+            var region = EditRegion.Of(ink);
+            byte[] png = region.IsEmpty ? null : RenderSelectionPng(ink, region);
+            if (png != null)
+            {
+                SetHandOcrStatus("正在看图作图中…");
+                InsertAiPlotFromPngFromUi(
+                    png, "这是一道手写数学题/函数题，请只根据题目作图，不需要求交点。");
+                return;
+            }
+        }
+
         StartHandOcr(HandOcrMode.Plot, true);
     }
 
