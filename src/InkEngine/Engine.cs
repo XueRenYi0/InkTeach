@@ -6799,6 +6799,16 @@ public partial class InkEngine
         return placed != null;
     }
 
+    /// <summary>截图完成 → 直接拿这张图去“识别作图”；图仍保留在画布上，可再手动选。</summary>
+    private void ConfirmCaptureAndPlot()
+    {
+        if (!ConfirmCapture()) return;
+        Stroke image = null;
+        foreach (var s in Doc.Selected)
+            if (s.Kind == StrokeKind.Image) { image = s; break; }
+        if (image != null) InsertAiPlotFromImageFromUi(image);
+    }
+
     /// <summary>
     /// 兜底：冻结帧不在（按下时抓失败）时按老路径**现抓**——
     /// 隐藏界面模式藏整个覆盖层（60ms 的闪就闪在这里），直接截取只藏我们的框/光标。
@@ -6859,25 +6869,26 @@ public partial class InkEngine
     internal bool CaptureCancelHit(float x, float y) => CaptureCancelRect().Contains(x, y);
 
     /// <summary>调整阶段的两颗按钮：「✓ 完成」「✕ 取消」。挂在框的右下方，贴边自动翻面。</summary>
-    internal void CaptureButtons(out RectF ok, out RectF cancel)
+    internal void CaptureButtons(out RectF ok, out RectF cancel, out RectF ai)
     {
         float w = CaptureBtnWLogical * DpiScale, h = CaptureBtnHLogical * DpiScale;
         float gap = CaptureBtnGapLogical * DpiScale;
         var vp = ViewportCanvas;
-        float x0 = CapMaxX - (w * 2 + gap);
-        x0 = Math.Clamp(x0, vp.MinX + 4f, MathF.Max(vp.MinX + 4f, vp.MaxX - (w * 2 + gap) - 4f));
+        float x0 = CapMaxX - (w * 3 + gap * 2);
+        x0 = Math.Clamp(x0, vp.MinX + 4f, MathF.Max(vp.MinX + 4f, vp.MaxX - (w * 3 + gap * 2) - 4f));
         float y0 = CapMaxY + gap;
         if (y0 + h > vp.MaxY) y0 = CapMinY - gap - h;              // 下方放不下 → 放框上方
         y0 = Math.Clamp(y0, vp.MinY + 4f, MathF.Max(vp.MinY + 4f, vp.MaxY - h - 4f));
-        cancel = new RectF { MinX = x0, MinY = y0, MaxX = x0 + w, MaxY = y0 + h };
-        ok = new RectF { MinX = x0 + w + gap, MinY = y0, MaxX = x0 + w + gap + w, MaxY = y0 + h };
+        ai = new RectF { MinX = x0, MinY = y0, MaxX = x0 + w, MaxY = y0 + h };
+        cancel = new RectF { MinX = x0 + w + gap, MinY = y0, MaxX = x0 + w + gap + w, MaxY = y0 + h };
+        ok = new RectF { MinX = x0 + (w + gap) * 2, MinY = y0, MaxX = x0 + (w + gap) * 2 + w, MaxY = y0 + h };
     }
 
     /// <summary>指针压在哪颗按钮上（✓ / ✕）——光标形状要用。</summary>
     internal bool CaptureButtonHit(float x, float y)
     {
-        CaptureButtons(out var ok, out var cancel);
-        return ok.Contains(x, y) || cancel.Contains(x, y);
+        CaptureButtons(out var ok, out var cancel, out var ai);
+        return ok.Contains(x, y) || cancel.Contains(x, y) || ai.Contains(x, y);
     }
 
     /// <summary>调整阶段 8 个手柄里，指针压在哪个上（没有 = None）。拖动与光标共用同一套判据。</summary>
@@ -6911,8 +6922,9 @@ public partial class InkEngine
         }
 
         // ---- 调整阶段 ----
-        CaptureButtons(out var ok, out var cancel);
+        CaptureButtons(out var ok, out var cancel, out var ai);
         if (ok.Contains(x, y)) { ConfirmCapture(); return true; }
+        if (ai.Contains(x, y)) { ConfirmCaptureAndPlot(); return true; }
         if (cancel.Contains(x, y)) { CancelCapture(); return true; }
 
         _capDragX = x; _capDragY = y;
@@ -17203,9 +17215,28 @@ public partial class InkEngine
 
     /// <summary>当前弹层的行数；0 = 没有弹层。AI 1 行，`⋯` 随对象类型 2/6 行。</summary>
     internal int SelectionMenuRowsNow
-        => SelAiMenuOpen ? SelectionHandles.BarAiMenuRows
+        => SelAiMenuOpen ? AiMenuRows
          : SelMoreMenuOpen ? SelectionHandles.MoreBarOrder(BarSurfaceNow).Length
          : 0;
+
+    /// <summary>
+    /// AI 菜单是否只有“识别作图”：文本/图片/矢量图没有“识别文本”这一步；
+    /// 手写才有“识别文本 / 识别作图”两项。
+    /// </summary>
+    internal bool AiMenuPlotOnly
+    {
+        get
+        {
+            if (Doc.Selected.Count == 0) return false;
+            foreach (var s in Doc.Selected)
+                if (s != null && s.Kind == StrokeKind.Freehand && s.Tool != Tool.Highlighter)
+                    return false;
+            return true;
+        }
+    }
+
+    internal int AiMenuRows
+        => Doc.Selected.Count == 0 ? 0 : (AiMenuPlotOnly ? 1 : 2);
 
     /// <summary>AI 菜单才有状态行（识别进度/结果）；`⋯` 没有。</summary>
     internal bool SelectionMenuHasStatusNow
@@ -18687,7 +18718,11 @@ public partial class InkEngine
                 int row = SelectionHandles.BarMenuRowAt(x, y, menu, ui, SelectionMenuRowsNow);
                 if (SelAiMenuOpen)
                 {
-                    if (row == 0) RecognizeToTextBoxFromUi();
+                    if (AiMenuPlotOnly)
+                    {
+                        if (row == 0) RecognizePlotFromUi();
+                    }
+                    else if (row == 0) RecognizeToTextBoxFromUi();
                     else if (row == 1) RecognizePlotFromUi();
                 }
                 else if (SelMoreMenuOpen)

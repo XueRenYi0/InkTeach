@@ -6425,7 +6425,9 @@ internal sealed partial class OverlayWindow : IDisposable
 
         if (app.SelAiMenuOpen)
         {
-            string[] labels = { "📝 识别文本", "📈 识别作图" };
+            string[] labels = app.AiMenuPlotOnly
+                ? new[] { "📈 识别作图" }
+                : new[] { "📝 识别文本", "📈 识别作图" };
             for (int i = 0; i < labels.Length && i < rows; i++)
             {
                 var r = SelectionHandles.BarMenuRowRectIn(m, i, dpi);
@@ -8912,7 +8914,8 @@ internal sealed partial class OverlayWindow : IDisposable
             Handle(tl); Handle(t); Handle(tr); Handle(r);
             Handle(br); Handle(b); Handle(bl); Handle(l);
 
-            app.CaptureButtons(out var okBtn, out var cancelBtn);
+            app.CaptureButtons(out var okBtn, out var cancelBtn, out var aiBtn);
+            PillButton(aiBtn, "✨ AI 作图", primary: false);
             PillButton(okBtn, "✓ 完成", primary: true);
             PillButton(cancelBtn, "✕ 取消", primary: false);
         }
