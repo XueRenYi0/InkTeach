@@ -580,7 +580,7 @@ public partial class InkEngine
     internal const float CaptureHandleHitLogical = 14f;
 
     /// <summary>「✓ 完成 / ✕ 取消」两颗按钮的尺寸与间距（逻辑像素）。</summary>
-    internal const float CaptureBtnWLogical = 86f, CaptureBtnHLogical = 30f, CaptureBtnGapLogical = 8f;
+    internal const float CaptureBtnWLogical = 96f, CaptureBtnHLogical = 30f, CaptureBtnGapLogical = 8f;
 
     /// <summary>
     /// 截图模式（用户 2026-09-17 要的"对接"，参考 InkClass 的两项菜单）：
@@ -4799,7 +4799,7 @@ public partial class InkEngine
     {
         StampInput();
         EnsureOverlayLayers();           // A4.1：注册浮层适配器（影子路由/后续切换；不产生输入副作用）
-        // 反馈群二维码是全屏覆盖层：任何一点都先关它，这一下不再落到画布/界面。
+        // 反馈群 / 赞赏码是全屏覆盖层：任何一点都先关它，这一下不再落到画布/界面。
         if (FeedbackQrVisible) { HideFeedbackQr(); return; }
         StopTouchFling();                // 任何按下（画布/界面/笔）= 先刹住双指惯性
         _cntDown++;
@@ -4812,6 +4812,9 @@ public partial class InkEngine
         float screenX = sx, screenY = sy;
         float x = sx, y = sy;
         ScreenToCanvas(ref x, ref y);
+
+        // 字体下拉：按下先“武装”拖动；抬起时没拖动才算点选。
+        if (FontListPointerDown(x, y, id)) { ApplyCursor(); return; }
 
         // 文本框编辑中：点编辑框以外 = 先提交，**同一下**继续走文本工具分流。
         //（ClassIn 的行为：点空白马上出新输入框，旧框变成普通显示、不再带操作条。）
@@ -5980,6 +5983,9 @@ public partial class InkEngine
         ScreenToCanvas(ref x, ref y);   // 相机：屏幕 → 画布，下游全按画布坐标走
         PointerX = x; PointerY = y; PointerInside = true;
 
+        // 字体下拉：拖动滚动（含惯性）。
+        if (FontListPointerMove(x, y, id)) { _dirty = true; return; }
+
         // 文本框右侧滚动条拖动：只滚内容，不滚画布。
         if (_textBoxScrollDragging)
         {
@@ -6258,6 +6264,13 @@ public partial class InkEngine
         StampInput();
         _cntUp++;
         uint id = (uint)(wParam.ToInt64() & 0xFFFF);
+        // 字体下拉：拖动结束 = 起惯性；没拖动 = 点行。
+        if (FontListPointerUp(PointerX, PointerY, id))
+        {
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
         if ((_libraryTouchScrollArmed || _libraryTouchScrolling)
             && id != _libraryTouchScrollId)
             return;
@@ -6832,16 +6845,6 @@ public partial class InkEngine
         return placed != null;
     }
 
-    /// <summary>截图完成 → 直接拿这张图去“识别作图”；图仍保留在画布上，可再手动选。</summary>
-    private void ConfirmCaptureAndPlot()
-    {
-        if (!ConfirmCapture()) return;
-        Stroke image = null;
-        foreach (var s in Doc.Selected)
-            if (s.Kind == StrokeKind.Image) { image = s; break; }
-        if (image != null) InsertAiPlotFromImageFromUi(image);
-    }
-
     /// <summary>
     /// 兜底：冻结帧不在（按下时抓失败）时按老路径**现抓**——
     /// 隐藏界面模式藏整个覆盖层（60ms 的闪就闪在这里），直接截取只藏我们的框/光标。
@@ -6901,27 +6904,31 @@ public partial class InkEngine
 
     internal bool CaptureCancelHit(float x, float y) => CaptureCancelRect().Contains(x, y);
 
-    /// <summary>调整阶段的两颗按钮：「✓ 完成」「✕ 取消」。挂在框的右下方，贴边自动翻面。</summary>
-    internal void CaptureButtons(out RectF ok, out RectF cancel, out RectF ai)
+    /// <summary>
+    /// 调整阶段的两颗按钮：「✓ 完成」「✕ 取消」。
+    /// AI 不放在这里（2026-11-11 用户定）：截完就是一张图片，选中后按 AI 即可，
+    /// 截图条只留“完成/取消”，少两颗按钮、少一次误触。
+    /// </summary>
+    internal void CaptureButtons(out RectF ok, out RectF cancel)
     {
         float w = CaptureBtnWLogical * DpiScale, h = CaptureBtnHLogical * DpiScale;
         float gap = CaptureBtnGapLogical * DpiScale;
         var vp = ViewportCanvas;
-        float x0 = CapMaxX - (w * 3 + gap * 2);
-        x0 = Math.Clamp(x0, vp.MinX + 4f, MathF.Max(vp.MinX + 4f, vp.MaxX - (w * 3 + gap * 2) - 4f));
+        float total = w * 2 + gap;
+        float x0 = CapMaxX - total;
+        x0 = Math.Clamp(x0, vp.MinX + 4f, MathF.Max(vp.MinX + 4f, vp.MaxX - total - 4f));
         float y0 = CapMaxY + gap;
         if (y0 + h > vp.MaxY) y0 = CapMinY - gap - h;              // 下方放不下 → 放框上方
         y0 = Math.Clamp(y0, vp.MinY + 4f, MathF.Max(vp.MinY + 4f, vp.MaxY - h - 4f));
-        ai = new RectF { MinX = x0, MinY = y0, MaxX = x0 + w, MaxY = y0 + h };
-        cancel = new RectF { MinX = x0 + w + gap, MinY = y0, MaxX = x0 + w + gap + w, MaxY = y0 + h };
-        ok = new RectF { MinX = x0 + (w + gap) * 2, MinY = y0, MaxX = x0 + (w + gap) * 2 + w, MaxY = y0 + h };
+        cancel = new RectF { MinX = x0, MinY = y0, MaxX = x0 + w, MaxY = y0 + h };
+        ok = new RectF { MinX = x0 + w + gap, MinY = y0, MaxX = x0 + w + gap + w, MaxY = y0 + h };
     }
 
     /// <summary>指针压在哪颗按钮上（✓ / ✕）——光标形状要用。</summary>
     internal bool CaptureButtonHit(float x, float y)
     {
-        CaptureButtons(out var ok, out var cancel, out var ai);
-        return ok.Contains(x, y) || cancel.Contains(x, y) || ai.Contains(x, y);
+        CaptureButtons(out var ok, out var cancel);
+        return ok.Contains(x, y) || cancel.Contains(x, y);
     }
 
     /// <summary>调整阶段 8 个手柄里，指针压在哪个上（没有 = None）。拖动与光标共用同一套判据。</summary>
@@ -6955,9 +6962,8 @@ public partial class InkEngine
         }
 
         // ---- 调整阶段 ----
-        CaptureButtons(out var ok, out var cancel, out var ai);
+        CaptureButtons(out var ok, out var cancel);
         if (ok.Contains(x, y)) { ConfirmCapture(); return true; }
-        if (ai.Contains(x, y)) { ConfirmCaptureAndPlot(); return true; }
         if (cancel.Contains(x, y)) { CancelCapture(); return true; }
 
         _capDragX = x; _capDragY = y;
@@ -12124,6 +12130,9 @@ public partial class InkEngine
                 var menu = SelectionMenuRectNow();
                 if (!menu.IsEmpty && menu.Contains(canvasX, canvasY))
                     return CursorKind.Default;
+                // 字体下拉也是界面。
+                if (FontListOpen && FontListRectNow().Contains(canvasX, canvasY))
+                    return CursorKind.Default;
             }
         }
 
@@ -16956,6 +16965,11 @@ public partial class InkEngine
                 BeginWidthSliderDrag(x, aabb);
                 return true;
 
+            // 「更多…」：打开全部系统字体下拉（2026-11-11）。
+            case SelectionHandles.PanelPart.FaceMore:
+                OpenFontList();
+                return true;
+
             // 线型三格（实线 / 虚线 / 点线）。**格序就是 StrokeDash 的取值**，
             // 所以"第 i 格"能直接转成线型，不用再维护一张对照表（见 StyleCellRect）。
             case SelectionHandles.PanelPart.StyleSolid:
@@ -17360,6 +17374,7 @@ public partial class InkEngine
     internal void StepSelectionMenu()
     {
         if (Doc.Selected.Count == 0) CloseSelectionMenu();
+        StepFontList();
     }
 
     /// <summary>当前弹层的行数；0 = 没有弹层。AI 1 行，`⋯` 随对象类型 2/6 行。</summary>
@@ -17438,6 +17453,12 @@ public partial class InkEngine
         {
             menuRow = SelectionHandles.BarMenuRowAt(x, y, menu, UiUnit, SelectionMenuRowsNow);
             if (menuRow < 0) menuRow = -1;   // -2 = 点在菜单边距/状态行，不算行
+        }
+        // 字体下拉：悬停行高亮。
+        if (FontListOpen)
+        {
+            int lr = SelectionHandles.FontListRowAt(x, y, FontListRectNow(), UiUnit, FontListCapacityNow, FontListScrollPx);
+            if (lr != FontListHover) { FontListHover = lr; _dirty = true; }
         }
         if (SelMenuHover != menuRow) { SelMenuHover = menuRow; _dirty = true; }
         if (menuRow >= 0) hover = -1;
@@ -18659,6 +18680,9 @@ public partial class InkEngine
                                                   SelPanelOpen, SelectionHandles.SwatchCount,
                                                   SingleTextBoxSelection))
                 return AutoSelZone.Furniture;
+            // 字体下拉浮在面板右边：点它不能当成“拖画布/拖对象”。
+            if (FontListOpen && FontListRectNow().Contains(x, y))
+                return AutoSelZone.Furniture;
         }
 
         // ② 手柄（八个缩放柄 / 旋转柄 / 定义元素手柄）。**必须排在"整体拖动"那条前面**：
@@ -18862,6 +18886,14 @@ public partial class InkEngine
                 HandlePickClick(x, y);
                 return true;                        // 色板上的点击一律吃掉（包括空白处）
             }
+            // 字体下拉「更多…」：列表浮在面板右侧，优先于面板本身命中。
+            // 按下只“武装”拖动；抬起时没拖动才应用那一行（鼠标/笔/触摸共用）。
+            else if (FontListOpen
+                     && !FontListRectNow().IsEmpty
+                     && FontListRectNow().Contains(x, y))
+            {
+                return true;                        // 列表上的按下一律吃掉（含空白）
+            }
             else if (SelPanelOpen != SelPanel.None
                      && SelectionHandles.PanelContains(x, y, aabb0, ui, FurnitureViewport,
                                                        SelPanelOpen, SelectionHandles.SwatchCount,
@@ -18877,6 +18909,9 @@ public partial class InkEngine
                 int row = SelectionHandles.BarMenuRowAt(x, y, menu, ui, SelectionMenuRowsNow);
                 if (SelAiMenuOpen)
                 {
+                    // 选了行就收起弹层：以前 AI 菜单点完不关，投影上看着“没反应”，
+                    // 再点一次又只会提示“正在作图”（2026-11-11 用户反馈）。
+                    if (row >= 0) CloseSelectionMenu();
                     switch (AiMenuKindNow)
                     {
                         case AiMenuKind.Hand:
@@ -21180,7 +21215,7 @@ public partial class InkEngine
         if ((Native.GetAsyncKeyState(0x10 /*VK_SHIFT*/) & 0x8000) != 0) mods |= KeyChord.ModShift;
 
         int vk = wParam.ToInt32();
-        // 反馈群二维码：Esc = 关掉（在说明页/面板之前，它是最上面那层）。
+        // 反馈群 / 赞赏码：Esc = 关掉（在说明页/面板之前，它是最上面那层）。
         if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && FeedbackQrVisible)
         {
             HideFeedbackQr();
@@ -21391,6 +21426,12 @@ public partial class InkEngine
         StopTouchFling();                      // 滚轮/触控板接管：先刹住双指惯性
         int delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF);
         Native.GetCursorPos(out var cursor);
+        // 字体下拉：滚轮翻字体列表。
+        if (FontListOpen && FontListRectNow().Contains(PointerX, PointerY))
+        {
+            FontListScrollByPx(-delta / 120f * 3f * FontListRowHeightNow);
+            return IntPtr.Zero;
+        }
         // 选中一个内容溢出的文本框时，滚轮先滚它自己的内容，不滚画布。
         if (Doc.Selected.Count == 1 && Doc.Selected[0].Kind == StrokeKind.TextBox)
         {

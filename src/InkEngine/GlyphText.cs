@@ -23,15 +23,19 @@ public static class GlyphText
     /// <summary>行高 → 字号的经验系数（2026-11-06 楷体调到 1.05，避免压上下行）。</summary>
     public const float SizePerLineHeight = 1.05f;
 
-    /// <summary>安装包里的默认中文楷体（OFL 漓雨手书）。</summary>
+    /// <summary>
+    /// 安装包里的默认中文手写字体（OFL 钟齐志莽行书，4MB）。
+    /// 2026-11-11 用户拍板：不再内嵌 25MB 的漓雨手书，只留这一款；
+    /// 老安装目录里如果还有漓雨，就继续用（升级覆盖后自然消失）。
+    /// </summary>
     public static string CjkFontPath
     {
         get
         {
-            string p = Path.Combine(AppContext.BaseDirectory, "assets", "fonts", "LiyuShoushu.ttf");
+            string p = Path.Combine(AppContext.BaseDirectory, "assets", "fonts", "ZhiMangXing.ttf");
             if (File.Exists(p)) return p;
-            // 老安装包 / 调试目录没有漓雨时，退回随包的志莽行书。
-            p = Path.Combine(AppContext.BaseDirectory, "assets", "fonts", "ZhiMangXing.ttf");
+            // 老安装包 / 调试目录只剩漓雨时，退回它。
+            p = Path.Combine(AppContext.BaseDirectory, "assets", "fonts", "LiyuShoushu.ttf");
             return File.Exists(p) ? p : null;
         }
     }

@@ -78,9 +78,6 @@
     <!-- 手写优化用的 OFL 字体（2026-11-06）：随安装包分发，授权文本同目录。 -->
     <Content Include="assets\fonts\ZhiMangXing.ttf" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="assets\fonts\OFL-ZhiMangXing.txt" CopyToOutputDirectory="PreserveNewest" />
-    <!-- 楷体正文：漓雨手书（OFL，1.6 万字），2026-11-06 用户要求改楷体。 -->
-    <Content Include="assets\fonts\LiyuShoushu.ttf" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="assets\fonts\OFL-LiyuShoushu.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

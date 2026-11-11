@@ -2611,7 +2611,7 @@ internal static class SelectionHandles
     /// 参考 Word 的字体对话框和 ClassIn 文本框条：字体、字号、行距是最常用的三项，
     /// 不再另开三个入口，避免把七格条撑成十格。
     /// </summary>
-    public const int FontFaceCount = 4;
+    private static int FontFaceCount => TextBoxFaces.Visible.Length;
     public const int FontPanelSizeCount = 6;
     public const int FontSpacingCount = 5;
     public const int StyleColumns = 6;
@@ -2897,6 +2897,86 @@ internal static class SelectionHandles
     }
 
     /// <summary>
+    /// 「更多…」下拉：全部系统字体的列表（2026-11-11）。
+    /// 挂在字体面板右侧，放不下翻到左侧，再放不下夹进可见区；一次显示
+    /// <see cref="FontListCapacity"/> 行，滚轮翻。
+    /// </summary>
+    public const int FontListCapacity = 10;
+    public const float FontListRowHeightLogical = 30f;
+    public const float FontListWidthLogical = 340f;
+
+    public static RectF FontListRect(in RectF sel, float dpi, in RectF visible)
+    {
+        var panel = FontPanelRect(sel, dpi, visible);
+        float w = FontListWidthLogical * dpi;
+        // 多留一行给底部的“共 N 个字体 / 显示西文字体”。
+        float h = (FloatPadLogical * 2 + FontListRowHeightLogical * FontListCapacity
+                   + 30f) * dpi;
+        float x = panel.MaxX + 8f * dpi;
+        float y = panel.MinY;
+        if (!visible.IsEmpty)
+        {
+            float margin = BarScreenPaddingLogical * dpi;
+            if (x + w > visible.MaxX - margin) x = panel.MinX - 8f * dpi - w;
+            x = Math.Clamp(x, visible.MinX + margin,
+                           MathF.Max(visible.MinX + margin, visible.MaxX - margin - w));
+            float top = visible.MinY + margin;
+            float bottom = visible.MaxY - margin;
+            y = Math.Clamp(y, top, MathF.Max(top, bottom - h));
+        }
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    public static RectF FontListRowRect(int i, in RectF list, float dpi, float scrollPx = 0f)
+    {
+        float pad = FloatPadLogical * dpi;
+        float rowH = FontListRowHeightLogical * dpi;
+        float y = list.MinY + pad + i * rowH - scrollPx;
+        return new RectF { MinX = list.MinX + pad, MinY = y, MaxX = list.MaxX - pad, MaxY = y + rowH };
+    }
+
+    /// <summary>
+    /// 列表里点到的是**字体下标**（含当前滚动位置）；-1 = 列表内空白，-2 = 列表外。
+    /// </summary>
+    public static int FontListRowAt(float x, float y, in RectF list, float dpi, int rows,
+                                    float scrollPx = 0f)
+    {
+        if (list.IsEmpty) return -2;
+        if (!list.Contains(x, y)) return -2;
+        float pad = FloatPadLogical * dpi;
+        float rowH = FontListRowHeightLogical * dpi;
+        float top = list.MinY + pad - scrollPx;
+        if (y < top || y >= top + rows * rowH) return -1;
+        return (int)MathF.Floor((y - top) / rowH);
+    }
+
+    /// <summary>列表底部的开关条（显示西文字体 / 总数）。</summary>
+    public static RectF FontListFooterRect(in RectF list, float dpi)
+    {
+        float pad = FloatPadLogical * dpi;
+        return new RectF
+        {
+            MinX = list.MinX + pad,
+            MinY = list.MaxY - pad - 26f * dpi,
+            MaxX = list.MaxX - pad,
+            MaxY = list.MaxY - pad,
+        };
+    }
+
+    /// <summary>右侧细滚动条的滑道/滑块（内容没超出时返回空）。</summary>
+    public static RectF FontListScrollTrack(in RectF list, float dpi)
+    {
+        float pad = FloatPadLogical * dpi;
+        return new RectF
+        {
+            MinX = list.MaxX - 9f * dpi,
+            MinY = list.MinY + pad,
+            MaxX = list.MaxX - 4f * dpi,
+            MaxY = list.MaxY - pad - 30f * dpi,
+        };
+    }
+
+    /// <summary>
     /// "挂在操作条某个按钮下面的小面板"——层级和导出共用这一份几何：
     /// 水平对准按钮中心、垂直贴在条下方；下方放不下就翻到选区上方；最后夹进可见区。
     /// </summary>
@@ -3023,8 +3103,10 @@ internal static class SelectionHandles
         LayerBack,
         /// <summary>字号下拉的格子（+ i，0..5）。值刻意离 SwatchBase 远一点，避免区间重叠。</summary>
         FontBase = 20,
-        /// <summary>字体档（+ i，0..3）。</summary>
+        /// <summary>字体档（+ i，0..4：雅黑/楷体/宋体/黑体/手写）。</summary>
         FaceBase = 40,
+        /// <summary>字体面板第 6 格「更多…」：打开全部系统字体下拉。</summary>
+        FaceMore = 50,
         /// <summary>行距档（+ i，0..4）。</summary>
         SpacingBase = 60,
         /// <summary>背景档（+ i，0..3）。</summary>
@@ -3070,6 +3152,9 @@ internal static class SelectionHandles
             for (int i = 0; i < FontFaceCount; i++)
                 if (FontPanelFaceRect(i, sel, dpi, visible).Contains(x, y))
                     return (PanelPart)((int)PanelPart.FaceBase + i);
+            // 第 6 格「更多…」：全部系统字体。
+            if (FontPanelFaceRect(FontFaceCount, sel, dpi, visible).Contains(x, y))
+                return PanelPart.FaceMore;
             for (int i = 0; i < FontPanelSizeCount; i++)
                 if (FontPanelCellRect(i, sel, dpi, visible).Contains(x, y))
                     return (PanelPart)((int)PanelPart.FontBase + i);

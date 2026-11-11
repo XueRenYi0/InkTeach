@@ -210,10 +210,28 @@ internal static class OcrClient
         return null;
     }
 
-    /// <summary>识别一张 PNG。失败时返回 Ok=false + 短错误，不抛异常给界面。</summary>
+    /// <summary>
+    /// 识别一张 PNG。失败时返回 Ok=false + 短错误，不抛异常给界面。
+    ///
+    /// **超时自动重试一次**（2026-11-11 22 张实测）：DashScope 偶发排队，
+    /// 同一张图单次能拖到 113s，重试通常 2–3s 就回来。只重试“超时/取消”，
+    /// 用户主动取消（ct 已取消）不重试；两次都超时就按失败返回，不无限等。
+    /// </summary>
     internal static async Task<OcrResult> RecognizeAsync(byte[] png, OcrConfig cfg,
                                                          string prompt, CancellationToken ct,
                                                          bool withBoxes = false)
+    {
+        var res = await RecognizeOnceAsync(png, cfg, prompt, ct, withBoxes).ConfigureAwait(false);
+        if (res.Ok || ct.IsCancellationRequested || res.Error != "识别超时 / 已取消")
+            return res;
+        var again = await RecognizeOnceAsync(png, cfg, prompt, ct, withBoxes).ConfigureAwait(false);
+        again.Seconds += res.Seconds;
+        return again;
+    }
+
+    private static async Task<OcrResult> RecognizeOnceAsync(byte[] png, OcrConfig cfg,
+                                                            string prompt, CancellationToken ct,
+                                                            bool withBoxes)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var res = new OcrResult();

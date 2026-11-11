@@ -183,7 +183,7 @@ internal static class InkSerializer
     /// v29（2026-11-06）：再追加 **字体档 / 行距 / 逐行墨色**（识别结果按行保留红蓝）。
     /// v30（2026-11-06）：再追加 **逐字墨色 span**（编辑时选中一段改色）。
     /// </summary>
-    public const int FormatVersion = 34;
+    public const int FormatVersion = 35;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -410,6 +410,8 @@ internal static class InkSerializer
             // v33：卡片整体配图（OCR 结果卡用）。
             w.Write(c.Figure != null);
             if (c.Figure != null) WriteImage(w, c.Figure);
+            // v35：具体系统字体家族名（“更多…”下拉选的）；空 = 用枚举档。
+            w.Write(c.FaceName ?? "");
         }
 
         // ---- v34：交互矢量图（只有 Kind == Figure 才写） ----
@@ -765,6 +767,8 @@ internal static class InkSerializer
                     c.Radius = float.IsFinite(rad) ? Math.Clamp(rad, 0f, 40f) : 12f;
                 }
                 if (version >= 33 && r.ReadByte() != 0) c.Figure = ReadImage(r);
+                // v35：具体系统字体家族名（“更多…”下拉选的）；空 = 用枚举档。
+                if (version >= 35) c.FaceName = ReadString(r, 256);
             }
             s.TextBox = c;
             c.Ink = s.Color;

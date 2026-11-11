@@ -441,6 +441,16 @@ internal sealed partial class OverlayWindow : IDisposable
     private RectF _libraryRectPrev = RectF.Empty;
     /// <summary>上一帧选中条弹层（AI/`⋯`）占的矩形（窗口坐标）。</summary>
     private RectF _selMenuRectPrev = RectF.Empty;
+    /// <summary>上一帧字体下拉占的矩形（窗口坐标）。关掉/换位置时靠它擦旧画面。</summary>
+    private RectF _fontListRectPrev = RectF.Empty;
+    /// <summary>上一帧 α 读数胶囊（画直线/拖端点）占的矩形。</summary>
+    private RectF _inclPillRectPrev = RectF.Empty;
+    /// <summary>上一帧多笔吸附胶囊（棱柱）占的矩形。</summary>
+    private RectF _stepPillRectPrev = RectF.Empty;
+    /// <summary>上一帧拖顶点胶囊占的矩形。</summary>
+    private RectF _vertexPillRectPrev = RectF.Empty;
+    /// <summary>上一帧旋转读数占的矩形。</summary>
+    private RectF _rotReadoutRectPrev = RectF.Empty;
 
     /// <summary>上一帧"自绘落点反馈"（橡皮框 / 圆环）占的矩形（窗口坐标）。
     /// **必须并进脏区**：指针一帧里可能移动超过半径（快擦、面积擦的框还会随速度变大变小），
@@ -2889,7 +2899,8 @@ internal sealed partial class OverlayWindow : IDisposable
         try
         {
             float pad = 18f * u;
-            string family = TextBoxFaces.DirectWrite(card.Face);
+            TextBoxFaces.EnsureBundled(card.Face);      // 包内字体首次使用才注册
+            string family = TextBoxFaces.FamilyOf(card);
             // ??????????????????????????? ScrollY?
             float scrolledY = o.Y - card.ScrollY;
             foreach (var line in lines)
@@ -3989,21 +4000,48 @@ internal sealed partial class OverlayWindow : IDisposable
             if (!_selMenuRectPrev.IsEmpty) r.Add(_selMenuRectPrev);
             _selMenuRectPrev = menu.IsEmpty ? RectF.Empty : CanvasRectToWindow(menu);
 
+            // 字体下拉（「更多…」）：**整块都要进脏区**，否则右边那一截不重画，
+            // 看起来就是“显示不全 + 残影”（2026-11-11 用户反馈）。
+            {
+                var fl = app.FontListRectNow();
+                var cur = fl.IsEmpty ? RectF.Empty
+                                     : CanvasRectToWindow(fl.Inflate(cardPad + 4f * dpi));
+                if (!cur.IsEmpty) r.Add(cur);
+                if (!_fontListRectPrev.IsEmpty) r.Add(_fontListRectPrev);
+                _fontListRectPrev = cur;
+            }
+
             // 旋转读数标签贴在旋转手柄外侧，比选中框本身还高出去一截，
             // 同样必须进脏区；拖动中它每帧都在动，靠 _transientHistory 回溯两帧。
             // **文案要和绘制用同一个函数**：单选直线时它是 `α = xx.x°`、别的对象是 `Δ`，
             // 两者宽度不同——脏区按哪个文案算，就得画哪个文案。
-            if (app.SelRotating)
-                r.Add(CanvasRectToWindow(RotationReadoutRect(frame, dpi, CurrentRotationReadout(app)).Inflate(3f * dpi)));
+            // 2026-11-11：结束旋转那一帧也要擦旧位置（否则读数会在屏幕上留残影）。
+            {
+                var cur = RectF.Empty;
+                if (app.SelRotating)
+                {
+                    cur = CanvasRectToWindow(RotationReadoutRect(
+                        frame, dpi, CurrentRotationReadout(app)).Inflate(3f * dpi));
+                    r.Add(cur);
+                }
+                if (!_rotReadoutRectPrev.IsEmpty) r.Add(_rotReadoutRectPrev);
+                _rotReadoutRectPrev = cur;
+            }
 
             // 拖定义元素 / 拖四角时的读数胶囊：挂在"正在拖的那个元素"上方，每帧都跟着指针走，
             // 而且它在元素外侧、根本不在选中框里——漏了这一块就会在屏幕上留一行残影。
             // **文案与绘制同一个函数**（圆的 `r = / d =`、直线的 `α = `、
             // 吸住时的"等边/正方形"宽度都不一样）。
-            if (app.VertexDragging || app.ShapeSnapKind != ShapeSnapKind.None)
+            // 拖定义元素 / 拖四角时的读数胶囊：挂在"正在拖的那个元素"上方，每帧都跟着指针走，
+            // 而且它在元素外侧、根本不在选中框里——漏了这一块就会在屏幕上留一行残影。
+            // 2026-11-11：胶囊消失那一帧也要擦旧位置。
             {
-                var pill = VertexPillRect(app);
-                if (!pill.IsEmpty) r.Add(CanvasRectToWindow(pill.Inflate(3f)));
+                var vp = (app.VertexDragging || app.ShapeSnapKind != ShapeSnapKind.None)
+                    ? VertexPillRect(app) : RectF.Empty;
+                var cur = vp.IsEmpty ? RectF.Empty : CanvasRectToWindow(vp.Inflate(3f));
+                if (!cur.IsEmpty) r.Add(cur);
+                if (!_vertexPillRectPrev.IsEmpty) r.Add(_vertexPillRectPrev);
+                _vertexPillRectPrev = cur;
             }
 
             // 多边形角标（规格 9.7）：**拖顶点时**才有（三角形 / 平行四边形都是），而且每一颗
@@ -4017,17 +4055,38 @@ internal sealed partial class OverlayWindow : IDisposable
         // 画线过程中的 α 读数（用户 2026-09-18 四条之一）。
         // **必须在"有选中对象"那块之外**：画线的时候没有选中对象（没做画完自动选中），
         // 挂在里面的话这块脏区永远不会被算进来，标签就会在屏幕上留一行残影。
-        if (app.ShapeInclinationActive)
-            r.Add(CanvasRectToWindow(InclinationReadoutRect(
-                app.ShapeInclinationAnchor, app.DpiScale,
-                ShapeLineReadout(app)).Inflate(3f)));
+        //
+        // ⚠ 2026-11-11：**收起那一帧也要擦旧位置**。只算"当前还显示着"的矩形，
+        // 抬手/松开后标签消失，旧像素没人重画 → 用户看到"变直线后提示框有残影、
+        // 还显示不全"（脏区少一块，标签被裁掉一角）。
+        {
+            var cur = RectF.Empty;
+            if (app.ShapeInclinationActive)
+            {
+                cur = CanvasRectToWindow(InclinationReadoutRect(
+                    app.ShapeInclinationAnchor, app.DpiScale,
+                    ShapeLineReadout(app)).Inflate(3f));
+                r.Add(cur);
+            }
+            if (!_inclPillRectPrev.IsEmpty) r.Add(_inclPillRectPrev);
+            _inclPillRectPrev = cur;
+        }
 
         // 多笔图形"这一笔吸到了什么"那颗胶囊（现在只有棱柱的「直棱柱」）。
         // **同样必须在"有选中对象"那块之外**：画棱柱的时候一个对象都没选中。
-        if (app.StepSnap != ShapeSnapKind.None)
         {
-            var stepPill = StepSnapPillRect(app);
-            if (!stepPill.IsEmpty) r.Add(CanvasRectToWindow(stepPill.Inflate(3f)));
+            var cur = RectF.Empty;
+            if (app.StepSnap != ShapeSnapKind.None)
+            {
+                var stepPill = StepSnapPillRect(app);
+                if (!stepPill.IsEmpty)
+                {
+                    cur = CanvasRectToWindow(stepPill.Inflate(3f));
+                    r.Add(cur);
+                }
+            }
+            if (!_stepPillRectPrev.IsEmpty) r.Add(_stepPillRectPrev);
+            _stepPillRectPrev = cur;
         }
 
         if (app.ShowHud)
@@ -4607,7 +4666,10 @@ internal sealed partial class OverlayWindow : IDisposable
             if (app.SelPanelOpen == SelPanel.Ink) DrawInkPanel(app, b);
             else if (app.SelPanelOpen == SelPanel.Layer) DrawLayerPanel(app, b);
             else if (app.SelPanelOpen == SelPanel.FontSize && app.SingleTextBoxSelection)
+            {
                 DrawFontPanel(app, b);
+                if (app.FontListOpen) DrawFontList(app, dpi);
+            }
             // 自定义取色板挂在墨迹面板旁边（画在面板之后 = 压在它上面）。
             // 它只在墨迹面板开着时才有意义（面板一关，子面板由引擎一起清掉）。
             if (app.CustomColorOpen && app.SelPanelOpen == SelPanel.Ink) DrawPickPanel(app, b);
@@ -6515,7 +6577,7 @@ internal sealed partial class OverlayWindow : IDisposable
             string[] labels = app.AiMenuKindNow switch
             {
                 InkEngine.AiMenuKind.Hand => new[] { "📝 识别文本", "📈 识别作图" },
-                InkEngine.AiMenuKind.Image => new[] { "🧩 识别成题卡", "📈 识别作图" },
+                InkEngine.AiMenuKind.Image => new[] { "🧩 识别内容", "📈 识别作图" },
                 _ => new[] { "📈 识别作图" },
             };
             for (int i = 0; i < labels.Length && i < rows; i++)
@@ -7114,7 +7176,6 @@ internal sealed partial class OverlayWindow : IDisposable
 
         var box = app.Doc.Selected.Count == 1 ? app.Doc.Selected[0].TextBox : null;
         float currentSize = box?.FontSize ?? 18f;
-        TextBoxFace currentFace = box?.Face ?? TextBoxFace.YaHei;
         float currentSpacing = box?.LineSpacing ?? TextBoxFaces.DefaultLineSpacing;
 
         float pad = SelectionHandles.FloatPadLogical * dpi;
@@ -7146,12 +7207,19 @@ internal sealed partial class OverlayWindow : IDisposable
                 Brush(active ? th.ActiveText : th.Text));
         }
 
-        for (int i = 0; i < TextBoxFaces.All.Length; i++)
+        for (int i = 0; i < TextBoxFaces.Visible.Length; i++)
         {
-            var info = TextBoxFaces.All[i];
+            var info = TextBoxFaces.Visible[i];
+            TextBoxFaces.EnsureBundled(info.Face);      // 格子用字体本身预览，先注册
             var cell = SelectionHandles.FontPanelFaceRect(i, sel, dpi, app.FurnitureViewport);
-            Chip(cell, info.Name, currentFace == info.Face,
+            Chip(cell, info.Name, TextBoxFaces.IsFace(box, info.Face),
                  AiTextFormat(13f * dpi, true, true, false, info.DirectWrite));
+        }
+        // 第 6 格：全部系统字体（2026-11-11 用户定）。
+        {
+            var cell = SelectionHandles.FontPanelFaceRect(TextBoxFaces.Visible.Length,
+                                                          sel, dpi, app.FurnitureViewport);
+            Chip(cell, "更多…", app.FontListOpen, AiTextFormat(12.5f * dpi, false, true, false));
         }
 
         for (int i = 0; i < SelectionHandles.FontPanelSizeCount
@@ -7221,6 +7289,114 @@ internal sealed partial class OverlayWindow : IDisposable
                 new Rect(cell.MinX, cell.MinY, cell.MaxX - cell.MinX, cell.MaxY - cell.MinY),
                 Brush(label));
         }
+    }
+
+    /// <summary>
+    /// 「更多…」字体下拉：只列中文字体（可开关显示西文），顶部“最近使用”。
+    /// 固定 10 行、像素级连续滚动（滚轮 / 触摸拖动 + 惯性），右侧细滚动条；
+    /// 每行**用该字体自己画**（所见即所得），当前字体用强调色。
+    /// </summary>
+    private void DrawFontList(InkEngine app, float dpi)
+    {
+        var list = app.FontListRectNow();
+        if (list.IsEmpty) return;
+        DrawPanelCard(app, list, app.FloatingTheme.CornerRadius * dpi, dpi, opaque: true);
+        var th = app.FloatingTheme;
+        int capacity = app.FontListCapacityNow;
+        float pad = SelectionHandles.FloatPadLogical * dpi;
+        float rowH = app.FontListRowHeightNow;
+        var box = app.SelectedFontTextBox;
+        var entries = app.FontListEntries;
+
+        // 行区 = 列表减去底部开关条；只画真正落在里面的行（列表外不画）。
+        var foot = SelectionHandles.FontListFooterRect(list, dpi);
+        float rowsBottom = foot.MinY - 2f * dpi;
+        {
+            int first = Math.Max(0, (int)MathF.Floor(app.FontListScrollPx / rowH));
+            for (int i = first; i < entries.Length && i < first + capacity + 1; i++)
+            {
+                var r = SelectionHandles.FontListRowRect(i, list, dpi, app.FontListScrollPx);
+                if (r.MaxY < list.MinY + pad || r.MinY > rowsBottom) continue;
+                string family = entries[i];
+                bool active = TextBoxFaces.IsFamily(box, family);
+                if (active || app.FontListHover == i)
+                {
+                    _scratch.Color = active ? th.ActiveBg : th.Hover;
+                    _ctx.FillRoundedRectangle(new RoundedRectangle(
+                        new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 7f * dpi, 7f * dpi),
+                        _scratch);
+                }
+                var fmt = AiTextFormat(14f * dpi, false, false, false, family);
+                float textW = MathF.Max(1f, r.MaxX - r.MinX - pad * 2f - 10f * dpi);
+                string label = Ellipsize(family, fmt, textW);
+                _ctx.DrawText(label, fmt,
+                    new Rect(r.MinX + pad, r.MinY, textW, r.MaxY - r.MinY),
+                    Brush(active ? th.ActiveText : th.Text));
+            }
+
+            // “最近使用”和全部字体之间一条细分隔线。
+            int recent = app.FontListRecentCount;
+            if (recent > 0 && recent < entries.Length)
+            {
+                var last = SelectionHandles.FontListRowRect(recent - 1, list, dpi, app.FontListScrollPx);
+                float y = last.MaxY + 2f * dpi;
+                if (y > list.MinY + pad && y < rowsBottom)
+                {
+                    _scratch.Color = new Color4(0.90f, 0.91f, 0.93f, 1f);
+                    _ctx.DrawLine(new Vector2(last.MinX, y), new Vector2(last.MaxX, y),
+                                  _scratch, MathF.Max(1f, dpi));
+                }
+            }
+        }
+
+        // 右侧细滚动条（内容超出才有）。
+        if (app.FontListMaxScroll > 0.5f)
+        {
+            var track = SelectionHandles.FontListScrollTrack(list, dpi);
+            float ratio = (float)capacity / Math.Max(1, entries.Length);
+            float thumbH = MathF.Max(18f * dpi, (track.MaxY - track.MinY) * ratio);
+            thumbH = MathF.Min(track.MaxY - track.MinY, thumbH);
+            float t = app.FontListScrollPx / MathF.Max(0.01f, app.FontListMaxScroll);
+            float ty = track.MinY + (track.MaxY - track.MinY - thumbH) * Math.Clamp(t, 0f, 1f);
+            _scratch.Color = new Color4(0.86f, 0.88f, 0.91f, 1f);
+            _ctx.FillRoundedRectangle(new RoundedRectangle(
+                new Vortice.RawRectF(track.MinX, track.MinY, track.MaxX, track.MaxY),
+                3f * dpi, 3f * dpi), _scratch);
+            _scratch.Color = new Color4(0.55f, 0.58f, 0.64f, 1f);
+            _ctx.FillRoundedRectangle(new RoundedRectangle(
+                new Vortice.RawRectF(track.MinX, ty, track.MaxX, ty + thumbH),
+                3f * dpi, 3f * dpi), _scratch);
+        }
+
+        // 底部：先铺一条底色盖住半行，再写总数 + 「显示西文字体」开关。
+        _scratch.Color = new Color4(th.Panel.R, th.Panel.G, th.Panel.B, 1f);
+        _ctx.FillRectangle(new Vortice.RawRectF(foot.MinX - 2f * dpi, foot.MinY - 3f * dpi,
+                                                foot.MaxX + 2f * dpi, foot.MaxY + 3f * dpi),
+                           _scratch);
+        var footFmt = AiTextFormat(11.5f * dpi, false, false);
+        string countText = $"共 {entries.Length} 个字体";
+        float cw = MeasureTextWidth(countText, footFmt);
+        _ctx.DrawText(countText, footFmt,
+            new Rect(foot.MinX, foot.MinY, cw + 4f * dpi, foot.MaxY - foot.MinY),
+            Brush(th.TextMuted));
+        string toggle = app.FontListShowLatin ? "显示西文字体 ✓" : "显示西文字体";
+        _ctx.DrawText(toggle, footFmt,
+            new Rect(foot.MinX + cw + 14f * dpi, foot.MinY,
+                     MeasureTextWidth(toggle, footFmt) + 8f * dpi, foot.MaxY - foot.MinY),
+            Brush(app.FontListShowLatin ? th.ActiveText : th.TextMuted));
+    }
+
+    /// <summary>按宽度截断，超出加省略号（字体名太长时不硬裁）。</summary>
+    private string Ellipsize(string text, IDWriteTextFormat fmt, float maxW)
+    {
+        if (string.IsNullOrEmpty(text) || maxW <= 1f) return text ?? "";
+        if (MeasureTextWidth(text, fmt) <= maxW) return text;
+        for (int n = text.Length - 1; n > 0; n--)
+        {
+            string t = text[..n] + "…";
+            if (MeasureTextWidth(t, fmt) <= maxW) return t;
+        }
+        return "…";
     }
 
     private void DrawLayerPanel(InkEngine app, in RectF sel)
@@ -9006,8 +9182,7 @@ internal sealed partial class OverlayWindow : IDisposable
             Handle(tl); Handle(t); Handle(tr); Handle(r);
             Handle(br); Handle(b); Handle(bl); Handle(l);
 
-            app.CaptureButtons(out var okBtn, out var cancelBtn, out var aiBtn);
-            PillButton(aiBtn, "✨ AI 作图", primary: false);
+            app.CaptureButtons(out var okBtn, out var cancelBtn);
             PillButton(okBtn, "✓ 完成", primary: true);
             PillButton(cancelBtn, "✕ 取消", primary: false);
         }

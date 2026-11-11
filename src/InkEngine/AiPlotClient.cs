@@ -75,6 +75,8 @@ internal static class AiPlotClient
             "\"axis\":\"right\",\"equation\":\"x^2/9+y^2/4=1\"},\"domain\":[-6,6],\"title\":\"椭圆\"}\n" +
             "type 为 ellipse/hyperbola/parabola；双曲线用 axis=x 或 y（实轴方向）；" +
             "抛物线用 axis=right/left/up/down、a=焦准距 p。\n" +
+            "**圆**：必须用 type=ellipse 且 a=b（例如 x^2+y^2=4 → a=b=2），绝对不要给 a≠b；" +
+            "只有方程/图形本身是椭圆时才给 a≠b。\n" +
             "3) 平面几何：\n" +
             "{\"kind\":\"plane\",\"figure\":{\"kind\":\"geometry2d\"," +
             "\"points\":{\"A\":[0,0],\"B\":[4,0],\"C\":[0,3]}," +
@@ -170,6 +172,7 @@ internal static class AiPlotClient
                 return res;
             }
             NormalizeLogNotation(spec, request);
+            NormalizeCircle(spec, request);
 
             if (spec.Kind is "plane" or "solid")
             {
@@ -271,6 +274,43 @@ internal static class AiPlotClient
             spec.Title = PlotSpecJson.HighSchool(spec.Title);
         }
         PlotSpecJson.RefreshLabels(spec);
+    }
+
+    /// <summary>
+    /// 「画一个圆」必须画成正圆（2026-11-11 用户反馈：模型 returned a≠b，圆画成了椭圆）。
+    ///
+    /// 两条判据，任一成立就把 b 拉回 a：
+    ///   · 方程是圆的标准式/一般式：`x^2+y^2=4`、`(x-1)^2+(y+2)^2=9`；
+    ///   · 请求里明确说“圆”且没说“椭圆”。
+    /// 椭圆题（方程 x^2/9+y^2/4=1 或请求含“椭圆”）不受影响。
+    /// </summary>
+    internal static void NormalizeCircle(PlotSpec spec, string request)
+    {
+        var c = spec?.Conic;
+        if (c == null || !string.Equals(c.Type, "ellipse", StringComparison.OrdinalIgnoreCase))
+            return;
+        if (MathF.Abs(c.A - c.B) < 0.001f) return;
+
+        string q = request ?? "";
+        bool askedEllipse = q.Contains("椭圆", StringComparison.Ordinal);
+        bool askedCircle = q.Contains("圆", StringComparison.Ordinal) && !askedEllipse;
+
+        string eq = (c.Equation ?? "").Replace(" ", "")
+                                        .Replace("²", "^2")
+                                        .Replace("（", "(").Replace("）", ")");
+        bool eqCircle = eq.Contains("x^2+y^2=", StringComparison.Ordinal)
+                     || System.Text.RegularExpressions.Regex.IsMatch(
+                            eq, @"\(x[^)]*\)\^2\+\(y[^)]*\)\^2=");
+
+        if (!askedCircle && !(eqCircle && !askedEllipse)) return;
+
+        float r = MathF.Max(c.A, c.B);       // 取大的一边当半径，宁可画大不画小
+        c.A = r;
+        c.B = r;
+        if (!string.IsNullOrWhiteSpace(c.Label) && c.Label.Contains("椭圆", StringComparison.Ordinal))
+            c.Label = c.Label.Replace("椭圆", "圆");
+        if (!string.IsNullOrWhiteSpace(spec.Title) && spec.Title.Contains("椭圆", StringComparison.Ordinal))
+            spec.Title = spec.Title.Replace("椭圆", "圆");
     }
 
     private static string RewriteLog(string expr, bool toLg)

@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Text.RegularExpressions;
 using Vortice.Mathematics;
 
 namespace InkEngine;
@@ -91,8 +92,14 @@ internal sealed class TextBoxData
     /// <summary>正文字号（逻辑像素，乘 <see cref="Unit"/> 后是画布像素）。</summary>
     public float FontSize = 14.5f;
 
-    /// <summary>普通文本框的字体档（雅黑 / 楷体 / 宋体 / 黑体）。</summary>
+    /// <summary>普通文本框的字体档（雅黑 / 楷体 / 宋体 / 黑体 / 手写）。</summary>
     public TextBoxFace Face = TextBoxFace.YaHei;
+
+    /// <summary>
+    /// 字体面板「更多…」里选的具体系统字体家族名；空 = 用 <see cref="Face"/> 枚举档。
+    /// 存盘会一起写（v35），换机器没这个字体时绘制自动回退默认字体。
+    /// </summary>
+    public string FaceName = "";
 
     /// <summary>行距倍数（1.0 = 紧凑，1.55 = 现有默认）。只影响普通文本框。</summary>
     public float LineSpacing = TextBoxFaces.DefaultLineSpacing;
@@ -604,20 +611,33 @@ internal static class TextBoxLayout
         var lines = new List<TextBoxLine>();
 
         float y = 14f * u;
-        AddText(lines, card.Title, pad, y, baseSize * 1.1f, 24f * u, TextBoxInk.Black, bold: true);
-        y += 24f * u;
-
-        AddText(lines, card.Meta, pad, y, baseSize * 0.76f, 16f * u, TextBoxInk.Muted);
-        y += 18f * u;
-
-        AddDivider(lines, pad, right, y);
-        y += 10f * u;
+        // 标题 / 来源行：**空了就不占地方**。图片识别出来的题卡不带模型名和耗时，
+        // 上课投影不该出现 “qwen3.5-ocr → deepseek-flash · 1.8s + 1.8s” 这种字。
+        if (!string.IsNullOrWhiteSpace(card.Title))
+        {
+            AddText(lines, card.Title, pad, y, baseSize * 1.1f, 24f * u, TextBoxInk.Black, bold: true);
+            y += 24f * u;
+        }
+        if (!string.IsNullOrWhiteSpace(card.Meta))
+        {
+            AddText(lines, card.Meta, pad, y, baseSize * 0.76f, 16f * u, TextBoxInk.Muted);
+            y += 18f * u;
+        }
+        if (y > 14f * u)
+        {
+            AddDivider(lines, pad, right, y);
+            y += 10f * u;
+        }
 
         for (int qi = 0; qi < card.Questions.Count; qi++)
         {
             var q = card.Questions[qi];
-            AddText(lines, $"第 {qi + 1} 题", pad, y, baseSize * 0.76f, 15f * u, TextBoxInk.Muted);
-            y += 17f * u;
+            // 只有一道题就不写“第 1 题”，省一行、投影也更干净。
+            if (card.Questions.Count > 1)
+            {
+                AddText(lines, $"第 {qi + 1} 题", pad, y, baseSize * 0.76f, 15f * u, TextBoxInk.Muted);
+                y += 17f * u;
+            }
 
             AddRichText(lines, q.Stem, pad, textW, baseSize, 22f * u, u, TextBoxInk.Black, ref y);
             if (q.Figure != null)
@@ -1542,6 +1562,9 @@ public partial class InkEngine
     private volatile AiPlotDone _aiPlotDone;
     private volatile bool _aiPlotBusy;
 
+    /// <summary>自检用：作图请求还在跑（不让测试用固定 sleep 猜时间）。</summary>
+    internal bool AiPlotBusyNow => _aiPlotBusy;
+
     /// <summary>
     /// AI 作图（单解析式 v1）：后台调用模型解析表达式 + 离屏画图，
     /// 完成后再在主线程插入 Image 对象；不在笔迹路径上做任何工作。
@@ -1681,6 +1704,9 @@ public partial class InkEngine
         var done = Interlocked.Exchange(ref _aiPlotDone, null);
         if (done == null) return;
         _aiPlotBusy = false;
+        // 菜单里的进度行要收掉：否则“正在解析作图…”会一直挂着，
+        // 看起来像没执行完（2026-11-11 用户反馈）。
+        SetHandOcrStatus("");
         bool vector = done.Ok && done.Spec != null
                       && done.Spec.Kind is "functions" or "conic";
         if (!done.Ok || (!vector && done.Image == null))
@@ -1725,6 +1751,7 @@ public partial class InkEngine
     private static string ClipAiPlot(string s, int n)
         => string.IsNullOrEmpty(s) ? "" : s.Length <= n ? s : s[..n] + "…";
 
+
     // ---- 图片 → 题卡（2026-11-10）------------------------------------------
 
     private sealed class ImageCardDone
@@ -1736,6 +1763,7 @@ public partial class InkEngine
         public double OcrSeconds, StructSeconds;
         public string SeeModel = "", TextModel = "";
         public bool FallbackOnly;
+        public bool Auto;                 // 截图“识别内容”：自动判断文本 / 题卡
         public string FallbackReason = "";
         public Stroke Source;
     }
@@ -1756,7 +1784,7 @@ public partial class InkEngine
     /// 答案默认不生成：卷面通常没有答案，让模型顺手编一个反而增加核对成本；
     /// 卡上留「生成答案」按钮，需要时再点（<see cref="StartGenerateAnswers(Stroke)"/>）。
     /// </summary>
-    internal void InsertImageCardFromUi(Stroke image)
+    internal void InsertImageCardFromUi(Stroke image, bool autoContent = false)
     {
         if (image?.Image == null)
         {
@@ -1800,6 +1828,7 @@ public partial class InkEngine
             Source = image,
             SeeModel = vcfg.Model,
             TextModel = tcfg.Model,
+            Auto = autoContent,
         };
         _ = Task.Run(async () =>
         {
@@ -1821,12 +1850,23 @@ public partial class InkEngine
                 else
                 {
                     done.OcrText = text;
+                    // “识别内容”：题目还是普通文本，**交给模型判断**（2026-11-11 用户定）。
+                    // 以前用关键词猜，通知里出现“求/已知”就会误判成题卡；
+                    // 现在同一次调用里让模型二选一，普通文本还能顺手去掉页眉/水印。
                     var st = await AiQuestionClient.StructureAsync(
-                            text, tcfg, CancellationToken.None, withAnswer: false).ConfigureAwait(false);
+                            text, tcfg, CancellationToken.None, withAnswer: false,
+                            classify: done.Auto).ConfigureAwait(false);
                     done.StructSeconds = st.Seconds;
                     if (st.Ok)
                     {
-                        done.Items = st.Cards;
+                        if (st.IsPlainText)
+                        {
+                            if (st.PlainText.Trim().Length > 0) done.OcrText = st.PlainText.Trim();
+                        }
+                        else
+                        {
+                            done.Items = st.Cards;
+                        }
                         done.Ok = true;
                     }
                     else
@@ -1881,6 +1921,12 @@ public partial class InkEngine
             cardStroke = BuildRichTextBox(done, u, maxW);
             status = $"已放入识别原文（结构化失败：{ClipAiPlot(done.FallbackReason, 24)}）";
         }
+        else if (done.Auto && done.Items.Count == 0)
+        {
+            // “识别内容”判定为普通文本：直接放一张富文本（公式能渲染）。
+            cardStroke = BuildRichTextBox(done, u, maxW);
+            status = "已识别为文本（不是题目）";
+        }
         else
         {
             cardStroke = BuildQuestionCard(done, u, maxW);
@@ -1892,13 +1938,24 @@ public partial class InkEngine
             return;
         }
 
+        // 新建的题卡沿用用户上次用过的字体（2026-11-11）。
+        if (cardStroke.TextBox != null)
+        {
+            cardStroke.TextBox.Face = DefaultTextFace;
+            cardStroke.TextBox.FaceName = DefaultTextFaceName;
+            cardStroke.TextBox.InvalidateLayout();
+            cardStroke.SyncTextBoxBounds();
+        }
+
         PlaceNearImage(cardStroke, done.Source, screen, u);
         Doc.AddStroke(cardStroke);          // AddStroke 自带一步撤销
         Doc.SelectOnly(new[] { cardStroke });
         SetInkStatus(status);
         ShowToast(done.FallbackOnly
             ? $"识别完成（{done.OcrSeconds:F1}s）：结构化失败，已放原文"
-            : $"识别完成：{done.Items.Count} 道题（{done.OcrSeconds + done.StructSeconds:F1}s）");
+            : done.Auto && done.Items.Count == 0
+                ? $"识别完成：普通文本（{done.OcrSeconds + done.StructSeconds:F1}s）"
+                : $"识别完成：{done.Items.Count} 道题（{done.OcrSeconds + done.StructSeconds:F1}s）");
         _dirty = true;
         NotifyUiStateChanged();
     }
@@ -1936,14 +1993,54 @@ public partial class InkEngine
         return stroke;
     }
 
-    private Stroke BuildQuestionCard(ImageCardDone done, float u, float maxW)
+    /// <summary>
+    /// 模型给的答案/解析经常是**裸 LaTeX**（`\frac{1}{2}`，没有 `$...$`），
+    /// 直接排版就会把反斜杠和花括号原样显示出来。这里补上数学定界符：
+    ///   · 已有 `$...$` / `\(...\)` 的不动；
+    ///   · 整行没有中文、又含反斜杠命令 → 整行包成 `$...$`；
+    ///   · 中英混排 → 只把 `\frac{..}{..}` 这类命令包起来。
+    /// </summary>
+    internal static string FixMathDelimiters(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return s ?? "";
+        s = s.Replace("\\(", "$").Replace("\\)", "$")
+             .Replace("\\[", "$$").Replace("\\]", "$$");
+        if (s.Contains('$')) return s;
+
+        var sb = new System.Text.StringBuilder(s.Length + 16);
+        foreach (string raw in s.Replace("\r\n", "\n").Split('\n'))
+        {
+            string line = raw;
+            if (line.Contains('\\'))
+            {
+                bool cjk = false;
+                foreach (char ch in line)
+                    if (ch >= 0x2E80) { cjk = true; break; }
+                if (!cjk)
+                {
+                    line = "$" + line.Trim() + "$";
+                }
+                else
+                {
+                    line = Regex.Replace(line,
+                        @"\\[a-zA-Z]+(?:\s*\{[^{}]*\})*",
+                        m => "$" + m.Value + "$");
+                }
+            }
+            sb.AppendLine(line);
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    private static Stroke BuildQuestionCard(ImageCardDone done, float u, float maxW)
     {
         var c = new TextBoxData
         {
             Role = TextBoxRole.AiQuestion,
-            Title = $"图片识别 · {done.Items.Count} 道",
-            Meta = $"{done.SeeModel} → {done.TextModel} · " +
-                   $"{done.OcrSeconds:F1}s + {done.StructSeconds:F1}s · 请核对",
+            // 卡面只留题目本身：模型名、耗时、来源都不进投影。
+            // 需要核对时已经在题干前标「请核对」，不用再写一遍。
+            Title = "",
+            Meta = "",
             Unit = u,
             AutoHeight = true,
             FontSize = 14.5f,
@@ -1958,10 +2055,10 @@ public partial class InkEngine
             if (it.NeedReview) stem = "【请核对】" + stem;
             c.Questions.Add(new TextBoxQuestion
             {
-                Stem = stem,
+                Stem = FixMathDelimiters(stem),
                 // 答案默认空：卷面本来就没有答案，AI 顺手编的答案核对成本更高。
-                Answer = it.Answer ?? "",
-                Analysis = it.Analysis ?? "",
+                Answer = FixMathDelimiters(it.Answer ?? ""),
+                Analysis = FixMathDelimiters(it.Analysis ?? ""),
             });
         }
         c.SetWidth(Math.Clamp(560f * u, 320f * u, maxW));
@@ -1972,9 +2069,11 @@ public partial class InkEngine
     /// <summary>结构化失败：把 OCR 原文放进**富文本只读框**（能渲染 $...$ 公式）。</summary>
     private Stroke BuildRichTextBox(ImageCardDone done, float u, float maxW)
     {
-        string head = string.IsNullOrWhiteSpace(done.FallbackReason)
-            ? "【识别原文】"
-            : $"【识别原文 · 结构化失败：{ClipAiPlot(done.FallbackReason, 28)}】";
+        string head = done.FallbackOnly
+            ? (string.IsNullOrWhiteSpace(done.FallbackReason)
+                ? "【识别原文】"
+                : $"【识别原文 · 结构化失败：{ClipAiPlot(done.FallbackReason, 28)}】")
+            : "【识别文本】";
         var c = TextBoxData.CreatePlain(head + "\n" + done.OcrText, u,
                                         Math.Clamp(560f * u, 320f * u, maxW), 120f * u);
         c.Role = TextBoxRole.Normal;
@@ -2098,6 +2197,8 @@ public partial class InkEngine
         sb.Append("请为下面这些题目分别给出答案和解析。只输出 JSON 数组，顺序与题号一致：\n");
         sb.Append("[{\"stem\":\"题干\",\"answer\":\"答案\",\"analysis\":\"解析\"}]\n");
         sb.Append("规则：不要改题干；answer 给最终结果；analysis 先思路后步骤，≤200 个汉字；");
+        sb.Append("**所有数学式子用 LaTeX，并放在 $...$ 里**（如 $x=\\frac{1}{2}$、$a_n=2n-1$），");
+        sb.Append("不要写成 a_n 或 x^2 这种纯文本；");
         sb.Append("如果题目条件不足或你算不稳，就在 answer 写“无法确定”并在 analysis 里说明。\n\n");
         for (int k = 0; k < missing.Count; k++)
         {
@@ -2168,8 +2269,8 @@ public partial class InkEngine
         {
             var q = card.Questions[missing[k]];
             var it = done.Items[k];
-            q.Answer = string.IsNullOrWhiteSpace(it.Answer) ? "无法确定" : it.Answer.Trim();
-            q.Analysis = it.Analysis ?? "";
+            q.Answer = FixMathDelimiters(string.IsNullOrWhiteSpace(it.Answer) ? "无法确定" : it.Answer.Trim());
+            q.Analysis = FixMathDelimiters(it.Analysis ?? "");
         }
         card.ShowAnswers = true;
         card.Meta = AddAnswerNote(card.Meta);
@@ -2197,8 +2298,8 @@ public partial class InkEngine
         if (card == null || index < 0 || index >= card.Questions.Count) return;
         var before = SnapshotAnswers(card, out bool showBefore, out string metaBefore);
         var beforeBounds = s.PaddedBounds;
-        card.Questions[index].Answer = answer ?? "";
-        card.Questions[index].Analysis = analysis ?? "";
+        card.Questions[index].Answer = FixMathDelimiters(answer ?? "");
+        card.Questions[index].Analysis = FixMathDelimiters(analysis ?? "");
         card.ShowAnswers = true;
         card.Meta = AddAnswerNote(card.Meta);
         card.InvalidateLayout();
@@ -2227,9 +2328,9 @@ public partial class InkEngine
 
     private static string AddAnswerNote(string meta)
     {
-        string m = meta ?? "";
-        if (m.Contains("AI 答案", StringComparison.Ordinal)) return m;
-        return m.Length == 0 ? "AI 答案 · 请核对" : m + " · AI 答案请核对";
+        // 卡面保持干净：不写模型名、耗时、“AI 答案”这类来源信息；
+        // “请核对”靠生成后的 toast/状态栏提示，不占卡面。
+        return meta ?? "";
     }
 
     private void RelayoutCard(Stroke s)

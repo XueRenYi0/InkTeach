@@ -94,6 +94,16 @@ internal sealed partial class App
         Check("LaTeX 非法转义能救回", badEsc.Count == 1 && badEsc[0].Stem.Contains("frac"),
               $"count={badEsc.Count}");
 
+        // 答案/解析常是裸 LaTeX（没有 $...$），排版前要补定界符，否则会露出反斜杠
+        string fixedBare = FixMathDelimiters("\\frac{1}{2}");
+        string fixedMix = FixMathDelimiters("答案：\\frac{\\sqrt{3}}{2}");
+        Check("裸 LaTeX 自动补 $...$",
+              fixedBare == "$\\frac{1}{2}$" && fixedMix.Contains("$\\frac{\\sqrt{3}}{2}$"),
+              $"bare={fixedBare} mix={fixedMix}");
+        Check("已有 $...$ 不重复包",
+              FixMathDelimiters("$\\frac{1}{2}$") == "$\\frac{1}{2}$",
+              FixMathDelimiters("$\\frac{1}{2}$"));
+
         // ---- 2. 图片 AI 菜单 ------------------------------------------------
         Doc.Clear();
         Doc.ClearHistory();
@@ -150,12 +160,25 @@ internal sealed partial class App
                 if (l.Kind == TextBoxLineKind.GenerateAnswers) { hasGen = true; break; }
         Check("有「生成答案（AI）」行", hasGen, $"lines={lines?.Count}");
 
+        // 3a. 字体档：题卡和普通文本框共用同一套面板（2026-11-11 用户问）。
+        float faceH0 = tb.LayoutHeight;
+        SetSelectedTextFaceFromUi(1);           // 楷体
+        SettleFrames(120);
+        Check("题卡能换楷体（走文字操作条同一套）",
+              tb.Face == TextBoxFace.KaiTi, $"face={tb.Face}");
+        SetSelectedTextFaceFromUi(0);           // 回雅黑
+        SettleFrames(120);
+        Check("题卡能换回雅黑", tb.Face == TextBoxFace.YaHei, $"face={tb.Face} 高 {faceH0:F0}→{tb.LayoutHeight:F0}");
+        // 换字体各是一步撤销；这里退回原状，别影响后面的“一步撤销”用例。
+        Doc.Undo(); Doc.Undo();
+        SettleFrames(120);
+
         ScreenProbe.SaveBmp("reports/imgcard-result.bmp",
             (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
         Console.WriteLine("出图：reports/imgcard-ai-menu.bmp / reports/imgcard-result.bmp");
 
         // 3b. 模拟“答案已生成”：排版必须立刻换成 答案/解析 两段（不再显示生成按钮）。
-        ApplyAnswersForTest(card, 0, "B", "配方得圆心与半径，直接读出半径 2。");
+        ApplyAnswersForTest(card, 0, "\\frac{\\sqrt{3}}{2}", "由勾股定理得 $a=\\sqrt{3}$。");
         SettleFrames(200);
         bool hasAnswerLine = false, hasToggle = false;
         foreach (var l in tb.EnsureLayout())
@@ -256,7 +279,9 @@ internal sealed partial class App
         Console.WriteLine($"整理模型：{text?.Model}（{text?.BaseUrl}）");
 
         double t0 = NowSeconds();
-        InsertImageCardFromUi(src);
+        bool auto = Environment.GetCommandLineArgs().Contains("auto");
+        Console.WriteLine($"模式：{(auto ? "识别内容（AI 判断题目/文本）" : "识别成题卡")}");
+        InsertImageCardFromUi(src, autoContent: auto);
         int guard = 0;
         while (ImageCardBusy && guard++ < 900) SettleFrames(100);
         SettleFrames(200);
@@ -300,6 +325,40 @@ internal sealed partial class App
                 (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
             Console.WriteLine("出图：reports/imgcard-live-answers.bmp");
         }
+    }
+
+    /// <summary>
+    /// 自检：把已保存的题卡 JSON 重新落成卡（离线），用来看“原图 vs 卡面”的真实排版。
+    ///   --imgcardreplay &lt;图片&gt; &lt;cards.json&gt;
+    /// </summary>
+    private void ImageCardReplayTest(string imgPath, string jsonPath)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 题卡回放（原图 vs 卡面） ===");
+        SetUiFactory(() => new InkUi.FullUi());
+        SettleFrames(160);
+        PassThrough = false;
+        BoardOn = true;
+        ShowHud = false;
+
+        var img = LoadPaperImageForTest(imgPath);
+        if (img == null) { Console.WriteLine($"读不到图片：{imgPath}"); ExitCode = 1; return; }
+        if (!System.IO.File.Exists(jsonPath)) { Console.WriteLine($"读不到 JSON：{jsonPath}"); ExitCode = 1; return; }
+        var items = AiQuestionClient.ParseCards(System.IO.File.ReadAllText(jsonPath));
+        Console.WriteLine($"输入：{imgPath}（{img.Width}×{img.Height}），题卡 {items.Count} 道");
+
+        Doc.Clear();
+        Doc.ClearHistory();
+        Tool = Tool.Marquee;
+        var src = InsertPaperImageForTest(img);
+        var card = InsertImageCardForTest(src, items);
+        SettleFrames(300);
+        var tb = card?.TextBox;
+        Console.WriteLine($"卡：role={tb?.Role} 题数={tb?.Questions.Count} 高={tb?.LayoutHeight:F0}");
+        string name = System.IO.Path.GetFileNameWithoutExtension(imgPath);
+        ScreenProbe.SaveBmp($"reports/gaokao/replay-{name}.bmp",
+            (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
+        Console.WriteLine($"出图：reports/gaokao/replay-{name}.bmp");
     }
 
     /// <summary>

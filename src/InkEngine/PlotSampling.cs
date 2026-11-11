@@ -282,11 +282,14 @@ internal static class PlotSampling
 
     private static string ConicLabel(PlotConic c)
     {
-        string name = (c.Type ?? "").ToLowerInvariant() switch
+        string type = (c.Type ?? "").ToLowerInvariant();
+        bool circle = type != "hyperbola" && type != "parabola"
+                      && MathF.Abs(c.A - c.B) < 0.001f;
+        string name = type switch
         {
             "hyperbola" => "双曲线",
             "parabola" => "抛物线",
-            _ => "椭圆",
+            _ => circle ? "圆" : "椭圆",
         };
         string eq = ConicEquation(c);
         if (string.IsNullOrWhiteSpace(eq)) return name;
@@ -322,6 +325,10 @@ internal static class PlotSampling
                 };
             }
             default:
+                // 圆用标准式（a=b）。模型/用户给成“椭圆 a=b=2”时，
+                // 图例若写 x^2/4+y^2/4=1 会让人以为画错了（2026-11-11 用户反馈）。
+                if (MathF.Abs(a - b) < 0.001f)
+                    return $"{X}+{Y}={F(a * a)}";
                 return $"{X}/{F(a * a)} + {Y}/{F(b * b)} = 1";
         }
     }

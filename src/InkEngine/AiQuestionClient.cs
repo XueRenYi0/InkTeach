@@ -168,6 +168,10 @@ internal static class AiQuestionClient
         public List<CardItem> Cards = new();
         public double Seconds;
         public string Raw = "";
+        /// <summary>“识别内容”由模型自己判断：这段文字不是题目，是普通文本。</summary>
+        public bool IsPlainText;
+        /// <summary>普通文本时，模型整理过的原文（去页眉页脚/水印，保留公式）。</summary>
+        public string PlainText = "";
     }
 
     /// <summary>
@@ -179,7 +183,8 @@ internal static class AiQuestionClient
     ///     所以这里按**平衡花括号**逐个抠，不假设整个回复只有一个对象。
     /// </summary>
     internal static async Task<StructureResult> StructureAsync(
-        string ocrText, OcrClient.OcrConfig cfg, CancellationToken ct, bool withAnswer)
+        string ocrText, OcrClient.OcrConfig cfg, CancellationToken ct, bool withAnswer,
+        bool classify = false)
     {
         var res = new StructureResult();
         if (cfg == null || !cfg.IsConfigured)
@@ -199,7 +204,18 @@ internal static class AiQuestionClient
             string J(string s) => "\"" + JsonEncodedText.Encode(s ?? "").ToString() + "\"";
             string sys = "你是数学备课助手。只输出 JSON，不要 markdown，不要解释。";
             string user =
-                "把下面的题目文本整理成题卡，输出 JSON 数组（即使只有一道题也用数组）：\n" +
+                (classify
+                    ? "先判断这段 OCR 文字属于哪一类：\n" +
+                      "· 【数学题目】：有成组的题目（题号 + 要解答 / 填空 / 选择 / 计算 / 证明），" +
+                      "试卷、练习、作业都算；开头有注意事项、页眉页脚、水印、二维码说明也不影响 —— 仍然按题目处理。\n" +
+                      "· 【普通文本】：通知、笔记、说明、聊天记录、一段叙述，没有要学生作答的题。\n" +
+                      "是数学题目 → 按下面规则输出题卡 JSON 数组。\n" +
+                      "是普通文本 → 只输出一个对象：\n" +
+                      "{\"kind\":\"text\",\"text\":\"整理后的原文\"}\n" +
+                      "  只做整理：去掉页码 / 水印 / 页眉页脚、修断行；公式保留 LaTeX；" +
+                      "不要总结、不要改写、不要加标题。\n\n"
+                    : "") +
+                "把下面的文本整理成题卡，输出 JSON 数组（即使只有一道题也用数组）：\n" +
                 "[{\"stem\":\"题干\",\"options\":[],\"answer\":\"答案\",\"analysis\":\"解析\"," +
                 "\"knowledge\":[],\"need_review\":false}]\n" +
                 "拆分规则（重要）：只有独立题号（1. 2. 3. 或 一、二、）变化时才分卡；" +
@@ -209,7 +225,7 @@ internal static class AiQuestionClient
                       "算出结果和选项对不上就写“请核对”并 need_review=true。\n"
                     : "**不要解题、不要给答案、不要写解析**：answer 与 analysis 一律留空字符串。\n") +
                 "其它：数字 / 条件 / 问法原样保留；选项写完整；无选项给 []；拿不准 need_review=true。\n\n" +
-                "题目：\n" + (ocrText ?? "");
+                "文本：\n" + (ocrText ?? "");
 
             var body = new System.Text.StringBuilder();
             body.Append("{\"model\":").Append(J(cfg.Model))
@@ -268,6 +284,17 @@ internal static class AiQuestionClient
             }
 
             res.Cards = ParseCards(content);
+            if (classify)
+            {
+                string plain = ParsePlainText(content);
+                if (plain != null)
+                {
+                    res.IsPlainText = true;
+                    res.PlainText = plain;
+                    res.Ok = true;
+                    return res;
+                }
+            }
             res.Ok = res.Cards.Count > 0;
             if (!res.Ok) res.Error = "没有解析出题目";
             return res;
@@ -326,6 +353,67 @@ internal static class AiQuestionClient
             }
         }
         return list;
+    }
+
+    /// <summary>
+    /// 普通文本判定：模型按 constraints 输出 `{"kind":"text","text":"..."}`。
+    /// 只有 kind 明确是 text 才算；题目对象里没有 kind，不会被误判。
+    /// </summary>
+    internal static string ParsePlainText(string content)
+    {
+        string s = StripFence(content ?? "");
+        int depth = 0, start = -1;
+        bool inStr = false, esc = false;
+        for (int i = 0; i < s.Length; i++)
+        {
+            char ch = s[i];
+            if (inStr)
+            {
+                if (esc) esc = false;
+                else if (ch == '\\') esc = true;
+                else if (ch == '"') inStr = false;
+                continue;
+            }
+            if (ch == '"') { inStr = true; continue; }
+            if (ch == '{')
+            {
+                if (depth == 0) start = i;
+                depth++;
+            }
+            else if (ch == '}')
+            {
+                if (depth > 0) depth--;
+                if (depth == 0 && start >= 0)
+                {
+                    string obj = s.Substring(start, i - start + 1);
+                    string text = ReadPlainTextObject(obj);
+                    if (text != null) return text;
+                    start = -1;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static string ReadPlainTextObject(string json)
+    {
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(json); }
+        catch
+        {
+            try { doc = JsonDocument.Parse(Regex.Replace(json, @"\\(?![""\\/bfnrtu])", @"\\")); }
+            catch { return null; }
+        }
+        using (doc)
+        {
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return null;
+            if (!root.TryGetProperty("kind", out var k) || k.ValueKind != JsonValueKind.String
+                || !string.Equals(k.GetString(), "text", StringComparison.OrdinalIgnoreCase))
+                return null;
+            string text = RecoverLatexEscapes(Str(root, "text")).Trim();
+            return text.Length > 0 ? text : "";
+        }
     }
 
     private static CardItem ReadCard(string json)

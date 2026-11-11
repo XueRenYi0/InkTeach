@@ -359,17 +359,20 @@ internal sealed class TextBoxStyleAction : EditAction
     private readonly float _afterW, _afterH, _afterFont, _afterSpacing;
     private readonly bool _beforeAuto, _afterAuto;
     private readonly TextBoxFace _beforeFace, _afterFace;
+    private readonly string _beforeFamily, _afterFamily;
     private readonly RectF _beforeBounds, _afterBounds;
 
     public TextBoxStyleAction(Stroke s, Vector2 beforeOrigin,
                               float beforeW, float beforeH, float beforeFont, bool beforeAuto,
-                              TextBoxFace beforeFace, float beforeSpacing, RectF beforeBounds)
+                              TextBoxFace beforeFace, float beforeSpacing, RectF beforeBounds,
+                              string beforeFamily = null)
     {
         _stroke = s;
         var box = s.TextBox;
         _beforeOrigin = beforeOrigin;
         _beforeW = beforeW; _beforeH = beforeH; _beforeFont = beforeFont;
         _beforeAuto = beforeAuto; _beforeFace = beforeFace; _beforeSpacing = beforeSpacing;
+        _beforeFamily = beforeFamily ?? "";
         _beforeBounds = beforeBounds;
 
         _afterOrigin = s.Points.Count > 0 ? new Vector2(s.Points[0].X, s.Points[0].Y) : beforeOrigin;
@@ -379,6 +382,7 @@ internal sealed class TextBoxStyleAction : EditAction
         _afterAuto = box?.AutoHeight ?? beforeAuto;
         _afterFace = box?.Face ?? beforeFace;
         _afterSpacing = box?.LineSpacing ?? beforeSpacing;
+        _afterFamily = box?.FaceName ?? "";
         _afterBounds = s.PaddedBounds;
     }
 
@@ -388,20 +392,21 @@ internal sealed class TextBoxStyleAction : EditAction
 
     public override void Undo(InkDocument doc)
         => Apply(doc, _beforeOrigin, _beforeW, _beforeH, _beforeFont, _beforeAuto,
-                 _beforeFace, _beforeSpacing);
+                 _beforeFace, _beforeSpacing, _beforeFamily);
 
     public override void Redo(InkDocument doc)
         => Apply(doc, _afterOrigin, _afterW, _afterH, _afterFont, _afterAuto,
-                 _afterFace, _afterSpacing);
+                 _afterFace, _afterSpacing, _afterFamily);
 
     private void Apply(InkDocument doc, Vector2 origin, float w, float h, float font, bool auto,
-                       TextBoxFace face, float spacing)
+                       TextBoxFace face, float spacing, string family)
     {
         var box = _stroke.TextBox;
         if (box == null) return;
         box.FontSize = font;
         box.AutoHeight = auto;
         box.Face = face;
+        box.FaceName = family ?? "";
         box.LineSpacing = spacing;
         box.Width = w;
         box.Height = h;

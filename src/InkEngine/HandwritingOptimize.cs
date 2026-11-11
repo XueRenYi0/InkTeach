@@ -74,8 +74,8 @@ public partial class InkEngine
         if (images > 1)
             SetHandOcrStatus($"一次识别一张：先处理选中的第一张（共 {images} 张）");
         else
-            SetHandOcrStatus("正在识别图片里的题目…");
-        InsertImageCardFromUi(image);
+            SetHandOcrStatus("正在识别图片里的内容…");
+        InsertImageCardFromUi(image, autoContent: true);
     }
 
     /// <summary>
@@ -563,13 +563,14 @@ public partial class InkEngine
                               $"OCR {items?.Count ?? 0} 行（bbox {boxes}），几何 {detected.Count} 行，" +
                               $"中位行高 {medianH:F1} → 字号 {fontPx / u:F1}px，行距 {spacing:F2}×");
         }
-        var card = CreatePlainTextBoxAt(text, target, done.InkColor, TextBoxFace.YaHei,
+        var card = CreatePlainTextBoxAt(text, target, done.InkColor, DefaultTextFace,
                                         spacing, fontPx / u, colors, addToDoc: false);
         if (card?.TextBox != null)
         {
             // OCR 结果是**只读富文本卡**：文字 + 公式混排，但不进文字编辑。
             card.TextBox.Rich = true;
             card.TextBox.ReadOnly = true;
+            card.TextBox.FaceName = DefaultTextFaceName;   // 上次用过的字体
             card.TextBox.FitToContent(card.TextBox.Width, 0f, fitWidth: false);
             card.SyncTextBoxBounds();
         }

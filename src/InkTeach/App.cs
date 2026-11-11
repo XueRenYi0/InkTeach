@@ -541,11 +541,40 @@ internal sealed partial class App : InkEngine.InkEngine
             ImageCardTest();
             _quit = true;
         }
+        else if (mode == "--plotfromcard")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PlotFromCardTest();
+            _quit = true;
+        }
+        else if (mode == "--plotlive")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PlotLiveTest(args.Length > 1 ? args[1] : null);
+            _quit = true;
+        }
+        else if (mode == "--facesprobe")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            FacesProbe();
+            _quit = true;
+        }
         else if (mode == "--imgcardlive")
         {
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             ImageCardLiveTest(args.Length > 1 ? args[1] : null);
+            _quit = true;
+        }
+        else if (mode == "--imgcardreplay")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ImageCardReplayTest(args.Length > 1 ? args[1] : null,
+                                args.Length > 2 ? args[2] : null);
             _quit = true;
         }
         else if (mode == "--figurelive")

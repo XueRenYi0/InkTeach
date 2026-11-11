@@ -126,7 +126,7 @@ public partial class InkEngine
     /// （2026-11-01 用户拍板，照 ClassIn 的"文本工具面板 vs 选中操作条"分工。）
     /// </summary>
     /// <summary>选中对象里的第一个文本框（普通文字和 AI 题卡都算；操作条字号用）。</summary>
-    private TextBoxData SelectedFontTextBox
+    internal TextBoxData SelectedFontTextBox
     {
         get
         {
@@ -318,18 +318,340 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
-    /// <summary>文字操作条「字体」：换整个文本框的字体档（雅黑/楷体/宋体/黑体）。</summary>
+    /// <summary>文字操作条「字体」：换整个文本框的字体档（雅黑/楷体/宋体/黑体/手写）。</summary>
     internal void SetSelectedTextFaceFromUi(int index)
     {
-        if (index < 0 || index >= TextBoxFaces.All.Length) return;
-        ApplySelectedTextStyle(TextBoxFaces.All[index].Face, null);
+        if (index < 0 || index >= TextBoxFaces.Visible.Length) return;
+        TextBoxFaces.EnsureBundled(TextBoxFaces.Visible[index].Face);
+        ApplySelectedTextStyle(TextBoxFaces.Visible[index].Face, null);
+        RememberFace(TextBoxFaces.Visible[index].Face, "");
     }
+
+    /// <summary>
+    /// 字体面板「更多…」里选一个系统字体家族名。
+    /// 名字正好等于内置档（如 KaiTi）就落回枚举档，否则存自定义家族名。
+    /// </summary>
+    internal void SetSelectedTextFontFamilyFromUi(string family)
+    {
+        if (string.IsNullOrWhiteSpace(family)) return;
+        family = family.Trim();
+        TextBoxFace? builtin = null;
+        foreach (var info in TextBoxFaces.All)
+            if (TextBoxFaces.SameFace(info, family))
+            { builtin = info.Face; break; }
+
+        if (builtin.HasValue)
+        {
+            TextBoxFaces.EnsureBundled(builtin.Value);
+            ApplySelectedTextStyle(builtin.Value, null);
+            RememberFace(builtin.Value, "");
+        }
+        else
+        {
+            ApplySelectedTextStyle(TextBoxFace.Custom, null, family);
+            RememberFace(TextBoxFace.Custom, family);
+        }
+    }
+
+    /// <summary>
+    /// 「更多…」字体下拉（2026-11-11）：**只列中文字体**（可开关显示西文），
+    /// 顶部是“最近使用”。固定高度 10 行，连续滚动（滚轮 / 触摸拖动 + 惯性），
+    /// 右侧细滚动条；点一行即应用。
+    /// </summary>
+    internal bool FontListOpen;
+    internal float FontListScrollPx;
+    internal int FontListHover = -1;
+
+    private string[] _fontListEntries;
+    private int _fontListRecentCount;
+    private string[] _fontRecent;
+    private bool _fontListShowLatinLoaded;
+    private bool _fontListShowLatin;
+
+    // 触摸拖动 / 惯性（和画布双指惯性同一套衰减参数）
+    private uint _fontListTouchId;
+    private bool _fontListTouchArmed, _fontListTouchScrolling;
+    private float _fontListTouchStartY, _fontListTouchLastY, _fontListTouchVy;
+    private double _fontListTouchLastMs;
+    private float _fontListFlingVy;
+    private bool _fontListFlingActive;
+    private double _fontListFlingLastMs;
+
+    internal bool FontListShowLatin
+    {
+        get
+        {
+            if (!_fontListShowLatinLoaded)
+            {
+                _fontListShowLatinLoaded = true;
+                _fontListShowLatin = GetUiPref("fontListLatin") == "1";
+            }
+            return _fontListShowLatin;
+        }
+    }
+
+    private string[] FontRecent
+    {
+        get
+        {
+            if (_fontRecent != null) return _fontRecent;
+            string raw = GetUiPref("fontRecent") ?? "";
+            var list = new List<string>(6);
+            foreach (string part in raw.Split(';'))
+            {
+                string f = part.Trim();
+                if (f.Length == 0 || list.Contains(f, StringComparer.OrdinalIgnoreCase)) continue;
+                list.Add(f);
+                if (list.Count >= 5) break;
+            }
+            _fontRecent = list.ToArray();
+            return _fontRecent;
+        }
+    }
+
+    internal string[] FontListEntries
+    {
+        get
+        {
+            if (_fontListEntries != null) return _fontListEntries;
+            var all = new HashSet<string>(TextBoxFaces.SystemFamilies,
+                                          StringComparer.OrdinalIgnoreCase);
+            var list = new List<string>(256);
+            // 最近使用（只保留这台机器真的有的字体）
+            foreach (string f in FontRecent)
+                if (all.Contains(f) && !list.Contains(f, StringComparer.OrdinalIgnoreCase))
+                    list.Add(f);
+            _fontListRecentCount = list.Count;
+            // 只列中文字体；开关打开才追加西文。
+            foreach (string f in TextBoxFaces.CjkFamilies)
+                if (!list.Contains(f, StringComparer.OrdinalIgnoreCase)) list.Add(f);
+            if (FontListShowLatin)
+                foreach (string f in TextBoxFaces.SystemFamilies)
+                    if (!list.Contains(f, StringComparer.OrdinalIgnoreCase)) list.Add(f);
+            _fontListEntries = list.ToArray();
+            return _fontListEntries;
+        }
+    }
+
+    internal int FontListRecentCount => FontListEntries.Length > 0 ? _fontListRecentCount : 0;
+    internal int FontListCapacityNow => SelectionHandles.FontListCapacity;
+    internal float FontListRowHeightNow => SelectionHandles.FontListRowHeightLogical * UiUnit;
+    internal float FontListMaxScroll
+        => MathF.Max(0f, FontListEntries.Length * FontListRowHeightNow
+                         - FontListCapacityNow * FontListRowHeightNow);
+
+    internal RectF FontListRectNow()
+    {
+        if (!FontListOpen || Doc.Selected.Count != 1 || !SingleTextBoxSelection)
+            return RectF.Empty;
+        return SelectionHandles.FontListRect(LiveSelectionFrame.CanvasAabb, UiUnit,
+                                             FurnitureViewport);
+    }
+
+    internal void OpenFontList()
+    {
+        FontListOpen = true;
+        FontListHover = -1;
+        _fontListFlingActive = false;
+        // 打开时把当前字体滚进可见区（像素滚动，留 1/3 屏预读）。
+        var box = SelectedFontTextBox;
+        int idx = -1;
+        if (box != null)
+        {
+            string cur = string.IsNullOrWhiteSpace(box.FaceName)
+                ? TextBoxFaces.ListNameOf(box.Face)
+                : box.FaceName;
+            for (int i = 0; i < FontListEntries.Length; i++)
+                if (string.Equals(FontListEntries[i], cur, StringComparison.OrdinalIgnoreCase))
+                { idx = i; break; }
+        }
+        FontListScrollPx = idx < 0
+            ? 0f
+            : Math.Clamp((idx - FontListCapacityNow / 3) * FontListRowHeightNow,
+                         0f, FontListMaxScroll);
+        _dirty = true;
+    }
+
+    internal void CloseFontList()
+    {
+        if (!FontListOpen) return;
+        FontListOpen = false;
+        FontListHover = -1;
+        _fontListFlingActive = false;
+        _fontListTouchArmed = false;
+        _fontListTouchScrolling = false;
+        _fontListTouchId = 0;
+        _dirty = true;
+    }
+
+    /// <summary>每帧兜底：选中没了 / 面板关了，字体下拉跟着关；顺便推进惯性。</summary>
+    internal void StepFontList()
+    {
+        if (!FontListOpen) return;
+        if (Doc.Selected.Count == 0 || !SingleTextBoxSelection || SelPanelOpen != SelPanel.FontSize)
+        {
+            CloseFontList();
+            return;
+        }
+        if (_fontListFlingActive) StepFontListFling();
+    }
+
+    private void StepFontListFling()
+    {
+        double dt = Math.Clamp(NowMs - _fontListFlingLastMs, 0.0,
+                               TouchGestures.FlingMaxStepMs);
+        _fontListFlingLastMs = NowMs;
+        if (dt <= 0) return;
+        FontListScrollByPx(_fontListFlingVy * (float)dt);
+        float decay = MathF.Exp(-TouchGestures.FlingDecayPerSec * (float)(dt / 1000.0));
+        _fontListFlingVy *= decay;
+        if (MathF.Abs(_fontListFlingVy) < TouchGestures.FlingStopVy
+            || FontListScrollPx <= 0.01f || FontListScrollPx >= FontListMaxScroll - 0.01f)
+        {
+            _fontListFlingActive = false;
+            _fontListFlingVy = 0f;
+        }
+    }
+
+    internal void FontListScrollByPx(float dy)
+    {
+        if (dy == 0f) return;
+        float next = Math.Clamp(FontListScrollPx + dy, 0f, FontListMaxScroll);
+        if (MathF.Abs(next - FontListScrollPx) < 0.01f) return;
+        FontListScrollPx = next;
+        _dirty = true;
+    }
+
+    internal void ToggleFontListLatin()
+    {
+        _fontListShowLatin = !FontListShowLatin;
+        _fontListShowLatinLoaded = true;
+        SetUiPref("fontListLatin", _fontListShowLatin ? "1" : null);
+        _fontListEntries = null;
+        FontListScrollPx = 0f;
+        _dirty = true;
+    }
+
+    /// <summary>点字体下拉里的一行（row 就是字体列表里的下标，已含滚动）。</summary>
+    internal void ApplyFontListRow(int row)
+    {
+        if (row < 0 || row >= FontListEntries.Length) return;
+        string family = FontListEntries[row];
+        CloseFontList();
+        SetSelectedTextFontFamilyFromUi(family);
+    }
+
+    /// <summary>记住最近用过的字体（最多 5 个，新的在前）。</summary>
+    private void RememberRecentFont(string family)
+    {
+        if (string.IsNullOrWhiteSpace(family)) return;
+        var list = new List<string> { family };
+        foreach (string f in FontRecent)
+            if (!string.Equals(f, family, StringComparison.OrdinalIgnoreCase)
+                && list.Count < 5)
+                list.Add(f);
+        _fontRecent = list.ToArray();
+        SetUiPref("fontRecent", string.Join(";", list));
+        _fontListEntries = null;        // 下次打开时重排“最近使用”
+    }
+
+    internal bool FontListFlingActiveNow => _fontListFlingActive;
+
+    // ---- 触摸拖动 + 惯性 -------------------------------------------------
+
+    internal bool FontListPointerDown(float x, float y, uint id)
+    {
+        if (!FontListOpen) return false;
+        var r = FontListRectNow();
+        if (r.IsEmpty || !r.Contains(x, y)) return false;
+        _fontListTouchId = id;
+        _fontListTouchArmed = true;
+        _fontListTouchScrolling = false;
+        _fontListTouchStartY = _fontListTouchLastY = y;
+        _fontListTouchVy = 0f;
+        _fontListTouchLastMs = NowMs;
+        _fontListFlingActive = false;
+        return true;
+    }
+
+    internal bool FontListPointerMove(float x, float y, uint id)
+    {
+        if (!FontListOpen || id != _fontListTouchId) return false;
+        if (!_fontListTouchArmed && !_fontListTouchScrolling) return false;
+        if (!_fontListTouchScrolling)
+        {
+            if (MathF.Abs(y - _fontListTouchStartY) < 6f * UiUnit) return true;
+            _fontListTouchScrolling = true;
+        }
+        float dy = y - _fontListTouchLastY;
+        FontListScrollByPx(-dy);
+        double dt = Math.Max(1.0, NowMs - _fontListTouchLastMs);
+        float inst = -dy / (float)dt;
+        _fontListTouchVy = _fontListTouchVy * 0.7f + inst * 0.3f;
+        _fontListTouchLastY = y;
+        _fontListTouchLastMs = NowMs;
+        return true;
+    }
+
+    internal bool FontListPointerUp(float x, float y, uint id)
+    {
+        if (!FontListOpen || id != _fontListTouchId) return false;
+        bool scrolled = _fontListTouchScrolling;
+        _fontListTouchArmed = false;
+        _fontListTouchScrolling = false;
+        _fontListTouchId = 0;
+        if (!scrolled)
+        {
+            var r = FontListRectNow();
+            // 底部开关：显示 / 隐藏西文字体。
+            if (SelectionHandles.FontListFooterRect(r, UiUnit).Contains(x, y))
+            {
+                ToggleFontListLatin();
+                return true;
+            }
+            int row = SelectionHandles.FontListRowAt(x, y, r, UiUnit,
+                                                     FontListCapacityNow, FontListScrollPx);
+            if (row >= 0) ApplyFontListRow(row);
+        }
+        else if (MathF.Abs(_fontListTouchVy) > TouchGestures.FlingStopVy)
+        {
+            _fontListFlingVy = Math.Clamp(_fontListTouchVy,
+                                          -TouchGestures.FlingMaxVy, TouchGestures.FlingMaxVy);
+            _fontListFlingActive = true;
+            _fontListFlingLastMs = NowMs;
+        }
+        return true;
+    }
+
+    /// <summary>把“上一次用过的字体”记进设置；下次新建文本框/题卡就用它。</summary>
+    private void RememberFace(TextBoxFace face, string family)
+    {
+        SetUiPref("textFace", ((int)face).ToString(CultureInfo.InvariantCulture));
+        SetUiPref("textFaceName", string.IsNullOrWhiteSpace(family) ? null : family);
+        RememberRecentFont(string.IsNullOrWhiteSpace(family)
+            ? TextBoxFaces.ListNameOf(face)
+            : family);
+    }
+
+    /// <summary>新建文本框/题卡用的默认字体（用户上次选的那一档）。</summary>
+    internal TextBoxFace DefaultTextFace
+    {
+        get
+        {
+            string s = GetUiPref("textFace");
+            if (int.TryParse(s, out int i) && i >= 0 && i <= (int)TextBoxFace.Custom)
+                return (TextBoxFace)i;
+            return TextBoxFace.YaHei;
+        }
+    }
+
+    internal string DefaultTextFaceName => GetUiPref("textFaceName") ?? "";
 
     /// <summary>文字操作条「行距」：换整个文本框的行距倍数。</summary>
     internal void SetSelectedTextSpacingFromUi(float spacing)
         => ApplySelectedTextStyle(null, spacing);
 
-    private void ApplySelectedTextStyle(TextBoxFace? face, float? spacing)
+    private void ApplySelectedTextStyle(TextBoxFace? face, float? spacing, string family = null)
     {
         if (Doc.Selected.Count != 1) { NotifyUiStateChanged(); return; }
         var s = Doc.Selected[0];
@@ -337,10 +659,14 @@ public partial class InkEngine
         if (s.Kind != StrokeKind.TextBox || box == null) { NotifyUiStateChanged(); return; }
 
         var oldFace = box.Face;
+        string oldFamily = box.FaceName ?? "";
         float oldSpacing = box.LineSpacing;
         var newFace = face ?? oldFace;
+        // 选枚举档 = 清掉自定义家族名；只改行距 = 保留原来的家族名。
+        string newFamily = face.HasValue ? (family ?? "") : oldFamily;
         float newSpacing = TextBoxFaces.ClampSpacing(spacing ?? oldSpacing);
-        if (newFace == oldFace && MathF.Abs(newSpacing - oldSpacing) < 0.001f)
+        if (newFace == oldFace && MathF.Abs(newSpacing - oldSpacing) < 0.001f
+            && string.Equals(newFamily, oldFamily, StringComparison.Ordinal))
         {
             NotifyUiStateChanged();
             return;
@@ -352,6 +678,7 @@ public partial class InkEngine
         bool oldAuto = box.AutoHeight;
 
         box.Face = newFace;
+        box.FaceName = newFamily;
         box.LineSpacing = newSpacing;
         box.InvalidateLayout();
         s.SyncTextBoxBounds();
@@ -365,7 +692,7 @@ public partial class InkEngine
         NotifyUiStateChanged();
 
         var act = new TextBoxStyleAction(s, origin, oldW, oldH, oldFont, oldAuto,
-                                         oldFace, oldSpacing, old);
+                                         oldFace, oldSpacing, old, oldFamily);
         Doc.CommitInteractive(act);
     }
 
@@ -609,6 +936,8 @@ public partial class InkEngine
 
         var data = TextBoxData.CreatePlain("", u, w, h);
         data.FontSize = _textFontSize;
+        data.Face = DefaultTextFace;            // 上次用过的字体，重启也记住
+        data.FaceName = DefaultTextFaceName;
         // CreatePlain 有 120 的最小宽；这里按落点可用宽覆盖，右侧才不会被硬撑出屏幕。
         data.Width = MathF.Max(minW, w);
         data.AutoWidth = true;
@@ -1765,6 +2094,7 @@ public partial class InkEngine
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETBKGNDCOLOR,
                            IntPtr.Zero, new IntPtr(_textBoxEditBackColor));
 
+        TextBoxFaces.EnsureBundled(s.TextBox.Face);     // 编辑框走 GDI，也要能解析包内字体
         var cf = new Native.CHARFORMAT2W
         {
             cbSize = System.Runtime.InteropServices.Marshal.SizeOf<Native.CHARFORMAT2W>(),
@@ -1772,7 +2102,7 @@ public partial class InkEngine
             yHeight = fontTwips,
             crTextColor = (int)_textBoxEditTextColor,
             bCharSet = 1,
-            szFaceName = TextBoxFaces.DirectWrite(s.TextBox.Face),
+            szFaceName = TextBoxFaces.FamilyOf(s.TextBox),
         };
         // 先设默认格式，再刷已有文字：否则下一次 SetWindowText / 新输入会退回系统黑字。
         Native.SendMessageCharFormat(_textBoxEditHwnd, Native.EM_SETCHARFORMAT,
