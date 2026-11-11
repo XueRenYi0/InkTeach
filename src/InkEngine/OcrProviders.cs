@@ -318,4 +318,93 @@ internal static class OcrProviders
     private static string Str(JsonElement e, string name)
         => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
             ? v.GetString() : null;
+
+    // ---- 图片识别成题卡：挑“能看图”和“能写字”的两份配置 -------------------
+
+    /// <summary>
+    /// 这个模型能不能看图、看得好不好（越大越好，0 = 不能看）。
+    /// 2026-11-10 实测：`qwen3.5-ocr` 对中文卷面最稳（22/22，1.2–2.0s）；
+    /// `qwen3.5-omni-flash` 也能看（1.3s，手写批注会串进去）；`Qwen3-VL-32B` 慢（16s）。
+    /// </summary>
+    private static int VisionScore(string model)
+    {
+        string m = (model ?? "").ToLowerInvariant();
+        if (m.Length == 0) return 0;
+        if (m.Contains("embedding") || m.Contains("reranker") || m.Contains("tts") ||
+            m.Contains("whisper") || m.Contains("audio") || m.Contains("realtime") ||
+            m.Contains("livetranslate") || m.Contains("rerank"))
+            return 0;
+        if (m.Contains("ocr")) return 5;
+        if (m.Contains("omni")) return 4;
+        if (m.Contains("vl") || m.Contains("vision")) return 3;
+        if (m.Contains("glm-4.5v") || m.Contains("glm-4v") || m.Contains("-4o")) return 3;
+        if (m.Contains("image") || m.Contains("multimodal")) return 2;
+        // 2026 年的 Qwen3.5–3.8 全系都能看图（qwen3.8-flash / qwen3.7-plus …）。
+        // 分数压到 2：能看图、但实测比专用 OCR 慢很多（8–35s），只做兜底。
+        foreach (string p in QwenImageSeries)
+            if (m.StartsWith(p, StringComparison.Ordinal)) return 2;
+        return 0;
+    }
+
+    private static readonly string[] QwenImageSeries =
+        { "qwen3.8", "qwen3.7", "qwen3.6", "qwen3.5" };
+
+    /// <summary>这个模型是不是“专门 OCR”，不适合拿来写 JSON。</summary>
+    private static bool IsOcrOnly(string model)
+        => (model ?? "").ToLowerInvariant().Contains("ocr");
+
+    /// <summary>
+    /// 挑一份能看图的配置：**当前选中能看就用当前选中的**（用户选的优先），
+    /// 否则在其余有 Key 的配置里按 <see cref="VisionScore"/> 取最高分。
+    /// 返回 null = 一个能看图的都没有。
+    /// </summary>
+    public static OcrProviderProfile PickVision(OcrProviderState state)
+    {
+        if (state == null) return null;
+        var active = state.Active;
+        if (active != null && !string.IsNullOrWhiteSpace(active.Key)
+            && VisionScore(active.Model) > 0)
+            return active;
+
+        OcrProviderProfile best = null;
+        int bestScore = 0;
+        foreach (var p in state.Providers)
+        {
+            if (string.IsNullOrWhiteSpace(p.Key) || string.IsNullOrWhiteSpace(p.BaseUrl)) continue;
+            int score = VisionScore(p.Model);
+            if (score > bestScore) { bestScore = score; best = p; }
+        }
+        return best;
+    }
+
+    /// <summary>
+    /// 挑一份“能写字”的配置（把 OCR 文字整理成题卡）：
+    /// 当前选中能用就用当前选中；但当前若是 `*-ocr` 这种只认字的模型，就换一条别的。
+    /// </summary>
+    public static OcrProviderProfile PickText(OcrProviderState state)
+    {
+        if (state == null) return null;
+        var active = state.Active;
+        if (active != null && !string.IsNullOrWhiteSpace(active.Key)
+            && !IsOcrOnly(active.Model) && active.Model.Length > 0)
+            return active;
+
+        foreach (var p in state.Providers)
+            if (!string.IsNullOrWhiteSpace(p.Key) && !string.IsNullOrWhiteSpace(p.Model)
+                && !IsOcrOnly(p.Model))
+                return p;
+        return active;
+    }
+
+    public static OcrClient.OcrConfig ToConfig(OcrProviderProfile p, string modelOverride = null)
+    {
+        if (p == null) return null;
+        return new OcrClient.OcrConfig
+        {
+            BaseUrl = p.BaseUrl,
+            Key = p.Key,
+            Model = string.IsNullOrWhiteSpace(modelOverride) ? p.Model : modelOverride,
+            Thinking = p.Thinking,
+        };
+    }
 }

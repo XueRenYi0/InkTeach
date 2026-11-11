@@ -109,8 +109,10 @@ internal sealed class CanvasTileCache : IDisposable
     public int VisibleCount => _visible.Count;
     /// <summary>上一帧真正光栅化的块数。</summary>
     public int RasterizedLastFrame { get; private set; }
-    /// <summary>上一帧光栅化花的时间（毫秒）。滚动时新露出来的块算在这里。</summary>
+    /// <summary>上一帧光栅化花的时间（毫秒，含新块纹理创建）。滚动时新露出来的块算在这里。</summary>
     public double RasterMsLastFrame { get; private set; }
+    /// <summary>上一帧“只补画新笔画”那条快路径花的时间（毫秒）。</summary>
+    public double AppendedMsLastFrame { get; private set; }
     /// <summary>上一帧重画的笔画条数（跨块会重复计）。</summary>
     public int StrokesLastFrame { get; private set; }
     /// <summary>累计光栅化块数（含重复）。</summary>
@@ -242,6 +244,7 @@ internal sealed class CanvasTileCache : IDisposable
         RasterizedLastFrame = 0;
         AppendedLastFrame = 0;
         RasterMsLastFrame = 0;
+        AppendedMsLastFrame = 0;
         StrokesLastFrame = 0;
 
         if (visibleCanvas.IsEmpty) return;
@@ -254,9 +257,13 @@ internal sealed class CanvasTileCache : IDisposable
             for (int tx = x0; tx <= x1; tx++)
             {
                 long k = Key(tx, ty);
+                double createMs = 0;
                 if (!_tiles.TryGetValue(k, out var tile))
                 {
+                    var swc = Stopwatch.StartNew();
                     tile = Create(tx, ty);
+                    swc.Stop();
+                    createMs = swc.Elapsed.TotalMilliseconds;
                     _tiles[k] = tile;
                 }
                 tile.LastFrame = _frame;
@@ -266,7 +273,7 @@ internal sealed class CanvasTileCache : IDisposable
                     var sw = Stopwatch.StartNew();
                     StrokesLastFrame += paint(tile.Target, RectOf(tx, ty), null);
                     sw.Stop();
-                    RasterMsLastFrame += sw.Elapsed.TotalMilliseconds;
+                    RasterMsLastFrame += sw.Elapsed.TotalMilliseconds + createMs;
                     tile.Dirty = false;
                     tile.Appended.Clear();
                     RasterizedLastFrame++;
@@ -278,7 +285,9 @@ internal sealed class CanvasTileCache : IDisposable
                     var sw = Stopwatch.StartNew();
                     StrokesLastFrame += paint(tile.Target, RectOf(tx, ty), tile.Appended);
                     sw.Stop();
-                    RasterMsLastFrame += sw.Elapsed.TotalMilliseconds;
+                    double ms = sw.Elapsed.TotalMilliseconds;
+                    RasterMsLastFrame += ms;
+                    AppendedMsLastFrame += ms;
                     tile.Appended.Clear();
                     AppendedLastFrame++;
                     RasterizedLastFrame++;
@@ -338,15 +347,19 @@ internal sealed class CanvasTileCache : IDisposable
 
                 if (LastPrefetch >= PrefetchPerFrame) { PrefetchPending = true; continue; }
 
+                double createMs = 0;
                 if (tile == null)
                 {
+                    var swc = Stopwatch.StartNew();
                     tile = Create(tx, ty);
+                    swc.Stop();
+                    createMs = swc.Elapsed.TotalMilliseconds;
                     _tiles[k] = tile;
                 }
                 var sw = Stopwatch.StartNew();
                 paint(tile.Target, RectOf(tx, ty), null);     // 整块重画；新块/脏块都不会有补画清单
                 sw.Stop();
-                PrefetchMsLastFrame += sw.Elapsed.TotalMilliseconds;
+                PrefetchMsLastFrame += sw.Elapsed.TotalMilliseconds + createMs;
                 tile.Dirty = false;
                 tile.Appended.Clear();
                 tile.LastFrame = _frame;                      // 刚烘的算新，Trim 不会先淘汰它

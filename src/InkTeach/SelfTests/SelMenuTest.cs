@@ -146,20 +146,60 @@ internal sealed partial class App
               && SelectionHandles.MoreBarOrder(SelBarSurface.Shape).Length == 7,
               $"surface={BarSurfaceNow} count={SelectionHandles.BarButtonCountFor(SelBarSurface.Shape)}");
 
-        // 图片：6 格（保存/导出、AI 都在核心），⋯ 6 行（保存已在核心）。
+        // 图片：6 格（复制 / 美化 / AI 在外露），保存移进 ⋯（7 行）。
         Doc.Clear();
         var img = Doc.AddImage(MakeTestImage(32, 24), 300f, 300f, 1f);
         Doc.Selected.Clear();
         Doc.Selected.Add(img);
         SettleFrames(160);
-        Check("图片条：6 格、保存+AI 外露、⋯ 6 行",
+        var moreImg = SelectionHandles.MoreBarOrder(SelBarSurface.Image);
+        Check("图片条：6 格、美化+AI 外露、保存进 ⋯",
               BarSurfaceNow == SelBarSurface.Image
               && SelectionHandles.BarButtonCountFor(SelBarSurface.Image) == 6
-              && SelectionHandles.BarButtonOf(1, SelBarSurface.Image) == SelBarButton.Export
+              && SelectionHandles.BarButtonOf(1, SelBarSurface.Image) == SelBarButton.Copy
+              && SelectionHandles.BarButtonOf(2, SelBarSurface.Image) == SelBarButton.Beautify
               && SelectionHandles.BarButtonOf(3, SelBarSurface.Image) == SelBarButton.Ai
               && SelectionHandles.BarButtonOf(5, SelBarSurface.Image) == SelBarButton.More
-              && SelectionHandles.MoreBarOrder(SelBarSurface.Image).Length == 6,
-              $"surface={BarSurfaceNow} count={SelectionHandles.BarButtonCountFor(SelBarSurface.Image)}");
+              && moreImg.Length == 7
+              && System.Array.IndexOf(moreImg, SelBarButton.Export) >= 0,
+              $"surface={BarSurfaceNow} count={SelectionHandles.BarButtonCountFor(SelBarSurface.Image)} more={string.Join(",", moreImg)}");
+
+        // 美化：淡黄纸 → 中性白；再撤销回原图。
+        Doc.Clear();
+        {
+            int pw = 240, ph = 300;
+            var px = new byte[pw * ph * 4];
+            for (int i = 0; i < px.Length; i += 4)
+            {
+                px[i] = 170; px[i + 1] = 205; px[i + 2] = 225; px[i + 3] = 255;
+            }
+            var yellow = ImageData.Adopt(pw, ph, px);
+            var pic = Doc.AddImage(yellow, 320f, 260f, 1f);
+            Doc.Selected.Clear();
+            Doc.Selected.Add(pic);
+            SettleFrames(100);
+            RunBarButtonForTest(SelBarButton.Beautify);
+            SettleFrames(100);
+            bool marked = pic.Image != null && pic.Image.Beautified;
+            int b0 = pic.Image?.Bgra[0] ?? 0;
+            int r0 = pic.Image?.Bgra[2] ?? 0;
+
+            RunBarButtonForTest(SelBarButton.Beautify);   // 再点一次 = 恢复原图
+            SettleFrames(80);
+            bool reverted = pic.Image != null && !pic.Image.Beautified
+                            && pic.Image.Bgra[0] == 170 && pic.Image.Bgra[2] == 225;
+
+            RunBarButtonForTest(SelBarButton.Beautify);   // 再美化回来
+            SettleFrames(80);
+            bool marked2 = pic.Image != null && pic.Image.Beautified;
+
+            Doc.Undo();
+            SettleFrames(80);
+            Check("图片美化：变白、再点恢复、可撤销",
+                  marked && b0 >= 230 && r0 >= 230 && reverted && marked2
+                  && pic.Image != null && !pic.Image.Beautified,
+                  $"marked={marked} 美化后B/R={b0}/{r0} 恢复={reverted} 再美化={marked2} 撤销后={pic.Image?.Bgra[0]}/{pic.Image?.Bgra[2]}");
+        }
 
         OpenSelectionMenuForTest(ai: false);
         SettleFrames(60);

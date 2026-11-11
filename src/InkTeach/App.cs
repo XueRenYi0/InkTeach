@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime;
@@ -533,6 +534,20 @@ internal sealed partial class App : InkEngine.InkEngine
             PlotSuiteTest(args.Length > 1 ? args[1] : null);
             _quit = true;
         }
+        else if (mode == "--imgcardtest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ImageCardTest();
+            _quit = true;
+        }
+        else if (mode == "--imgcardlive")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ImageCardLiveTest(args.Length > 1 ? args[1] : null);
+            _quit = true;
+        }
         else if (mode == "--figurelive")
         {
             _autoExitAt = double.MaxValue;
@@ -846,6 +861,12 @@ internal sealed partial class App : InkEngine.InkEngine
             SelMenuTest();
             _quit = true;
         }
+        else if (mode == "--selbeautifyshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SelBeautifyShow(args.Length > 1 ? args[1] : "reports/sel-beautify.bmp");
+        }
         else if (mode == "--textstyle")
         {
             _autoExitAt = double.MaxValue;
@@ -1055,6 +1076,13 @@ internal sealed partial class App : InkEngine.InkEngine
                         args.Length > 2 ? args[2] : "reports/board-beautified.png",
                         args.Length > 3 && int.TryParse(args[3], out int n) ? n : 2);
             _quit = true;
+        }
+        else if (mode == "--photobeautify")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            PhotoBeautifyShow(args.Length > 1 ? args[1] : "",
+                              args.Length > 2 ? args[2] : "reports/photo-beautify");
         }
         else if (mode == "--dwelltest")
         {
@@ -2048,6 +2076,8 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --textinputaudit    文字输入宿主自检（隐藏窗口；Begin/Commit/Cancel/校验/多行）");
         Console.WriteLine("  --overlayaudit      浮层管理自检（无窗口；优先级/捕获/Esc/点外/阻断）");
         Console.WriteLine("  --shapepaneltest    图形面板专项（入口 / 页签 / 选图形 / 蓝色互斥）");
+        Console.WriteLine("  --photobeautify <输入目录> <输出目录>  图片美化批量出图（去黄/白纸/轻锐化）");
+        Console.WriteLine("  --selbeautifyshow [图]  出图：图片选中条（美化 / 保存进⋯）");
         Console.WriteLine("  --bandactiontest    选择带上带的三连（全选 / 复制 / 粘贴）几何与提示");
         Console.WriteLine("  --qrtest            反馈群二维码（读图 / 打开 / 点一下关闭）");
         Console.WriteLine("  --shapeaudittest    图形面板 39 张卡逐张仿真（种类 / 档位 / 紧框 / 手柄 / 小样）");
@@ -2219,8 +2249,9 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine();
         Console.WriteLine("=== 滚动代价（真实滚轮路径，一格 = 144 物理像素）===");
         Console.WriteLine("  内容铺开 8 屏（≈一节板书的量级），从顶部往下滚 12 格 ≈ 一屏");
-        Console.WriteLine("    文档笔数 | 每格平均 | 最慢一格 | 一格光栅 | 最慢一格光栅 | 新光栅块 | 判断");
-        Console.WriteLine("  -----------|----------|----------|----------|--------------|----------|------");
+        Console.WriteLine("  口径：每格工作 = RenderAll 墙钟 − Present 配速等待（含分块光栅/界面准备/上屏调用）；判掉帧只看工作耗时");
+        Console.WriteLine("    文档笔数 | 每格工作 | 最慢工作 | 记录平均 | 光栅平均 | 最慢光栅 | 等待平均 | 超16.7/超刷新 | 新光栅块");
+        Console.WriteLine("  -----------|----------|----------|----------|----------|----------|----------|----------------|----------");
 
         // 和 WheelTest 用同一套构造方式：delta 放在 wParam 的高 16 位。
         static IntPtr Wheel(int delta) => new((long)(ushort)(short)delta << 16);
@@ -2236,7 +2267,8 @@ internal sealed partial class App : InkEngine.InkEngine
             SettleFrames(600);                       // 先把首屏画出来
 
             double total = 0, worst = 0, raster = 0, worstRaster = 0;
-            int newTiles = 0;
+            double record = 0, wait = 0;
+            int newTiles = 0, over60 = 0, overRefresh = 0;
             for (int k = 0; k < steps; k++)
             {
                 HandleWheel(Wheel(-120));            // 往下滚一格
@@ -2244,15 +2276,23 @@ internal sealed partial class App : InkEngine.InkEngine
                 RenderAll();                         // 只渲染这一格
 
                 var w0 = _windows[0];
-                total += w0.LastRecordMs;
+                double workMs = LastFrameMs - w0.LastPresentWaitMs;
+                total += workMs;
+                record += w0.LastRecordMs;
                 raster += w0.LastRebuildMs;
-                if (w0.LastRecordMs > worst) worst = w0.LastRecordMs;
+                wait += w0.LastPresentWaitMs;
+                if (workMs > worst) worst = workMs;
                 if (w0.LastRebuildMs > worstRaster) worstRaster = w0.LastRebuildMs;
+                if (workMs > 16.7) over60++;
+                if (workMs > w0.RefreshPeriodMs) overRefresh++;
                 newTiles += w0.LastPatchCount;
             }
 
-            string note = worst < 16.7 ? "不掉帧" : worst < 33 ? "偶掉一帧" : "会卡";
-            Console.WriteLine($"  {n,9} | {total / steps,6:F2} ms | {worst,6:F2} ms | {raster / steps,6:F2} ms | {worstRaster,10:F2} ms | {newTiles,8} | {note}");
+            string note = worst < 16.7 ? "全程不掉帧"
+                        : over60 == 1 ? "偶掉 1 格"
+                        : over60 <= 3 ? "偶掉几格"
+                        : "会卡";
+            Console.WriteLine($"  {n,9} | {total / steps,6:F2} ms | {worst,6:F2} ms | {record / steps,6:F2} ms | {raster / steps,6:F2} ms | {worstRaster,10:F2} ms | {wait / steps,6:F2} ms | {over60,6}/{overRefresh,-6} | {newTiles,8} | {note}");
         }
 
         Console.WriteLine("  注：老做法（整层重画）的对照值：一屏量级 20ms，5000 笔 41ms，10000 笔 82ms。");
@@ -4464,6 +4504,9 @@ internal sealed partial class App : InkEngine.InkEngine
     /// 量出来的重铺代价会大得多，拿它当"一节课的消耗"会吓人。</summary>
     private int _benchSpread;
 
+    /// <summary>`--selftest` 里 10k 基准实测的整层重铺耗时；给最后汇总用，别拿激光压测的最后一帧冒充。</summary>
+    private double _lastBenchRebuildMs;
+
     private void Benchmark(int strokeCount)
     {
         Console.WriteLine();
@@ -4490,6 +4533,7 @@ internal sealed partial class App : InkEngine.InkEngine
         RenderAll();
         var w0 = _windows[0];
         double rebuildMs = w0.LastRebuildMs;
+        _lastBenchRebuildMs = rebuildMs;
 
         Console.WriteLine($"  generate      : {gen.Elapsed.TotalMilliseconds,8:F1} ms");
         Console.WriteLine($"  build geometry: {buildSw.Elapsed.TotalMilliseconds,8:F1} ms  ({buildSw.Elapsed.TotalMilliseconds / strokeCount:F3} ms/stroke)");
@@ -4523,10 +4567,19 @@ internal sealed partial class App : InkEngine.InkEngine
             Mem.TrimWorkingSet();
         }
 
+        // 清空 + 回收 + 让驱动把不用的显存还回来；只 GC 不 Trim，iGPU 的共享显存
+        // 还会挂在进程提交里，看起来像“清空后没降”。
+        void ReclaimAll()
+        {
+            Settle();
+            Gfx.TrimVideoMemory();
+            Mem.TrimWorkingSet();
+        }
+
         P("===== InkTeach 内存归因 =====");
         P($"显卡        : {Gfx.AdapterInfo}");
         P($"屏幕        : {_virtualW}x{_virtualH}，{_windows.Count} 个覆盖窗口");
-        P($"对照        : 一个什么都不做的 .NET 控制台程序 = 23.3 MB 工作集 / 6.9 MB 私有");
+        P($"对照        : 一个什么都不做的 .NET 控制台程序 = 23.3 MB 工作集 / 6.9 MB 私有（旧版参照，只看量级）");
         P("说明        : 「工作集」（任务管理器里那一列）会被系统随时回收，不反映真实占用；");
         P("              下面统一用「提交大小 / 私有字节」，另外附上显存占用。");
         P();
@@ -4537,8 +4590,8 @@ internal sealed partial class App : InkEngine.InkEngine
 
         for (int i = 0; i < 40; i++) RenderAll();
         Settle();
-        P($"【空闲稳态】提交大小 {Mem.Priv():F1} MB（真实占用），工作集 {Mem.Ws():F1} MB");
-        P("             （40 帧之后强制回收，这才是产品日常挂着时的占用）");
+        P($"【空闲稳态】提交大小 {Mem.Priv():F1} MB（真实占用）");
+        P("             （工作集另行 Trim 过，会掉到几 MB；那是被系统换出的页，不代表日常占用）");
         P();
 
         P("【按笔画数】内存增长");
@@ -4568,19 +4621,25 @@ internal sealed partial class App : InkEngine.InkEngine
         // Where exactly does the 10k-stroke memory go?
         P("【一万笔的内存去向】逐步拆开（看提交大小）");
         Doc.Clear();
-        Settle();
+        Doc.ClearHistory();          // 否则上一轮的 1 万笔还在撤销栈里，测到的不是“清空后”
+        ReclaimAll();
         RenderAll();
-        Settle();
-        P($"  清空、回收、并让系统释放后 : 提交 {Mem.Priv(),6:F1} MB | 显存 {GpuMb()}");
+        ReclaimAll();
+        double privBefore10k = Mem.Priv();
+        P($"  清空、回收、并让系统释放后 : 提交 {privBefore10k,6:F1} MB | 显存 {GpuMb()}");
         GenerateStrokes(10_000);
         Settle();
-        P($"  只生成笔画数据、还没画     : 提交 {Mem.Priv(),6:F1} MB | 显存 {GpuMb()}  （{Doc.TotalPoints} 个点）");
+        double privGenerated10k = Mem.Priv();
+        P($"  只生成笔画数据、还没画     : 提交 {privGenerated10k,6:F1} MB | 显存 {GpuMb()}  （{Doc.TotalPoints} 个点）");
         Doc.Version++;
         RenderAll();
-        P($"  第一次整层绘制之后         : 提交 {Mem.Priv(),6:F1} MB | 显存 {GpuMb()}");
+        double privDrawn10k = Mem.Priv();
+        P($"  第一次整层绘制之后         : 提交 {privDrawn10k,6:F1} MB | 显存 {GpuMb()}");
         Doc.Clear();
-        Settle();
-        P($"  再把笔画全部清空并回收后   : 提交 {Mem.Priv(),6:F1} MB | 显存 {GpuMb()}");
+        Doc.ClearHistory();          // 同上：把撤销栈里的 1 万笔也放掉
+        ReclaimAll();
+        double privCleared10k = Mem.Priv();
+        P($"  再把笔画全部清空并回收后   : 提交 {privCleared10k,6:F1} MB | 显存 {GpuMb()}");
         P($"  已释放的几何对象累计       : {Stroke.ReleasedGeometries}");
         P();
 
@@ -4606,11 +4665,14 @@ internal sealed partial class App : InkEngine.InkEngine
         }
 
         P("【结论】");
-        P("  - 空闲基线才是产品日常占用；一万笔那次 200 MB 是压力测试的极端值。");
-        P("  - 空闲基线的构成：.NET 运行时 + 程序集约 31 MB，Direct3D/Direct2D/文字约 42 MB，");
-        P("    屏幕尺寸的合成缓冲区约 26 MB。");
+        P($"  - 本次实测：空闲提交 {basePriv:F1} MB；1 万笔绘制后 {privDrawn10k:F1} MB；清空并回收后 {privCleared10k:F1} MB。");
+        P("  - 空闲基线才是产品日常占用；一万笔那次是压力测试的极端值，不是日常。");
+        P("  - 空闲基线的构成见上面的分阶段实测（运行时/图形设备/屏幕尺寸合成缓冲各占一块），");
+        P("    不同机器、DPI、驱动会不同，不要再引用旧版本的固定拆分数字。");
         P("  - 笔画数量带来的增长主要在 GPU 侧，而且清空之后并不会还回操作系统");
         P("    （Direct2D 内部留着复用），所以峰值是「棘轮式」保持的。");
+        P($"  - 本次清空并 Trim 后仍比空闲高 {privCleared10k - basePriv:F1} MB；这部分是 D2D/驱动缓存，"
+          + "是否随重复写/清持续增长，要再用长跑确认。");
         P("  - 这是 Direct2D 的行为，不是 .NET 的行为；换成 C++ 也一样。");
 
         try
@@ -6766,7 +6828,7 @@ internal sealed partial class App : InkEngine.InkEngine
                 (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
             SelAiMenuOpen = false;
             Console.WriteLine($"识别作图/文字：prompt={textPromptOk} len={plotPrompt.Length} " +
-                              $"rows={AiMenuRows} plotOnly={AiMenuPlotOnly}");
+                              $"rows={AiMenuRows} kind={AiMenuKindNow}");
         }
 
         // 图片路径：先造一张二次函数图，再让模型看图反推并重画成矢量。
@@ -6784,7 +6846,7 @@ internal sealed partial class App : InkEngine.InkEngine
             ScreenProbe.SaveBmp("reports/aiplot-image-ai-menu.bmp",
                 (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
             SelAiMenuOpen = false;
-            Console.WriteLine($"图片AI菜单：rows={AiMenuRows} plotOnly={AiMenuPlotOnly}");
+            Console.WriteLine($"图片AI菜单：rows={AiMenuRows} kind={AiMenuKindNow}");
             InsertAiPlotFromImageFromUi(recogSrc);
             int iw = 0;
             Stroke imagePlotFig = null;
@@ -9525,7 +9587,7 @@ internal sealed partial class App : InkEngine.InkEngine
         // 书写期间的分配与 GC：低配机排查"偶发卡顿"的依据。
         // 每笔分配越大越容易触发回收；**第 2 代回收出现在书写期间 = 那一下就卡了几十毫秒**。
         if (StrokesMeasured > 0)
-            Console.WriteLine($"  书写期间：{StrokesMeasured} 笔，每笔分配 平均 {AllocKbSum / StrokesMeasured:F1} KB"
+            Console.WriteLine($"  书写期间：{StrokesMeasured} 笔，每笔整笔会话分配（累计，非驻留） 平均 {AllocKbSum / StrokesMeasured:F1} KB"
                               + $" / 最大 {AllocBytesMax / 1024.0:F1} KB；"
                               + (StrokesWithGc2 == 0
                                   ? "第 2 代 GC 一次都没出现在书写期间（好）"
@@ -9729,12 +9791,17 @@ internal static class ScreenProbe
     /// </summary>
     public static double AvgLuma(int x, int y, int w, int h)
     {
-        var buf = CaptureRegion(x, y, w, h);
-        if (buf.Length < 4) return 0;
-        double sum = 0; int n = 0;
-        for (int i = 0; i + 3 < buf.Length; i += 4)
-        { sum += 0.114 * buf[i] + 0.587 * buf[i + 1] + 0.299 * buf[i + 2]; n++; }
-        return n == 0 ? 0 : sum / n;
+        if (w <= 0 || h <= 0) return 0;
+        var buf = ArrayPool<byte>.Shared.Rent(w * h * 4);
+        try
+        {
+            if (!CaptureRegionInto(buf, x, y, w, h)) return 0;
+            double sum = 0; int n = 0;
+            for (int i = 0; i + 3 < w * h * 4; i += 4)
+            { sum += 0.114 * buf[i] + 0.587 * buf[i + 1] + 0.299 * buf[i + 2]; n++; }
+            return n == 0 ? 0 : sum / n;
+        }
+        finally { ArrayPool<byte>.Shared.Return(buf); }
     }
 
     // 判定用色。像素是 BGRA 顺序，所以参数名按 (b, g, r)。
@@ -9827,48 +9894,19 @@ internal static class ScreenProbe
     {
         int hits = 0;
         if (w <= 0 || h <= 0) return 0;
-        IntPtr screenDc = Native.GetDC(IntPtr.Zero);
-        IntPtr memDc = Native.CreateCompatibleDC(screenDc);
-        IntPtr bits = IntPtr.Zero;
-
-        var bi = new Native.BITMAPINFO
+        int bytes = w * h * 4;
+        var buffer = ArrayPool<byte>.Shared.Rent(bytes);
+        try
         {
-            bmiHeader = new Native.BITMAPINFOHEADER
+            if (!CaptureRegionInto(buffer, x, y, w, h)) return 0;
+            for (int i = 0; i + 3 < bytes; i += 4)
             {
-                biSize = Marshal.SizeOf<Native.BITMAPINFOHEADER>(),
-                biWidth = w,
-                biHeight = -h,          // top-down
-                biPlanes = 1,
-                biBitCount = 32,
-                biCompression = (int)Native.BI_RGB,
+                // Buffer is BGRA order.
+                if (match(buffer[i], buffer[i + 1], buffer[i + 2])) hits++;
             }
-        };
-
-        IntPtr dib = Native.CreateDIBSection(memDc, ref bi, Native.DIB_RGB_COLORS, out bits, IntPtr.Zero, 0);
-        if (dib == IntPtr.Zero || bits == IntPtr.Zero)
-        {
-            Native.DeleteDC(memDc);
-            Native.ReleaseDC(IntPtr.Zero, screenDc);
-            return 0;
+            return hits;
         }
-
-        IntPtr old = Native.SelectObject(memDc, dib);
-        Native.BitBlt(memDc, 0, 0, w, h, screenDc, x, y, Native.SRCCOPY);
-
-        var buffer = new byte[w * h * 4];
-        Marshal.Copy(bits, buffer, 0, buffer.Length);
-        for (int i = 0; i < buffer.Length; i += 4)
-        {
-            // Buffer is BGRA order.
-            if (match(buffer[i], buffer[i + 1], buffer[i + 2])) hits++;
-        }
-
-        Native.SelectObject(memDc, old);
-        Native.DeleteObject(dib);
-        Native.DeleteDC(memDc);
-        Native.ReleaseDC(IntPtr.Zero, screenDc);
-
-        return hits;
+        finally { ArrayPool<byte>.Shared.Return(buffer); }
     }
 }
 

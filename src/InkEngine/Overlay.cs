@@ -594,6 +594,10 @@ internal sealed partial class OverlayWindow : IDisposable
     public static int TransientHistoryFrames = 2;
     public int LastPresentRectCount;
     public double LastPresentAreaPercent;
+    /// <summary>这一帧最后是不是整屏 Present（true 时 count=1、area=100%）。</summary>
+    public bool LastPresentFull;
+    /// <summary>Present 前等“下一帧可提交”的时间（配速/垂直同步等待）；不是绘制时间。</summary>
+    public double LastPresentWaitMs;
     /// <summary>
     /// 性能面板的尺寸（**逻辑**像素，按 DPI 放大成物理像素）。
     ///
@@ -1568,6 +1572,7 @@ internal sealed partial class OverlayWindow : IDisposable
         LastRebuildMs = _tiles.RasterMsLastFrame;
         LastAppendedTiles = _tiles.AppendedLastFrame;
         TotalAppendedTiles += _tiles.AppendedLastFrame;
+        LastAppendMs = _tiles.AppendedMsLastFrame;
         LastPatchMs = _tiles.RasterMsLastFrame;
         LastPatchCount = _tiles.RasterizedLastFrame;
         LastDrawnStrokes = _tiles.StrokesLastFrame;
@@ -4148,7 +4153,6 @@ internal sealed partial class OverlayWindow : IDisposable
         // （比如穿透提示淡出、调色板收起），双缓冲里还留着它的旧画面。
         if (uiVisible) AddClipped(_frameDirty, _uiBounds);
         if (!_uiBoundsPrev.IsEmpty) AddClipped(_frameDirty, _uiBoundsPrev);
-        if (!_uiBoundsPrev.IsEmpty) AddClipped(_frameDirty, _uiBoundsPrev);
 
         // 兜底：真要是一个矩形都没有，就整屏来一次，避免出现没擦干净的画面
         if (_frameDirty.Count == 0) _frameDirty.Add(full);
@@ -5441,7 +5445,90 @@ internal sealed partial class OverlayWindow : IDisposable
         _ctx.DrawRoundedRectangle(bg, _scratch, 1f);
 
         DrawLibraryTopTab(m.ShapesTab, "图形", app.LibraryTab == LibraryTab.Shapes, dpi, theme);
-        DrawLibraryTopTab(m.FavoritesTab, "我的收藏", app.LibraryTab == LibraryTab.Favorites, dpi, theme);
+        DrawLibraryTopTab(m.FavoritesTab, m.Compact ? "收藏" : "我的收藏",
+                          app.LibraryTab == LibraryTab.Favorites, dpi, theme);
+        DrawLibraryTopControls(app, m, dpi, theme);
+    }
+
+    /// <summary>一级页签行最右：📌 常驻 +（图形页）单次/∞连续。</summary>
+    private void DrawLibraryTopControls(InkEngine app, in LibraryLayout.Info m,
+                                        float dpi, UiTheme theme)
+    {
+        DrawLibraryPin(app, m, dpi, theme);
+        if (app.LibraryTab == LibraryTab.Shapes)
+            DrawLibraryRepeat(app, m, dpi, theme);
+    }
+
+    private void DrawLibraryPin(InkEngine app, in LibraryLayout.Info m, float dpi, UiTheme theme)
+    {
+        if (m.Pin.IsEmpty) return;
+        bool on = app.LibraryPanelPinned;
+        var rr = new RoundedRectangle(
+            new Vortice.RawRectF(m.Pin.MinX + 2f * dpi, m.Pin.MinY + 2f * dpi,
+                                 m.Pin.MaxX - 2f * dpi, m.Pin.MaxY - 2f * dpi),
+            6f * dpi, 6f * dpi);
+        _scratch.Color = on ? theme.ActiveBg : theme.Hover;
+        _ctx.FillRoundedRectangle(rr, _scratch);
+        float icon = 18f * dpi;
+        _scratch.Color = on ? theme.ActiveText : theme.TextMuted;
+        DrawIcon(IconPaths.pin,
+                 (m.Pin.MinX + m.Pin.MaxX) * 0.5f - icon * 0.5f,
+                 (m.Pin.MinY + m.Pin.MaxY) * 0.5f - icon * 0.5f,
+                 icon, _scratch);
+    }
+
+    private void DrawLibraryRepeat(InkEngine app, in LibraryLayout.Info m,
+                                   float dpi, UiTheme theme)
+    {
+        if (m.Repeat.IsEmpty) return;
+        var outer = new RoundedRectangle(
+            new Vortice.RawRectF(m.Repeat.MinX, m.Repeat.MinY, m.Repeat.MaxX, m.Repeat.MaxY),
+            7f * dpi, 7f * dpi);
+        _scratch.Color = theme.Hover;
+        _ctx.FillRoundedRectangle(outer, _scratch);
+        _scratch.Color = theme.PanelBorder;
+        _ctx.DrawRoundedRectangle(outer, _scratch, 1f);
+
+        if (m.Tabbed)
+        {
+            var active = app.ShapeRepeatContinuous ? m.RepeatContinuous : m.RepeatSingle;
+            var fill = new RoundedRectangle(
+                new Vortice.RawRectF(active.MinX + 2f * dpi, active.MinY + 2f * dpi,
+                                     active.MaxX - 2f * dpi, active.MaxY - 2f * dpi),
+                6f * dpi, 6f * dpi);
+            _scratch.Color = theme.ActiveBg;
+            _ctx.FillRoundedRectangle(fill, _scratch);
+
+            _scratch.Color = app.ShapeRepeatContinuous ? theme.TextMuted : theme.ActiveText;
+            _ctx.DrawText("单次", ReadoutFormatSmall(dpi),
+                          new Rect(m.RepeatSingle.MinX, m.RepeatSingle.MinY,
+                                   m.RepeatSingle.MaxX - m.RepeatSingle.MinX,
+                                   m.RepeatSingle.MaxY - m.RepeatSingle.MinY), _scratch);
+            _scratch.Color = app.ShapeRepeatContinuous ? theme.ActiveText : theme.TextMuted;
+            _ctx.DrawText("∞ 连续", ReadoutFormatSmall(dpi),
+                          new Rect(m.RepeatContinuous.MinX, m.RepeatContinuous.MinY,
+                                   m.RepeatContinuous.MaxX - m.RepeatContinuous.MinX,
+                                   m.RepeatContinuous.MaxY - m.RepeatContinuous.MinY), _scratch);
+        }
+        else
+        {
+            // 窄面板：一颗按钮，显示当前状态，点一下切。
+            if (app.ShapeRepeatContinuous)
+            {
+                var fill = new RoundedRectangle(
+                    new Vortice.RawRectF(m.Repeat.MinX + 2f * dpi, m.Repeat.MinY + 2f * dpi,
+                                         m.Repeat.MaxX - 2f * dpi, m.Repeat.MaxY - 2f * dpi),
+                    6f * dpi, 6f * dpi);
+                _scratch.Color = theme.ActiveBg;
+                _ctx.FillRoundedRectangle(fill, _scratch);
+            }
+            _scratch.Color = app.ShapeRepeatContinuous ? theme.ActiveText : theme.Text;
+            _ctx.DrawText(app.ShapeRepeatContinuous ? "∞ 连续" : "单次",
+                          ReadoutFormatSmall(dpi),
+                          new Rect(m.Repeat.MinX, m.Repeat.MinY,
+                                   m.Repeat.MaxX - m.Repeat.MinX,
+                                   m.Repeat.MaxY - m.Repeat.MinY), _scratch);
+        }
     }
 
     private void DrawLibraryTopTab(in RectF r, string label, bool active, float dpi, UiTheme theme)
@@ -6425,9 +6512,12 @@ internal sealed partial class OverlayWindow : IDisposable
 
         if (app.SelAiMenuOpen)
         {
-            string[] labels = app.AiMenuPlotOnly
-                ? new[] { "📈 识别作图" }
-                : new[] { "📝 识别文本", "📈 识别作图" };
+            string[] labels = app.AiMenuKindNow switch
+            {
+                InkEngine.AiMenuKind.Hand => new[] { "📝 识别文本", "📈 识别作图" },
+                InkEngine.AiMenuKind.Image => new[] { "🧩 识别成题卡", "📈 识别作图" },
+                _ => new[] { "📈 识别作图" },
+            };
             for (int i = 0; i < labels.Length && i < rows; i++)
             {
                 var r = SelectionHandles.BarMenuRowRectIn(m, i, dpi);
@@ -6498,6 +6588,7 @@ internal sealed partial class OverlayWindow : IDisposable
         SelBarButton.FlipH => IconPaths.flipH,
         SelBarButton.FlipV => IconPaths.flipV,
         SelBarButton.Delete => IconPaths.delete,
+        SelBarButton.Beautify => IconPaths.sparkle,
         _ => IconPaths.layer,
     };
 
@@ -6518,6 +6609,7 @@ internal sealed partial class OverlayWindow : IDisposable
         SelBarButton.Layer => app.SelPanelOpen == SelPanel.Layer,
         SelBarButton.FontSize => app.SelPanelOpen == SelPanel.FontSize,
         SelBarButton.Ai => app.SelAiMenuOpen,
+        SelBarButton.Beautify => app.BeautifyBusy || app.SelectionAllImagesBeautified,
         SelBarButton.More => app.SelMoreMenuOpen,
         _ => false,
     };
@@ -9335,7 +9427,6 @@ internal sealed partial class OverlayWindow : IDisposable
     public void Present()
     {
         _presentRects.Clear();
-        double area = 0;
         foreach (var r in _frameDirty)
         {
             int l = (int)MathF.Floor(MathF.Max(0, r.MinX - OriginX));
@@ -9344,13 +9435,21 @@ internal sealed partial class OverlayWindow : IDisposable
             int b = (int)MathF.Ceiling(MathF.Min(Height, r.MaxY - OriginY));
             if (rr <= l || b <= t) continue;
             _presentRects.Add(new Vortice.RawRect(l, t, rr, b));
-            area += (long)(rr - l) * (b - t);
         }
+        MergePresentRects();
+
+        double area = 0;
+        foreach (var r in _presentRects)
+            area += (long)(r.Right - r.Left) * (r.Bottom - r.Top);
 
         LastPresentRectCount = _presentRects.Count;
         LastPresentAreaPercent = Width > 0 && Height > 0
-            ? area / (Width * (double)Height) * 100.0
+            ? Math.Min(100.0, area / (Width * (double)Height) * 100.0)
             : 100.0;
+        LastPresentFull = Width > 0 && Height > 0
+                          && _presentRects.Count == 1
+                          && _presentRects[0].Left <= 0 && _presentRects[0].Top <= 0
+                          && _presentRects[0].Right >= Width && _presentRects[0].Bottom >= Height;
 
         if (Trace)
         {
@@ -9372,7 +9471,6 @@ internal sealed partial class OverlayWindow : IDisposable
                               + $"camY={ViewOffsetY:F0} backBuf={buf}");
         }
 
-        var sw = Stopwatch.StartNew();
         SharpGen.Runtime.Result hr;
 
         // 试验D（2026-10-11，A/B）：每帧 DComp 提交（Chromium 的做法；我们以前只提交过一次）。
@@ -9383,11 +9481,16 @@ internal sealed partial class OverlayWindow : IDisposable
 
         // 用等待对象先"排队"：它发信号时才是提交下一帧的正确时机。
         // 这样 Present 用 syncInterval=0 立即返回，不必让驱动在垂直同步里忙等。
+        // 这一段是**配速等待**，不是绘制/Present 代价，所以单独计时。
         bool useWaitable = _latencyWait != IntPtr.Zero;
+        var swWait = Stopwatch.StartNew();
         if (useWaitable)
             Native.WaitForSingleObjectEx(_latencyWait, 100, true);
+        swWait.Stop();
+        LastPresentWaitMs = swWait.Elapsed.TotalMilliseconds;
 
         LastPresentStartQpc = Qpc.Now;
+        var sw = Stopwatch.StartNew();
 
         // 脏区太少或太大都不划算：太大不如直接整屏上屏，太少说明这一帧
         // 没什么变化（例如只等垂直同步）。--fullpresent = 永远整屏上屏（诊断）。
@@ -9396,7 +9499,8 @@ internal sealed partial class OverlayWindow : IDisposable
         {
             hr = _swapChain.Present(useWaitable ? 0u : 1u, PresentFlags.None);
             LastPresentAreaPercent = 100.0;
-            LastPresentRectCount = 0;
+            LastPresentRectCount = 1;       // 整屏 = 一个整屏矩形，不是“0 块”
+            LastPresentFull = true;
         }
         else
         {
@@ -9422,6 +9526,41 @@ internal sealed partial class OverlayWindow : IDisposable
             _fullFramesLeft = 2;
         }
 
+    }
+
+    /// <summary>
+    /// 把上屏矩形合并到最少。重叠的矩形取外接框；数量少、代价可忽略。
+    ///
+    /// 为什么需要：`_frameDirty` 里“整屏 + 临时图元 + UI”会同时存在，直接交给 Present1
+    /// 时面积会算成 100% 以上、矩形数也会虚高，既影响“要不要整屏”的判断，也让
+    /// `LastPresentAreaPercent` 这类性能数字不可信。合并后这些数才是屏幕像素占比。
+    /// 只合并**有正面积重叠**的矩形；只是边/角相接的不合并，避免把中间空隙算进面积。
+    /// </summary>
+    private void MergePresentRects()
+    {
+        if (_presentRects.Count <= 1) return;
+        bool again = true;
+        while (again)
+        {
+            again = false;
+            for (int i = 0; i < _presentRects.Count && !again; i++)
+            {
+                var a = _presentRects[i];
+                for (int j = i + 1; j < _presentRects.Count; j++)
+                {
+                    var b = _presentRects[j];
+                    bool overlap = a.Left < b.Right && b.Left < a.Right
+                                && a.Top < b.Bottom && b.Top < a.Bottom;
+                    if (!overlap) continue;
+                    _presentRects[i] = new Vortice.RawRect(
+                        Math.Min(a.Left, b.Left), Math.Min(a.Top, b.Top),
+                        Math.Max(a.Right, b.Right), Math.Max(a.Bottom, b.Bottom));
+                    _presentRects.RemoveAt(j);
+                    again = true;
+                    break;
+                }
+            }
+        }
     }
 
 

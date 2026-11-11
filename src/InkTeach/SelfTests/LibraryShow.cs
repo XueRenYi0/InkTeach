@@ -142,6 +142,19 @@ internal sealed partial class App
             Console.WriteLine($"  已出图：{spath}");
         else Console.WriteLine("  出图失败：" + spath);
 
+        // 图钉亮 + ∞连续：一眼核对两个开关的“开”态。
+        LibraryPinnedShapes = true;
+        ShapeRepeatContinuous = true;
+        SettleFrames(350);
+        string sppath = Path.Combine(Path.GetDirectoryName(path) ?? ".",
+            Path.GetFileNameWithoutExtension(path) + "-shapes-pinned" + Path.GetExtension(path));
+        if (OffscreenFloatingShot(sppath, panelS.Inflate(16f)))
+            Console.WriteLine($"  已出图：{sppath}");
+        else Console.WriteLine("  出图失败：" + sppath);
+        LibraryPinnedShapes = false;
+        ShapeRepeatContinuous = false;
+        SettleFrames(250);
+
         // 名称不常驻：悬停时在卡片上方浮一条。
         ShapeHoverIndex = 4;
         SettleFrames(350);

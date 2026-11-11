@@ -528,6 +528,8 @@ internal enum TextBoxLineKind
     Math = 3,
     /// <summary>题目配图：整块位图，按内容宽度等比缩放。</summary>
     Image = 4,
+    /// <summary>卡上「生成答案（AI）」：答案为空时才出现，点了才请求模型。</summary>
+    GenerateAnswers = 5,
 }
 
 internal enum TextBoxInk
@@ -622,7 +624,23 @@ internal static class TextBoxLayout
                 AddFigure(lines, q.Figure, pad, textW, 360f * u, 8f * u, ref y);
 
             y += 4f * u;
-            if (card.ShowAnswers)
+            bool noAnswer = string.IsNullOrWhiteSpace(q.Answer)
+                            && string.IsNullOrWhiteSpace(q.Analysis);
+            if (noAnswer)
+            {
+                // 图片识别出来的卡默认没有答案：先给一个“按需生成”的入口，
+                // 不拿模型顺手编的答案冒充题目自带答案。
+                var gb = new RectF { MinX = pad, MinY = y, MaxX = pad + 150f * u, MaxY = y + 26f * u };
+                lines.Add(new TextBoxLine
+                {
+                    Kind = TextBoxLineKind.GenerateAnswers,
+                    Text = "✦ 生成答案（AI）",
+                    X = gb.MinX, Y = gb.MinY, Size = baseSize * 0.83f, Height = 26f * u,
+                    Ink = TextBoxInk.Red, QuestionIndex = qi, Box = gb,
+                });
+                y += 30f * u;
+            }
+            else if (card.ShowAnswers)
             {
                 AddText(lines, "答案", pad, y, baseSize * 0.76f, 15f * u, TextBoxInk.Red, bold: true);
                 y += 15f * u;
@@ -1707,6 +1725,532 @@ public partial class InkEngine
     private static string ClipAiPlot(string s, int n)
         => string.IsNullOrEmpty(s) ? "" : s.Length <= n ? s : s[..n] + "…";
 
+    // ---- 图片 → 题卡（2026-11-10）------------------------------------------
+
+    private sealed class ImageCardDone
+    {
+        public bool Ok;
+        public string Error = "";
+        public string OcrText = "";
+        public List<AiQuestionClient.CardItem> Items = new();
+        public double OcrSeconds, StructSeconds;
+        public string SeeModel = "", TextModel = "";
+        public bool FallbackOnly;
+        public string FallbackReason = "";
+        public Stroke Source;
+    }
+
+    private volatile ImageCardDone _imgCardDone;
+    private volatile bool _imgCardBusy;
+
+    internal bool ImageCardBusy => _imgCardBusy;
+
+    /// <summary>
+    /// 图片 AI 菜单「识别成题卡」：图片 → OCR 文字 → 一题一条结构化 → 一张卡。
+    ///
+    /// 为什么只有一个入口（2026-11-10 用户定）：
+    ///   · 手写已经有一项「识别文本」，图片再来一项，用户分不清该点哪个；
+    ///   · 题卡本身就是可编辑文本，要纯文字直接双击改、复制；
+    ///   · 结构化失败时兜底放**富文本**原文（不是普通文本框——普通框不渲染公式）。
+    ///
+    /// 答案默认不生成：卷面通常没有答案，让模型顺手编一个反而增加核对成本；
+    /// 卡上留「生成答案」按钮，需要时再点（<see cref="StartGenerateAnswers(Stroke)"/>）。
+    /// </summary>
+    internal void InsertImageCardFromUi(Stroke image)
+    {
+        if (image?.Image == null)
+        {
+            ShowToast("请先选中一张图片");
+            return;
+        }
+        if (_imgCardBusy)
+        {
+            ShowToast("正在识别上一张，请稍等");
+            return;
+        }
+        HideAiPromptEdit();
+        if (_textBoxEditing) EndTextBoxEditFromUi(true);
+
+        var state = OcrProviders.Load();
+        var vision = OcrProviders.PickVision(state);
+        if (vision == null || string.IsNullOrWhiteSpace(vision.Key))
+        {
+            ShowToast("没有能看图的模型：设置里选一个（如 qwen3.5-ocr）", 4500);
+            SetInkStatus("图片识别需要视觉模型：请在「设置 → AI」里给一个能看图的模型");
+            return;
+        }
+        var textProfile = OcrProviders.PickText(state);
+        var vcfg = OcrProviders.ToConfig(vision);
+        var tcfg = OcrProviders.ToConfig(textProfile) ?? vcfg;
+
+        byte[] png = ExportFormats.Encode("card-src.png", image.Image.Bgra,
+                                          image.Image.Width, image.Image.Height, 0, out _);
+        if (png == null || png.Length == 0)
+        {
+            ShowToast("图片导出失败");
+            return;
+        }
+
+        _imgCardBusy = true;
+        ShowToast($"识别中…（{vcfg.Model}）", 4000);
+        _dirty = true;
+
+        var done = new ImageCardDone
+        {
+            Source = image,
+            SeeModel = vcfg.Model,
+            TextModel = tcfg.Model,
+        };
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var ocr = await OcrClient.RecognizeAsync(
+                        png, vcfg, OcrClient.PaperPrompt, CancellationToken.None,
+                        withBoxes: false).ConfigureAwait(false);
+                done.OcrSeconds = ocr.Seconds;
+                string text = ocr.Text ?? "";
+                if (!ocr.Ok)
+                {
+                    done.Error = string.IsNullOrWhiteSpace(ocr.Error) ? "没有认出文字" : ocr.Error;
+                }
+                else if (string.IsNullOrWhiteSpace(text))
+                {
+                    done.Error = "没有认出文字";
+                }
+                else
+                {
+                    done.OcrText = text;
+                    var st = await AiQuestionClient.StructureAsync(
+                            text, tcfg, CancellationToken.None, withAnswer: false).ConfigureAwait(false);
+                    done.StructSeconds = st.Seconds;
+                    if (st.Ok)
+                    {
+                        done.Items = st.Cards;
+                        done.Ok = true;
+                    }
+                    else
+                    {
+                        // 结构化失败不算白跑：OCR 原文照样给老师。
+                        done.Ok = true;
+                        done.FallbackOnly = true;
+                        done.FallbackReason = st.Error;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                done.Error = ex.Message;
+            }
+            Interlocked.Exchange(ref _imgCardDone, done);
+        });
+    }
+
+    /// <summary>主循环调用：把后台识别结果落成卡片（只在主线程改 Doc）。</summary>
+    internal void StepImageCard()
+    {
+        var done = Interlocked.Exchange(ref _imgCardDone, null);
+        if (done == null) return;
+        _imgCardBusy = false;
+        if (_quit) return;
+
+        if (!done.Ok)
+        {
+            ShowToast("识别失败：" + ClipAiPlot(done.Error, 46), 4500);
+            SetInkStatus("图片识别失败：" + ClipAiPlot(done.Error, 60));
+            _dirty = true;
+            NotifyUiStateChanged();
+            return;
+        }
+
+        // 后台跑的时候图可能被删了：删了就只提示，不往文档里塞。
+        if (done.Source == null || !Doc.Strokes.Contains(done.Source))
+        {
+            ShowToast("图片已被删除，识别结果丢弃", 3500);
+            return;
+        }
+
+        float u = MathF.Max(0.75f, DpiScale);
+        var screen = ScreenRectPhysical();
+        float maxW = MathF.Max(280f * u, Math.Min((screen.MaxX - screen.MinX) * 0.62f, 760f * u));
+
+        Stroke cardStroke;
+        string status;
+        if (done.FallbackOnly)
+        {
+            cardStroke = BuildRichTextBox(done, u, maxW);
+            status = $"已放入识别原文（结构化失败：{ClipAiPlot(done.FallbackReason, 24)}）";
+        }
+        else
+        {
+            cardStroke = BuildQuestionCard(done, u, maxW);
+            status = $"已识别 {done.Items.Count} 道题，请核对；答案需要时点「生成答案」";
+        }
+        if (cardStroke == null)
+        {
+            ShowToast("没有可插入的内容");
+            return;
+        }
+
+        PlaceNearImage(cardStroke, done.Source, screen, u);
+        Doc.AddStroke(cardStroke);          // AddStroke 自带一步撤销
+        Doc.SelectOnly(new[] { cardStroke });
+        SetInkStatus(status);
+        ShowToast(done.FallbackOnly
+            ? $"识别完成（{done.OcrSeconds:F1}s）：结构化失败，已放原文"
+            : $"识别完成：{done.Items.Count} 道题（{done.OcrSeconds + done.StructSeconds:F1}s）");
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 自检用：跳过网络，把给定的结构化结果直接落成卡（走的是产品同一条排版/摆放路径）。
+    /// </summary>
+    internal Stroke InsertImageCardForTest(Stroke image, List<AiQuestionClient.CardItem> items,
+                                           string ocrText = null, bool fallback = false,
+                                           double ocrSeconds = 1.5, double structSeconds = 1.8)
+    {
+        if (image?.Image == null) return null;
+        var done = new ImageCardDone
+        {
+            Ok = true,
+            Source = image,
+            Items = items ?? new List<AiQuestionClient.CardItem>(),
+            OcrText = ocrText ?? "",
+            OcrSeconds = ocrSeconds,
+            StructSeconds = structSeconds,
+            SeeModel = "test-vision",
+            TextModel = "test-text",
+            FallbackOnly = fallback,
+        };
+        float u = MathF.Max(0.75f, DpiScale);
+        var screen = ScreenRectPhysical();
+        float maxW = MathF.Max(280f * u, Math.Min((screen.MaxX - screen.MinX) * 0.62f, 760f * u));
+        var stroke = fallback ? BuildRichTextBox(done, u, maxW) : BuildQuestionCard(done, u, maxW);
+        if (stroke == null) return null;
+        PlaceNearImage(stroke, image, screen, u);
+        Doc.AddStroke(stroke);
+        Doc.SelectOnly(new[] { stroke });
+        _dirty = true;
+        NotifyUiStateChanged();
+        return stroke;
+    }
+
+    private Stroke BuildQuestionCard(ImageCardDone done, float u, float maxW)
+    {
+        var c = new TextBoxData
+        {
+            Role = TextBoxRole.AiQuestion,
+            Title = $"图片识别 · {done.Items.Count} 道",
+            Meta = $"{done.SeeModel} → {done.TextModel} · " +
+                   $"{done.OcrSeconds:F1}s + {done.StructSeconds:F1}s · 请核对",
+            Unit = u,
+            AutoHeight = true,
+            FontSize = 14.5f,
+            Fill = new Color4(1f, 1f, 1f, 0.98f),
+            Border = new Color4(0.86f, 0.88f, 0.91f, 1f),
+        };
+        foreach (var it in done.Items)
+        {
+            string stem = (it.Stem ?? "").Trim();
+            if (it.Options.Count > 0)
+                stem = stem + "\n" + string.Join("\n", it.Options);
+            if (it.NeedReview) stem = "【请核对】" + stem;
+            c.Questions.Add(new TextBoxQuestion
+            {
+                Stem = stem,
+                // 答案默认空：卷面本来就没有答案，AI 顺手编的答案核对成本更高。
+                Answer = it.Answer ?? "",
+                Analysis = it.Analysis ?? "",
+            });
+        }
+        c.SetWidth(Math.Clamp(560f * u, 320f * u, maxW));
+        _ = c.EnsureLayout();
+        return MakeTextBoxStroke(c);
+    }
+
+    /// <summary>结构化失败：把 OCR 原文放进**富文本只读框**（能渲染 $...$ 公式）。</summary>
+    private Stroke BuildRichTextBox(ImageCardDone done, float u, float maxW)
+    {
+        string head = string.IsNullOrWhiteSpace(done.FallbackReason)
+            ? "【识别原文】"
+            : $"【识别原文 · 结构化失败：{ClipAiPlot(done.FallbackReason, 28)}】";
+        var c = TextBoxData.CreatePlain(head + "\n" + done.OcrText, u,
+                                        Math.Clamp(560f * u, 320f * u, maxW), 120f * u);
+        c.Role = TextBoxRole.Normal;
+        c.Rich = true;
+        c.ReadOnly = true;
+        c.FontSize = 15f;
+        _ = c.EnsureLayout();
+        return MakeTextBoxStroke(c);
+    }
+
+    private static Stroke MakeTextBoxStroke(TextBoxData card)
+    {
+        var s = new Stroke
+        {
+            Tool = Tool.Marquee,
+            Kind = StrokeKind.TextBox,
+            TextBox = card,
+            Color = new Color4(0.12f, 0.14f, 0.18f, 1f),
+            Width = 0f,
+        };
+        s.SetPoints(new[]
+        {
+            new Vector2(0f, 0f),
+            new Vector2(card.Width, card.LayoutHeight),
+        });
+        return s;
+    }
+
+    /// <summary>
+    /// 落在图片**右边**；右边放不下就放下面；都放不下就居中压在视口里。
+    /// 只保证整卡在视口内，尽量不盖住原图（原图要留着核对）。
+    /// </summary>
+    private void PlaceNearImage(Stroke card, Stroke image, RectF screen, float u)
+    {
+        var c = card.TextBox;
+        var img = image.PaddedBounds;
+        float gap = 24f * u;
+        float vpMinX = screen.MinX + 12f * u;
+        float vpMaxX = screen.MaxX - 12f * u;
+        float vpMinY = screen.MinY - ViewOffsetY + 12f * u;
+        float vpMaxY = screen.MaxY - ViewOffsetY - 12f * u;
+
+        float x, y;
+        if (img.MaxX + gap + c.Width <= vpMaxX)
+        {
+            x = img.MaxX + gap;
+            y = img.MinY;
+        }
+        else if (img.MaxY + gap + c.LayoutHeight <= vpMaxY)
+        {
+            x = img.MinX;
+            y = img.MaxY + gap;
+        }
+        else
+        {
+            x = (vpMinX + vpMaxX) * 0.5f - c.Width * 0.5f;
+            y = vpMinY;
+        }
+        x = Math.Clamp(x, vpMinX, MathF.Max(vpMinX, vpMaxX - c.Width));
+        y = Math.Clamp(y, vpMinY,
+                       MathF.Max(vpMinY, vpMaxY - MathF.Min(c.LayoutHeight, vpMaxY - vpMinY)));
+        card.SetPoints(new[]
+        {
+            new Vector2(x, y),
+            new Vector2(x + c.Width, y + c.LayoutHeight),
+        });
+    }
+
+    // ---- 卡上「生成答案」（按需，默认不跑）----------------------------------
+
+    private sealed class CardAnswersDone
+    {
+        public bool Ok;
+        public string Error = "";
+        public Stroke Stroke;
+        public List<AiQuestionClient.CardItem> Items = new();
+        public double Seconds;
+        public string Model = "";
+    }
+
+    private volatile CardAnswersDone _cardAnswersDone;
+    private volatile bool _cardAnswersBusy;
+
+    internal bool CardAnswersBusy => _cardAnswersBusy;
+
+    /// <summary>
+    /// 卡上「生成答案」：所有空答案的题**一次请求**批量生成，逐题填回。
+    /// 只有题目数量对得上才落；对不上就报错、不猜（宁可不给，也不给错）。
+    /// </summary>
+    internal void StartGenerateAnswers(Stroke cardStroke)
+    {
+        var card = cardStroke?.TextBox;
+        if (card == null || card.Role != TextBoxRole.AiQuestion) return;
+        if (_cardAnswersBusy)
+        {
+            ShowToast("正在生成，请稍等");
+            return;
+        }
+        var missing = new List<int>();
+        for (int i = 0; i < card.Questions.Count; i++)
+            if (string.IsNullOrWhiteSpace(card.Questions[i].Answer) &&
+                string.IsNullOrWhiteSpace(card.Questions[i].Analysis))
+                missing.Add(i);
+        if (missing.Count == 0)
+        {
+            card.ShowAnswers = true;
+            RelayoutCard(cardStroke);
+            return;
+        }
+
+        var state = OcrProviders.Load();
+        var textProfile = OcrProviders.PickText(state);
+        var cfg = OcrProviders.ToConfig(textProfile);
+        if (cfg == null || string.IsNullOrWhiteSpace(cfg.Key))
+        {
+            ShowToast("AI 未配置：先设置 API Key/模型");
+            return;
+        }
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("请为下面这些题目分别给出答案和解析。只输出 JSON 数组，顺序与题号一致：\n");
+        sb.Append("[{\"stem\":\"题干\",\"answer\":\"答案\",\"analysis\":\"解析\"}]\n");
+        sb.Append("规则：不要改题干；answer 给最终结果；analysis 先思路后步骤，≤200 个汉字；");
+        sb.Append("如果题目条件不足或你算不稳，就在 answer 写“无法确定”并在 analysis 里说明。\n\n");
+        for (int k = 0; k < missing.Count; k++)
+        {
+            int qi = missing[k];
+            string stem = card.Questions[qi].Stem ?? "";
+            sb.Append("第 ").Append(k + 1).Append(" 题：\n").Append(stem).Append('\n');
+        }
+
+        _cardAnswersBusy = true;
+        ShowToast("AI 生成答案中…", 4000);
+        string promptText = sb.ToString();
+        _ = Task.Run(async () =>
+        {
+            var done = new CardAnswersDone { Stroke = cardStroke, Model = cfg.Model };
+            try
+            {
+                var st = await AiQuestionClient.StructureAsync(
+                        promptText, cfg, CancellationToken.None, withAnswer: true).ConfigureAwait(false);
+                done.Seconds = st.Seconds;
+                done.Ok = st.Ok;
+                done.Error = st.Error;
+                done.Items = st.Cards;
+            }
+            catch (Exception ex)
+            {
+                done.Error = ex.Message;
+            }
+            Interlocked.Exchange(ref _cardAnswersDone, done);
+        });
+    }
+
+    /// <summary>主循环调用：把生成的答案填回卡（一步撤销）。</summary>
+    internal void StepCardAnswers()
+    {
+        var done = Interlocked.Exchange(ref _cardAnswersDone, null);
+        if (done == null) return;
+        _cardAnswersBusy = false;
+        if (_quit) return;
+
+        var s = done.Stroke;
+        var card = s?.TextBox;
+        if (card == null || !Doc.Strokes.Contains(s))
+        {
+            ShowToast("卡片已删除，答案丢弃");
+            return;
+        }
+        if (!done.Ok || done.Items.Count == 0)
+        {
+            ShowToast("生成答案失败：" + ClipAiPlot(done.Error, 40), 4500);
+            return;
+        }
+
+        var missing = new List<int>();
+        for (int i = 0; i < card.Questions.Count; i++)
+            if (string.IsNullOrWhiteSpace(card.Questions[i].Answer) &&
+                string.IsNullOrWhiteSpace(card.Questions[i].Analysis))
+                missing.Add(i);
+        if (missing.Count == 0) { card.ShowAnswers = true; RelayoutCard(s); return; }
+        if (done.Items.Count != missing.Count)
+        {
+            ShowToast($"答案数量对不上（{done.Items.Count}/{missing.Count}），请重试", 4500);
+            return;
+        }
+
+        var before = SnapshotAnswers(card, out bool showBefore, out string metaBefore);
+        var beforeBounds = s.PaddedBounds;
+        for (int k = 0; k < missing.Count; k++)
+        {
+            var q = card.Questions[missing[k]];
+            var it = done.Items[k];
+            q.Answer = string.IsNullOrWhiteSpace(it.Answer) ? "无法确定" : it.Answer.Trim();
+            q.Analysis = it.Analysis ?? "";
+        }
+        card.ShowAnswers = true;
+        card.Meta = AddAnswerNote(card.Meta);
+        card.InvalidateLayout();
+        _ = card.EnsureLayout();
+        SyncCardBounds(s);
+        var after = SnapshotAnswers(card, out bool showAfter, out string metaAfter);
+        var afterBounds = s.PaddedBounds;
+
+        var action = new TextBoxAnswersAction(
+            s, before, after, showBefore, showAfter, metaBefore, metaAfter,
+            beforeBounds, afterBounds);
+        action.Redo(Doc);                  // 先按“已生成”重排一次（顺手把脏区标出来）
+        Doc.CommitInteractive(action);     // 再进撤销栈
+        SetInkStatus($"已生成 {missing.Count} 道题的答案（{done.Seconds:F0}s），请核对");
+        ShowToast($"答案已生成（{done.Seconds:F1}s）· 请核对");
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>自检用：把一题答案写进卡（走产品同一条 Redo/Commit 路径，含脏区）。</summary>
+    internal void ApplyAnswersForTest(Stroke s, int index, string answer, string analysis)
+    {
+        var card = s?.TextBox;
+        if (card == null || index < 0 || index >= card.Questions.Count) return;
+        var before = SnapshotAnswers(card, out bool showBefore, out string metaBefore);
+        var beforeBounds = s.PaddedBounds;
+        card.Questions[index].Answer = answer ?? "";
+        card.Questions[index].Analysis = analysis ?? "";
+        card.ShowAnswers = true;
+        card.Meta = AddAnswerNote(card.Meta);
+        card.InvalidateLayout();
+        _ = card.EnsureLayout();
+        SyncCardBounds(s);
+        var after = SnapshotAnswers(card, out bool showAfter, out string metaAfter);
+        var action = new TextBoxAnswersAction(
+            s, before, after, showBefore, showAfter, metaBefore, metaAfter,
+            beforeBounds, s.PaddedBounds);
+        action.Redo(Doc);
+        Doc.CommitInteractive(action);
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    private static (string A, string An)[] SnapshotAnswers(TextBoxData card,
+                                                          out bool show, out string meta)
+    {
+        var snap = new (string, string)[card.Questions.Count];
+        for (int i = 0; i < snap.Length; i++)
+            snap[i] = (card.Questions[i].Answer, card.Questions[i].Analysis);
+        show = card.ShowAnswers;
+        meta = card.Meta;
+        return snap;
+    }
+
+    private static string AddAnswerNote(string meta)
+    {
+        string m = meta ?? "";
+        if (m.Contains("AI 答案", StringComparison.Ordinal)) return m;
+        return m.Length == 0 ? "AI 答案 · 请核对" : m + " · AI 答案请核对";
+    }
+
+    private void RelayoutCard(Stroke s)
+    {
+        if (s?.TextBox == null) return;
+        s.TextBox.InvalidateLayout();
+        _ = s.TextBox.EnsureLayout();
+        SyncCardBounds(s);
+        Doc.RefreshStrokeGrid(s);
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    private static void SyncCardBounds(Stroke s)
+    {
+        if (s.Points.Count >= 2)
+            s.SetPoint(1, new Vector2(s.Points[0].X + s.TextBox.Width,
+                                      s.Points[0].Y + s.TextBox.LayoutHeight));
+        s.SyncTextBoxBounds();
+    }
+
     // ---- 命中 / 拖动 --------------------------------------------------------
 
     private Stroke TextBoxAt(float screenX, float screenY)
@@ -1799,6 +2343,12 @@ public partial class InkEngine
         // 每道题的「显示答案 / 收起答案」。
         foreach (var line in lines)
         {
+            if (line.Kind == TextBoxLineKind.GenerateAnswers)
+            {
+                if (!line.Box.Contains(local.X, local.Y + card.ScrollY)) continue;
+                StartGenerateAnswers(s);
+                return true;
+            }
             if (line.Kind != TextBoxLineKind.Toggle) continue;
             if (!line.Box.Contains(local.X, local.Y + card.ScrollY)) continue;
             var before = s.PaddedBounds;

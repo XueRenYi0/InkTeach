@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>窗口白板 · 界面骨架</title>
+<style>
+  :root{
+    --bg:#0d1117;--panel:#151b25;--line:#2a3446;--text:#e9eef7;--muted:#96a3b7;
+    --accent:#5b8cff;--accent-soft:#20345f;--ok:#55d6a8;--warn:#ffbf69;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 15% -10%,#1b2740 0%,var(--bg) 55%);color:var(--text);font:14px/1.6 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1420px;margin:0 auto;padding:24px 22px 40px}
+  h1{font-size:22px;margin:6px 0 4px}
+  .kicker{font-size:12px;letter-spacing:.16em;color:#8fb2ff;text-transform:uppercase}
+  .sub{color:var(--muted);margin:0;max-width:1100px}
+  .controlbar{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;margin:18px 0 14px;padding:12px 14px;background:#121925;border:1px solid var(--line);border-radius:12px}
+  .seg{display:flex;gap:6px;align-items:center}
+  .seg > span{color:var(--muted);font-size:12px;margin-right:2px}
+  button{font:inherit;color:#dce7f8;background:#1a2433;border:1px solid #33425c;border-radius:9px;padding:7px 11px;cursor:pointer}
+  button:hover{border-color:#5b7fc7;background:#203050}
+  button.active{background:linear-gradient(180deg,#2f58b8,#23408a);border-color:#6f97ff;color:#fff}
+  label.check{display:inline-flex;gap:7px;align-items:center;color:#c8d4e6;font-size:13px;cursor:pointer;user-select:none}
+  label.check input{accent-color:var(--accent)}
+  .stage{overflow:auto;padding:8px 2px 18px}
+  .window{
+    position:relative;width:1240px;height:720px;border-radius:12px;overflow:hidden;
+    background:#111722;border:1px solid #39445a;box-shadow:0 24px 80px #000a;
+    --btn:48px;--icon:24px;--dock-h:64px;--gap:6px;--font:12px;--radius:12px;--tile:76px;
+  }
+  .window.scale-13{--btn:60px;--icon:30px;--dock-h:80px;--gap:8px;--font:13px;--radius:14px;--tile:92px}
+  .window.scale-15{--btn:72px;--icon:36px;--dock-h:96px;--gap:10px;--font:14px;--radius:16px;--tile:108px}
+  .window.fullscreen,.window.transient{border-radius:0}
+  .window.fullscreen .titlebar,.window.transient .titlebar{display:none}
+  .window.fullscreen .desk,.window.transient .desk{inset:0}
+  .window.fullscreen .page,.window.transient .page{top:24px}
+  .titlebar{
+    height:42px;display:flex;align-items:center;justify-content:space-between;
+    padding:0 12px 0 16px;background:linear-gradient(180deg,#1b2331,#151c28);
+    border-bottom:1px solid #2b3648;color:#c9d5e8;font-size:13px;
+  }
+  .wintitle{display:flex;align-items:center;gap:10px;min-width:0}
+  .wintitle b{font-weight:600;color:#eef4ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .wintitle span{color:#7f8da2;font-size:12px}
+  .winbtns{display:flex;gap:2px}
+  .winbtns span{width:42px;height:30px;display:grid;place-items:center;border-radius:7px;color:#9fb0c8;font-size:14px}
+  .winbtns span:hover{background:#263248;color:#fff}
+  .winbtns .close:hover{background:#a83243;color:#fff}
+  .desk{
+    position:absolute;inset:42px 0 0;
+    background:
+      radial-gradient(900px 480px at 50% 0%,#2a3650 0%,transparent 60%),
+      repeating-linear-gradient(0deg,#ffffff04 0 1px,transparent 1px 26px),
+      repeating-linear-gradient(90deg,#ffffff04 0 1px,transparent 1px 26px),
+      #222a3a;
+    overflow:hidden;
+  }
+  .page{
+    position:absolute;left:50%;top:28px;transform:translateX(-50%);
+    width:860px;height:484px;background:#fdfdfb;border-radius:5px;
+    box-shadow:0 20px 45px #0009,0 0 0 1px #ffffff22;
+  }
+  .paperlines{position:absolute;inset:0;background:
+    repeating-linear-gradient(0deg,transparent 0 31px,#e9edf3 31px 32px);
+    opacity:.55;border-radius:5px;
+  }
+  .sample{position:absolute;inset:0;width:100%;height:100%}
+  .photo-placeholder{
+    position:absolute;right:42px;bottom:34px;width:190px;height:120px;
+    border:2px dashed #b9c6d8;border-radius:8px;background:#f2f5f9;
+    display:grid;place-items:center;color:#7e8ea5;font-size:12px;text-align:center;line-height:1.5;
+    transform:rotate(-2deg);
+  }
+  .photo-placeholder b{display:block;color:#52647d;font-size:13px}
+  .page-badge{position:absolute;left:50%;top:2px;transform:translateX(-50%);font-size:12px;color:#aab8cc;background:#111722cc;border:1px solid #3b4a63;padding:2px 9px;border-radius:999px}
+  .dock-wrap{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);z-index:20}
+  .dock{
+    display:flex;align-items:center;gap:var(--gap);min-height:var(--dock-h);
+    padding:8px 10px;border-radius:18px;border:1px solid #3b4b66;
+    background:linear-gradient(180deg,#1b2434f2,#121925f2);
+    box-shadow:0 18px 45px #000a,0 0 0 1px #ffffff0d inset;
+    backdrop-filter:blur(8px);
+  }
+  .grip{width:18px;align-self:stretch;border-radius:8px;cursor:grab;display:grid;place-items:center;color:#6d7f98;flex:0 0 auto;touch-action:none}
+  .window.drag-off .grip{opacity:.25;cursor:not-allowed}
+  .grip:active{cursor:grabbing}
+  .grip svg{width:14px;height:28px}
+  .group{display:flex;align-items:center;gap:calc(var(--gap) - 1px)}
+  .sep{width:1px;height:calc(var(--btn) * .55);background:#33415a;margin:0 3px;flex:0 0 auto}
+  .icon-btn{
+    width:var(--btn);height:var(--btn);border-radius:var(--radius);
+    display:flex;align-items:center;justify-content:center;flex-direction:column;gap:2px;
+    padding:0;background:transparent;border:1px solid transparent;color:#c9d6ea;
+    position:relative;flex:0 0 auto;
+  }
+  .icon-btn:hover{background:#22314a;border-color:#3d5478;color:#fff}
+  .icon-btn.active{background:linear-gradient(180deg,#2d55b2,#223e82);border-color:#6d96ff;color:#fff;box-shadow:0 0 0 1px #6d96ff33 inset}
+  .icon{
+    width:var(--icon);height:var(--icon);display:block;overflow:visible;
+    fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;
+  }
+  symbol#ic-more circle,symbol#ic-grip circle{fill:currentColor;stroke:none}
+  .label{display:none;font-size:calc(var(--font) - 1px);line-height:1;color:#b8c7dc;white-space:nowrap}
+  .window.show-labels .label{display:block}
+  .window.show-labels .icon-btn{height:calc(var(--btn) + 16px);justify-content:center}
+  .window.show-labels .dock{min-height:calc(var(--dock-h) + 14px)}
+  .pill{
+    height:var(--btn);min-width:calc(var(--btn) * 1.9);padding:0 12px;border-radius:var(--radius);
+    display:flex;align-items:center;justify-content:center;gap:5px;flex:0 0 auto;
+    background:#0f1622;border:1px solid #33425a;color:#e9f0fb;
+    font-size:calc(var(--font) + 2px);font-variant-numeric:tabular-nums;
+  }
+  .pill:hover{border-color:#5477b5}
+  .pill small{font-size:calc(var(--font) - 2px);color:#8293ab}
+  .hide-13,.hide-15{display:flex}
+  .window.scale-13 .hide-13{display:none}
+  .window.scale-15 .hide-13,.window.scale-15 .hide-15{display:none}
+  .colorbar{
+    position:absolute;left:50%;bottom:calc(var(--dock-h) + 26px);transform:translateX(-50%);
+    display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:14px;
+    background:#151d2bf2;border:1px solid #3b4b66;box-shadow:0 14px 36px #000a;
+    backdrop-filter:blur(8px);white-space:nowrap;
+  }
+  .window.show-labels .colorbar{bottom:calc(var(--dock-h) + 44px)}
+  .swatches{display:flex;gap:8px}
+  .swatch{width:calc(var(--btn) * .72);height:calc(var(--btn) * .72);border-radius:50%;border:2px solid #ffffff33;cursor:pointer}
+  .swatch.active{outline:2px solid #fff;outline-offset:2px}
+  .widths{display:flex;gap:6px;align-items:center;padding-left:10px;border-left:1px solid #33415a}
+  .width-dot{width:calc(var(--btn) * .8);height:calc(var(--btn) * .55);border-radius:9px;border:1px solid #3b4b66;display:grid;place-items:center;background:#101722;cursor:pointer}
+  .width-dot i{display:block;background:#dce8fb;border-radius:999px}
+  .width-dot.active{border-color:#6d96ff;background:#1d2b49}
+  .more-modal{
+    position:absolute;left:0;right:0;top:42px;bottom:0;z-index:60;display:none;
+    flex-direction:column;background:linear-gradient(180deg,#101722fa,#0b1018fa);
+    backdrop-filter:blur(10px);
+  }
+  .window.fullscreen .more-modal,.window.transient .more-modal{top:0}
+  .more-modal.show{display:flex}
+  .more-head{display:flex;align-items:center;justify-content:space-between;padding:18px 24px;border-bottom:1px solid #2b3648}
+  .more-kicker{font-size:11px;letter-spacing:.14em;color:#8fb2ff;text-transform:uppercase}
+  .more-head h2{margin:2px 0 0;font-size:22px}
+  .more-close{width:var(--btn);height:var(--btn);border-radius:var(--radius);font-size:18px;display:grid;place-items:center;padding:0}
+  .more-scroll{flex:1;overflow:auto;padding:16px 24px 34px;scrollbar-color:#3b4a63 #10151e}
+  .more-group{margin:0 0 18px}
+  .more-group h3{margin:0 0 8px;font-size:13px;color:#93a4bd;font-weight:600;letter-spacing:.04em}
+  .more-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+  .window.scale-13 .more-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .window.scale-15 .more-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .more-item{
+    min-height:var(--tile);border-radius:12px;background:#101722;border:1px solid #2f3f58;
+    display:flex;flex-direction:column;gap:6px;align-items:center;justify-content:center;
+    color:#c4d2e6;font-size:calc(var(--font) + 1px);cursor:pointer;padding:8px;text-align:center;
+  }
+  .more-item:hover{border-color:#5b7fc7;background:#1c2a42;color:#fff}
+  .more-item .icon{width:calc(var(--icon) * 1.05);height:calc(var(--icon) * 1.05)}
+  .more-item.danger{color:#ff9bab;border-color:#5c3340}
+  .more-item.danger:hover{background:#3a2029;border-color:#c25068;color:#ffdbe2}
+  .back-ppt{
+    position:absolute;left:18px;bottom:calc(var(--dock-h) + 26px);z-index:28;display:none;
+    height:var(--btn);padding:0 14px;border-radius:999px;align-items:center;gap:8px;
+    background:#101722f2;border:1px solid #4b638a;color:#eaf2ff;font-size:calc(var(--font) + 1px);
+    box-shadow:0 12px 30px #000a;
+  }
+  .window.show-labels .back-ppt{bottom:calc(var(--dock-h) + 44px)}
+  .window.transient .back-ppt{display:flex}
+  .back-ppt:hover{background:#1c2a42;border-color:#7ea2e6}
+  .toast{
+    position:absolute;left:50%;bottom:calc(var(--dock-h) + 30px);transform:translateX(-50%);
+    z-index:80;background:#0b1018f2;border:1px solid #4b638a;color:#eaf2ff;
+    padding:9px 15px;border-radius:10px;font-size:13px;box-shadow:0 12px 30px #000a;
+    opacity:0;pointer-events:none;transition:.18s;
+  }
+  .toast.show{opacity:1}
+  .hide-handle{
+    position:absolute;left:50%;bottom:0;transform:translateX(-50%);
+    width:180px;height:32px;border:0;background:transparent;display:none;
+    place-items:end center;padding:0;cursor:pointer;z-index:30;
+  }
+  .hide-handle span{display:block;width:120px;height:6px;border-radius:999px;background:#7287a5aa;margin-bottom:3px;box-shadow:0 0 0 1px #ffffff12}
+  .dock-wrap.hidden{opacity:0;pointer-events:none}
+  .hide-handle.show{display:grid}
+  .note{color:var(--muted);font-size:12px;margin:10px 0 0}
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:20px}
+  .card{background:#121925;border:1px solid var(--line);border-radius:12px;padding:14px}
+  .card h3{margin:0 0 8px;font-size:14px;color:#eaf1fd}
+  .card ul{margin:0;padding-left:18px;color:#aebbd0;font-size:13px;line-height:1.9}
+  .card li b{color:#e7eefb;font-weight:600}
+  .tag{display:inline-block;font-size:11px;color:#0d1117;background:var(--ok);border-radius:999px;padding:1px 7px;margin-left:6px;font-weight:700}
+  @media (max-width: 1000px){.cards{grid-template-columns:1fr}.window{transform-origin:top left}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="ic-pen" viewBox="0 0 24 24"><path d="M4 20l4.2-1L19 8.2 15.8 5 5 15.8 4 20z"/><path d="M13.8 7l3.2 3.2"/></symbol>
+  <symbol id="ic-highlighter" viewBox="0 0 24 24"><path d="M5 19h8l6-6-4-4-9 9v1z"/><path d="M14 5l5 5"/><path d="M4 21h10"/></symbol>
+  <symbol id="ic-eraser" viewBox="0 0 24 24"><path d="M4 15.5L14.5 5l5 5L9 20H5l-1-4.5z"/><path d="M9 10l5 5"/><path d="M9 20h11"/></symbol>
+  <symbol id="ic-laser" viewBox="0 0 24 24"><circle cx="8" cy="8" r="2.5"/><path d="M11 11l9 9"/><path d="M16 4l1 3M20 8l-3 1"/></symbol>
+  <symbol id="ic-hand" viewBox="0 0 24 24"><path d="M8 12V6.2a1.8 1.8 0 0 1 3.6 0V11"/><path d="M11.6 11V4.8a1.8 1.8 0 0 1 3.6 0V11"/><path d="M15.2 11V6.8a1.8 1.8 0 0 1 3.6 0V15c0 3.9-2.8 7-6.7 7h-.9c-2 0-3.6-1-4.7-2.7L4.1 14a1.8 1.8 0 0 1 2.9-2.1L8 13"/></symbol>
+  <symbol id="ic-undo" viewBox="0 0 24 24"><path d="M4 9h9a5 5 0 0 1 0 10h-3"/><path d="M8 5L4 9l4 4"/></symbol>
+  <symbol id="ic-redo" viewBox="0 0 24 24"><path d="M20 9h-9a5 5 0 0 0 0 10h3"/><path d="M16 5l4 4-4 4"/></symbol>
+  <symbol id="ic-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="M4 18l5-5 4 4 3-3 4 4"/></symbol>
+  <symbol id="ic-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
+  <symbol id="ic-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+  <symbol id="ic-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+  <symbol id="ic-fit" viewBox="0 0 24 24"><path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/></symbol>
+  <symbol id="ic-left" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="ic-right" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+  <symbol id="ic-shape" viewBox="0 0 24 24"><rect x="3" y="4" width="10" height="10" rx="1"/><circle cx="16.5" cy="16.5" r="4.5"/></symbol>
+  <symbol id="ic-text" viewBox="0 0 24 24"><path d="M5 5h14M12 5v14"/></symbol>
+  <symbol id="ic-select" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1" stroke-dasharray="3 3"/></symbol>
+  <symbol id="ic-capture" viewBox="0 0 24 24"><path d="M4 8h4l1.5-2h5L16 8h4v12H4z"/><circle cx="12" cy="14" r="3.5"/></symbol>
+  <symbol id="ic-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></symbol>
+  <symbol id="ic-fullscreen" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+  <symbol id="ic-grip" viewBox="0 0 12 24"><circle cx="4" cy="6" r="1"/><circle cx="8" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="8" cy="12" r="1"/><circle cx="4" cy="18" r="1"/><circle cx="8" cy="18" r="1"/></symbol>
+  <symbol id="ic-star" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.5 9.7l5.9-.9L12 3.5z"/></symbol>
+  <symbol id="ic-page" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></symbol>
+  <symbol id="ic-page-new" viewBox="0 0 24 24"><rect x="4" y="3" width="14" height="18" rx="2"/><path d="M8 8h6M8 12h6M11 16v4M9 18h4"/></symbol>
+  <symbol id="ic-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"/></symbol>
+  <symbol id="ic-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></symbol>
+  <symbol id="ic-save" viewBox="0 0 24 24"><path d="M5 3h12l3 3v15H4V3h1z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></symbol>
+  <symbol id="ic-open" viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3V7z"/><path d="M3 7V5h7l2 2"/></symbol>
+  <symbol id="ic-export" viewBox="0 0 24 24"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M4 14v6h16v-6"/></symbol>
+  <symbol id="ic-board-color" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="8.5" cy="8.5" r="1.3" fill="currentColor"/><circle cx="15.5" cy="8.5" r="1.3" fill="currentColor"/><circle cx="8.5" cy="15.5" r="1.3" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.3" fill="currentColor"/></symbol>
+  <symbol id="ic-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.2a2.6 2.6 0 1 1 4.2 2c-1 .7-1.7 1.3-1.7 2.6"/><circle cx="12" cy="17.3" r="1" fill="currentColor"/></symbol>
+  <symbol id="ic-log" viewBox="0 0 24 24"><path d="M6 3h12v18H6z"/><path d="M9 8h6M9 12h6M9 16h4"/></symbol>
+  <symbol id="ic-close" viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19"/></symbol>
+  <symbol id="ic-exit" viewBox="0 0 24 24"><path d="M10 4H5v16h5"/><path d="M14 8l4 4-4 4M8 12h10"/></symbol>
+</svg>
+
+<div class="wrap">
+  <div class="kicker">InkTeach · 窗口白板</div>
+  <h1>界面骨架：底部三组 + 1.0 / 1.3 / 1.5</h1>
+  <p class="sub">这不是最终视觉，是布局/尺寸/交互骨架。看三件事：① 顶部只有系统标题栏；② 高频操作都在底部；③ 1.5 档放不下时收“更多”，不缩小按钮。</p>
+
+  <div class="controlbar">
+    <div class="seg">
+      <span>界面大小</span>
+      <button data-scale="1" class="active">标准 1.0</button>
+      <button data-scale="1.3">大 1.3</button>
+      <button data-scale="1.5">特大 1.5</button>
+    </div>
+    <label class="check"><input type="checkbox" id="labels"> 显示文字标签</label>
+    <span class="ctl-note">底栏固定，不拖动；第一版不做贴边隐藏</span>
+    <button id="fullscreenBtn">全屏预览（去标题栏）</button>
+    <button id="transientBtn">模拟：覆盖层 → 白板</button>
+  </div>
+
+  <div class="stage">
+    <div class="window" id="win">
+      <div class="titlebar">
+        <div class="wintitle"><b>白板 · 函数复习</b><span>第 3 / 12 页 · 已自动保存</span></div>
+        <div class="winbtns"><span>—</span><span>□</span><span class="close">✕</span></div>
+      </div>
+
+      <div class="desk">
+        <div class="page">
+          <div class="paperlines"></div>
+          <div class="page-badge">第 3 / 12 页</div>
+          <svg class="sample" viewBox="0 0 860 484" aria-hidden="true">
+            <path d="M96 128 C130 96 166 96 198 128 S264 160 300 128" fill="none" stroke="#1f6feb" stroke-width="4" stroke-linecap="round"/>
+            <path d="M96 170 h210 M96 200 h160" stroke="#1f6feb" stroke-width="3" stroke-linecap="round" opacity=".75"/>
+            <path d="M350 132 c40-60 120-60 160 0 s120 60 160 0" fill="none" stroke="#c2415a" stroke-width="4" stroke-linecap="round"/>
+            <text x="96" y="270" font-family="Segoe UI, Microsoft YaHei" font-size="30" fill="#2c3a4e">y = 2x + 1</text>
+            <path d="M96 330 h300" stroke="#d4dce8" stroke-width="2" stroke-dasharray="6 8"/>
+            <path d="M96 386 h420" stroke="#d4dce8" stroke-width="2"/>
+          </svg>
+          <div class="photo-placeholder"><span><b>拖入的图片</b>拖到哪落在哪<br>一步撤销</span></div>
+        </div>
+
+        <div class="dock-wrap" id="dockWrap">
+          <div class="colorbar" id="colorbar">
+            <div class="swatches">
+              <div class="swatch active" style="background:#1f6feb"></div>
+              <div class="swatch" style="background:#c2415a"></div>
+              <div class="swatch" style="background:#1f9d72"></div>
+              <div class="swatch" style="background:#e0a11b"></div>
+              <div class="swatch" style="background:#8a5cf6"></div>
+            </div>
+            <div class="widths">
+              <div class="width-dot"><i style="width:18px;height:3px"></i></div>
+              <div class="width-dot active"><i style="width:22px;height:6px"></i></div>
+              <div class="width-dot"><i style="width:26px;height:10px"></i></div>
+            </div>
+          </div>
+
+          <div class="dock" id="dock">
+            <div class="grip" id="grip" title="拖动底栏"><svg class="icon"><use href="#ic-grip"/></svg></div>
+
+            <div class="group">
+              <button class="icon-btn" title="上一页"><svg class="icon"><use href="#ic-left"/></svg><span class="label">上一页</span></button>
+              <button class="pill" title="跳页">3 / 12 <small>页</small></button>
+              <button class="icon-btn" title="下一页"><svg class="icon"><use href="#ic-right"/></svg><span class="label">下一页</span></button>
+            </div>
+            <div class="sep"></div>
+
+            <div class="group tools">
+              <button class="icon-btn active" data-tool="pen" title="笔"><svg class="icon"><use href="#ic-pen"/></svg><span class="label">笔</span></button>
+              <button class="icon-btn" data-tool="highlighter" title="荧光笔"><svg class="icon"><use href="#ic-highlighter"/></svg><span class="label">荧光</span></button>
+              <button class="icon-btn" data-tool="eraser" title="橡皮"><svg class="icon"><use href="#ic-eraser"/></svg><span class="label">橡皮</span></button>
+              <button class="icon-btn hide-15" data-tool="laser" title="激光笔"><svg class="icon"><use href="#ic-laser"/></svg><span class="label">激光</span></button>
+              <button class="icon-btn" data-tool="hand" title="手 / 移动"><svg class="icon"><use href="#ic-hand"/></svg><span class="label">手</span></button>
+            </div>
+            <div class="sep"></div>
+
+            <div class="group actions">
+              <button class="icon-btn" title="撤销"><svg class="icon"><use href="#ic-undo"/></svg><span class="label">撤销</span></button>
+              <button class="icon-btn hide-15" title="重做"><svg class="icon"><use href="#ic-redo"/></svg><span class="label">重做</span></button>
+              <button class="icon-btn hide-13" title="插入图片"><svg class="icon"><use href="#ic-image"/></svg><span class="label">图片</span></button>
+              <button class="icon-btn" id="moreBtn" title="更多"><svg class="icon"><use href="#ic-more"/></svg><span class="label">更多</span></button>
+            </div>
+            <div class="sep"></div>
+
+            <div class="group zoom">
+              <button class="icon-btn" id="zoomOut" title="缩小"><svg class="icon"><use href="#ic-minus"/></svg><span class="label">缩小</span></button>
+              <button class="pill" title="缩放"><span id="zoomVal">126%</span></button>
+              <button class="icon-btn" id="zoomIn" title="放大"><svg class="icon"><use href="#ic-plus"/></svg><span class="label">放大</span></button>
+              <button class="icon-btn hide-15" title="适应整页"><svg class="icon"><use href="#ic-fit"/></svg><span class="label">适应</span></button>
+            </div>
+          </div>
+        </div>
+
+        <button class="back-ppt" id="backPpt"><svg class="icon"><use href="#ic-exit"/></svg> 回 PPT</button>
+        <button class="hide-handle" id="hideHandle" aria-label="显示底栏"><span></span></button>
+      </div>
+
+      <div class="more-modal" id="moreModal">
+        <div class="more-head">
+          <div><div class="more-kicker">窗口白板</div><h2>更多</h2></div>
+          <button class="more-close" id="moreClose" title="关闭">✕</button>
+        </div>
+        <div class="more-scroll">
+          <section class="more-group">
+            <h3>工具</h3>
+            <div class="more-grid">
+              <div class="more-item" data-more="图形"><svg class="icon"><use href="#ic-shape"/></svg>图形</div>
+              <div class="more-item" data-more="文本"><svg class="icon"><use href="#ic-text"/></svg>文本</div>
+              <div class="more-item" data-more="选择"><svg class="icon"><use href="#ic-select"/></svg>选择</div>
+              <div class="more-item" data-more="截图"><svg class="icon"><use href="#ic-capture"/></svg>截图</div>
+              <div class="more-item" data-more="收藏"><svg class="icon"><use href="#ic-star"/></svg>收藏</div>
+              <div class="more-item" data-more="图片"><svg class="icon"><use href="#ic-image"/></svg>图片</div>
+            </div>
+          </section>
+
+          <section class="more-group">
+            <h3>页面</h3>
+            <div class="more-grid">
+              <div class="more-item" data-more="新建页"><svg class="icon"><use href="#ic-page-new"/></svg>新建页</div>
+              <div class="more-item" data-more="删除页"><svg class="icon"><use href="#ic-trash"/></svg>删除页</div>
+              <div class="more-item" data-more="页面缩略图"><svg class="icon"><use href="#ic-grid"/></svg>页面缩略图</div>
+            </div>
+          </section>
+
+          <section class="more-group">
+            <h3>文件</h3>
+            <div class="more-grid">
+              <div class="more-item" data-more="保存"><svg class="icon"><use href="#ic-save"/></svg>保存…</div>
+              <div class="more-item" data-more="打开"><svg class="icon"><use href="#ic-open"/></svg>打开…</div>
+              <div class="more-item" data-more="导出"><svg class="icon"><use href="#ic-export"/></svg>导出…</div>
+            </div>
+          </section>
+
+          <section class="more-group">
+            <h3>视图</h3>
+            <div class="more-grid">
+              <div class="more-item" id="moreFs"><svg class="icon"><use href="#ic-fullscreen"/></svg><span id="moreFsLabel">全屏</span></div>
+              <div class="more-item" data-more="板色 / 底纹"><svg class="icon"><use href="#ic-board-color"/></svg>板色 / 底纹</div>
+            </div>
+          </section>
+
+          <section class="more-group">
+            <h3>帮助</h3>
+            <div class="more-grid">
+              <div class="more-item" data-more="使用说明"><svg class="icon"><use href="#ic-help"/></svg>使用说明</div>
+              <div class="more-item" data-more="日志与反馈"><svg class="icon"><use href="#ic-log"/></svg>日志与反馈</div>
+            </div>
+          </section>
+
+          <section class="more-group">
+            <h3>窗口</h3>
+            <div class="more-grid">
+              <div class="more-item danger" id="moreExit"><svg class="icon"><use href="#ic-exit"/></svg><span id="moreExitLabel">关闭窗口</span></div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <div class="toast" id="toast"></div>
+    </div>
+  </div>
+
+  <p class="note">提示：勾选“允许底栏水平拖动”后，拖底栏左边的握把；勾选“贴边隐藏”后，底栏会收起来，底部留一条 8px 视觉 / 32px 点击区的把手。</p>
+
+  <div class="cards">
+    <div class="card">
+      <h3>界面 / 老年教师</h3>
+      <ul>
+        <li><b>界面大小</b>：0.8 / 0.9 / 1.0 / 1.15 / 1.3 / <b>1.5 特大</b></li>
+        <li>与桌面批注<b>共用同一套缩放档</b>，不单独做窗口版</li>
+        <li>大/特大默认显示文字标签；标准只显示图标</li>
+        <li>主题：浅色 / 深色 / 高对比；减少动画</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>白板</h3>
+      <ul>
+        <li>默认视图：<b>适应宽度</b> / 适应整页</li>
+        <li>最小缩放：<b>适应整页</b> / 25%</li>
+        <li>页尺寸 16:9；板色/底纹</li>
+        <li>自动保存；图片插入最大尺寸</li>
+        <li>贴边隐藏；置顶；启动最大化</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>输入</h3>
+      <ul>
+        <li>手指默认：<b>写字</b>；两指平移/缩放</li>
+        <li>手工具：手指/鼠标平移；<b>笔永远写</b></li>
+        <li>压感：开；掌拒：标准/强</li>
+        <li>笔按键：橡皮 / 手 / 撤销（后续）</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const win = document.getElementById('win');
+  const dockWrap = document.getElementById('dockWrap');
+  const dock = document.getElementById('dock');
+  const grip = document.getElementById('grip');
+  const labels = document.getElementById('labels');
+  const drag = document.getElementById('drag');
+  const autohide = document.getElementById('autohide');
+  const resetDock = document.getElementById('resetDock');
+  const moreBtn = document.getElementById('moreBtn');
+  const moreModal = document.getElementById('moreModal');
+  const moreClose = document.getElementById('moreClose');
+  const colorbar = document.getElementById('colorbar');
+  const hideHandle = document.getElementById('hideHandle');
+  const zoomVal = document.getElementById('zoomVal');
+  const fullscreenBtn = document.getElementById('fullscreenBtn');
+  const transientBtn = document.getElementById('transientBtn');
+  const backPpt = document.getElementById('backPpt');
+  const moreFs = document.getElementById('moreFs');
+  const moreFsLabel = document.getElementById('moreFsLabel');
+  const moreExit = document.getElementById('moreExit');
+  const moreExitLabel = document.getElementById('moreExitLabel');
+  const toastEl = document.getElementById('toast');
+
+  let scale = 1;
+  let dockLeft = null;     // px, relative to window
+  let hideTimer = 0;
+  let toastTimer = 0;
+  let transient = false;
+
+  function setScale(v) {
+    scale = v;
+    win.classList.toggle('scale-13', v === 1.3);
+    win.classList.toggle('scale-15', v === 1.5);
+    document.querySelectorAll('[data-scale]').forEach(b => b.classList.toggle('active', Number(b.dataset.scale) === v));
+    // 大/特大默认开标签；标准默认关（用户可手动改）
+    labels.checked = v >= 1.3;
+    win.classList.toggle('show-labels', labels.checked);
+    if (dockLeft != null) clampDock(dockLeft);
+    else centerDock();
+  }
+
+  function centerDock() {
+    dockLeft = null;
+    dockWrap.style.left = '50%';
+    dockWrap.style.transform = 'translateX(-50%)';
+  }
+
+  function clampDock(x) {
+    const pad = 12;
+    const w = dock.offsetWidth;
+    const max = win.clientWidth - w - pad;
+    dockLeft = Math.max(pad, Math.min(max, x));
+    dockWrap.style.left = dockLeft + 'px';
+    dockWrap.style.transform = 'none';
+  }
+
+  function setZoom(delta) {
+    let n = parseInt(zoomVal.textContent, 10) || 126;
+    n = Math.max(25, Math.min(400, n + delta));
+    zoomVal.textContent = n + '%';
+  }
+
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200);
+  }
+
+  function openMore() {
+    moreModal.classList.add('show');
+    showDock();
+  }
+  function closeMore() {
+    moreModal.classList.remove('show');
+  }
+
+  function setFullscreen(on) {
+    win.classList.toggle('fullscreen', on);
+    fullscreenBtn.textContent = on ? '退出全屏（恢复标题栏）' : '全屏预览（去标题栏）';
+    moreFsLabel.textContent = on ? '退出全屏' : '全屏';
+    closeMore();
+    if (on) showDock();
+  }
+
+  function setTransient(on) {
+    transient = on;
+    win.classList.toggle('transient', on);
+    setFullscreen(on);
+    transientBtn.textContent = on ? '退出临时白板' : '模拟：覆盖层 → 白板';
+    moreExitLabel.textContent = on ? '退出白板 / 回 PPT' : '关闭窗口';
+    moreFs.style.display = on ? 'none' : '';
+    closeMore();
+    showDock();
+    toast(on ? '临时全屏白板：Esc / “回 PPT”退出' : '已回到 PPT（演示）');
+  }
+
+  fullscreenBtn.addEventListener('click', () => {
+    if (transient) setTransient(false);
+    else setFullscreen(!win.classList.contains('fullscreen'));
+  });
+  transientBtn.addEventListener('click', () => setTransient(!transient));
+  backPpt.addEventListener('click', () => setTransient(false));
+  moreFs.addEventListener('click', () => setFullscreen(!win.classList.contains('fullscreen')));
+  moreClose.addEventListener('click', closeMore);
+  moreExit.addEventListener('click', () => {
+    if (transient) setTransient(false);
+    else { closeMore(); toast('演示：关闭窗口'); }
+  });
+  moreModal.addEventListener('pointerdown', e => {
+    if (e.target === moreModal) closeMore();
+  });
+  document.querySelectorAll('[data-more]').forEach(item => {
+    item.addEventListener('click', () => toast('演示：' + item.dataset.more));
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      if (moreModal.classList.contains('show')) { closeMore(); return; }
+      if (transient) { setTransient(false); return; }
+      if (win.classList.contains('fullscreen')) setFullscreen(false);
+    }
+    if (e.key === 'F11') {
+      e.preventDefault();
+      if (transient) setTransient(false);
+      else setFullscreen(!win.classList.contains('fullscreen'));
+    }
+  });
+
+  document.querySelectorAll('[data-scale]').forEach(b => {
+    b.addEventListener('click', () => setScale(Number(b.dataset.scale)));
+  });
+
+  labels.addEventListener('change', () => win.classList.toggle('show-labels', labels.checked));
+  drag.addEventListener('change', () => {
+    win.classList.toggle('drag-off', !drag.checked);
+    if (!drag.checked) centerDock();
+  });
+  resetDock.addEventListener('click', centerDock);
+  win.classList.add('drag-off');
+
+  // 工具切换：只做骨架状态
+  document.querySelectorAll('[data-tool]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('[data-tool]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const tool = btn.dataset.tool;
+      colorbar.style.display = (tool === 'pen' || tool === 'highlighter') ? 'flex' : 'none';
+      closeMore();
+      armAutoHide();
+    });
+  });
+
+  // 色板/粗细只是示意
+  document.querySelectorAll('.swatch').forEach(s => s.addEventListener('click', () => {
+    document.querySelectorAll('.swatch').forEach(x => x.classList.remove('active'));
+    s.classList.add('active');
+  }));
+  document.querySelectorAll('.width-dot').forEach(s => s.addEventListener('click', () => {
+    document.querySelectorAll('.width-dot').forEach(x => x.classList.remove('active'));
+    s.classList.add('active');
+  }));
+
+  moreBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (moreModal.classList.contains('show')) closeMore();
+    else openMore();
+    armAutoHide();
+  });
+
+  document.getElementById('zoomOut').addEventListener('click', () => setZoom(-10));
+  document.getElementById('zoomIn').addEventListener('click', () => setZoom(10));
+
+  // 底栏拖动（只沿底部）
+  grip.addEventListener('pointerdown', e => {
+    if (!drag.checked) return;
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    const startX = e.clientX;
+    const rect = dockWrap.getBoundingClientRect();
+    const winRect = win.getBoundingClientRect();
+    const startLeft = rect.left - winRect.left;
+    dockWrap.style.left = startLeft + 'px';
+    dockWrap.style.transform = 'none';
+    const move = ev => clampDock(startLeft + (ev.clientX - startX));
+    const up = () => {
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', up);
+      grip.removeEventListener('pointercancel', up);
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up);
+    grip.addEventListener('pointercancel', up);
+  });
+
+  // 贴边隐藏：默认关；开了以后，离开 1.2s 收，底部留把手
+  function armAutoHide() {
+    if (!autohide.checked) return;
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(hideDock, 1200);
+  }
+  function hideDock() {
+    if (!autohide.checked) return;
+    if (moreModal.classList.contains('show')) return;
+    if (dock.matches(':hover')) return;
+    dockWrap.classList.add('hidden');
+    hideHandle.classList.add('show');
+  }
+  function showDock() {
+    clearTimeout(hideTimer);
+    dockWrap.classList.remove('hidden');
+    hideHandle.classList.remove('show');
+  }
+  autohide.addEventListener('change', () => {
+    if (autohide.checked) {
+      armAutoHide();
+    } else {
+      clearTimeout(hideTimer);
+      showDock();
+    }
+  });
+  dockWrap.addEventListener('pointerenter', showDock);
+  dockWrap.addEventListener('pointermove', () => {
+    if (autohide.checked && !dockWrap.classList.contains('hidden')) armAutoHide();
+  });
+  dockWrap.addEventListener('pointerleave', armAutoHide);
+  hideHandle.addEventListener('pointerenter', showDock);
+  hideHandle.addEventListener('click', showDock);
+
+  // 初始（支持用 #15 / #13 / #full / #more / #transient 直接看状态，方便截图）
+  if (location.hash === '#15') setScale(1.5);
+  else if (location.hash === '#13') setScale(1.3);
+  else setScale(1);
+  if (location.hash === '#full') setFullscreen(true);
+  if (location.hash === '#more') openMore();
+  if (location.hash === '#transient') setTransient(true);
+})();
+</script>
+</body>
+</html>

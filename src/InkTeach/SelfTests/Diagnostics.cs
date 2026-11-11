@@ -357,18 +357,44 @@ internal sealed partial class App
         Console.WriteLine($"=== 长跑测试（{seconds:F0} 秒，模拟连续上课使用）===");
         Console.WriteLine("  每轮：画 24 笔 → 擦掉几笔 → 撤销几次 → 偶尔清空");
         Console.WriteLine();
-        Console.WriteLine("   时间 | 工作集 | 提交   | 笔画数 | 平均记录 | 平均上屏 | 最慢帧");
+        Console.WriteLine("   时间 | 工作集 | 提交   | 笔画数 | 平均记录 | 平均上屏 | 最慢总帧");
         Console.WriteLine("  ------|--------|--------|--------|----------|----------|--------");
 
         var started = _clock.Elapsed.TotalMilliseconds;
         double nextReport = 0;
         int round = 0;
-        double worstFrame = 0;
+        double worstRecord = 0, worstTotal = 0, firstFrameTotal = 0, firstFrameRecord = 0;
+        bool firstSample = true;
         var recordSum = new List<double>();
+        var presentSum = new List<double>();
 
         float cx = _virtualX + _virtualW * 0.5f;
         float cy = _virtualY + _virtualH * 0.5f;
         var rnd = new Random(4242);
+
+        void SampleFrame()
+        {
+            var w0 = _windows[0];
+            double elapsedMs = _clock.Elapsed.TotalMilliseconds - started;
+            recordSum.Add(w0.LastRecordMs);
+            presentSum.Add(w0.LastPresentMs);
+            if (w0.LastRecordMs > 0 && elapsedMs >= 3000 && w0.LastRecordMs > worstRecord)
+                worstRecord = w0.LastRecordMs;
+            // 首帧是启动/建窗/首批分块的冷帧，单独报；稳态最慢从 3 秒后算，
+            // 否则“最慢帧”永远等于冷启动那一下，长跑劣化反而看不见。
+            if (firstSample)
+            {
+                firstFrameTotal = LastFrameMs;
+                firstFrameRecord = w0.LastRecordMs;
+                firstSample = false;
+            }
+            else if (elapsedMs >= 3000 && LastFrameMs > worstTotal) worstTotal = LastFrameMs;
+            if (recordSum.Count > 60)
+            {
+                recordSum.RemoveAt(0);
+                presentSum.RemoveAt(0);
+            }
+        }
 
         while (_clock.Elapsed.TotalMilliseconds - started < seconds * 1000)
         {
@@ -393,6 +419,7 @@ internal sealed partial class App
             }
             NowMs = _clock.Elapsed.TotalMilliseconds;
             RenderAll();
+            SampleFrame();
 
             // 擦掉几笔
             for (int i = 0; i < 6 && batch.Count > 0; i++)
@@ -402,33 +429,41 @@ internal sealed partial class App
             }
             NowMs = _clock.Elapsed.TotalMilliseconds;
             RenderAll();
+            SampleFrame();
 
             // 撤销几次
             for (int i = 0; i < 8; i++) Doc.Undo();
             NowMs = _clock.Elapsed.TotalMilliseconds;
             RenderAll();
+            SampleFrame();
 
             // 每 8 轮清空一次，模拟换一页
-            if (round % 8 == 0) { Doc.Clear(); RenderAll(); }
-
-            recordSum.Add(_windows[0].LastRecordMs);
-            if (_windows[0].LastRecordMs > worstFrame) worstFrame = _windows[0].LastRecordMs;
-            if (recordSum.Count > 60) recordSum.RemoveAt(0);
+            if (round % 8 == 0) { Doc.Clear(); RenderAll(); SampleFrame(); }
 
             double elapsed = (_clock.Elapsed.TotalMilliseconds - started) / 1000.0;
             if (elapsed >= nextReport)
             {
                 nextReport += 15;
-                double avg = 0;
-                foreach (var v in recordSum) avg += v;
-                avg = recordSum.Count > 0 ? avg / recordSum.Count : 0;
-                Console.WriteLine($"  {elapsed,5:F0}s | {Mem.Ws(),5:F1}M | {Mem.Priv(),5:F1}M | {Doc.Strokes.Count,6} | {avg,7:F2}ms | {_windows[0].LastPresentMs,7:F2}ms | {worstFrame,5:F2}ms");
+                double avgRecord = 0, avgPresent = 0;
+                for (int i = 0; i < recordSum.Count; i++)
+                {
+                    avgRecord += recordSum[i];
+                    avgPresent += presentSum[i];
+                }
+                if (recordSum.Count > 0)
+                {
+                    avgRecord /= recordSum.Count;
+                    avgPresent /= recordSum.Count;
+                }
+                string worstText = worstTotal > 0 ? $"{worstTotal,5:F2}ms" : "   —   ";
+                Console.WriteLine($"  {elapsed,5:F0}s | {Mem.Ws(),5:F1}M | {Mem.Priv(),5:F1}M | {Doc.Strokes.Count,6} | {avgRecord,7:F2}ms | {avgPresent,7:F2}ms | {worstText}");
             }
         }
 
         Console.WriteLine();
         Console.WriteLine($"  结束：工作集 {Mem.Ws():F1} MB，提交 {Mem.Priv():F1} MB，笔画 {Doc.Strokes.Count}，共 {round} 轮");
-        Console.WriteLine($"  最慢单帧记录耗时：{worstFrame:F2} ms");
+        Console.WriteLine($"  首帧（冷启动）：总 {firstFrameTotal:F2} ms / 记录 {firstFrameRecord:F2} ms");
+        Console.WriteLine($"  稳态最慢（3 秒后）：总帧 {worstTotal:F2} ms / 记录帧 {worstRecord:F2} ms");
         _quit = true;
     }
 
@@ -2889,7 +2924,7 @@ internal sealed partial class App
         Doc.ApplyTransform(Matrix3x2.CreateTranslation(0, 260f * DpiScale));
         SettleFrames(350);
         int movedOldA = ScreenProbe.CountMagenta(ax, ay, aw, ah);
-        int movedNewB = ScreenProbe.CountMagenta(bx - _virtualX + _virtualX, by, aw, ah);
+        int movedNewB = ScreenProbe.CountMagenta(bx, by + (int)(260f * DpiScale), aw, ah);
         Check("整体下移：老位置擦干净、新位置有墨", movedOldA < 100 && movedNewB > 300,
             $"老位置 {movedOldA} / 新位置 {movedNewB}");
 

@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>页模型与缩放演示 · InkTeach</title>
+<style>
+  :root{
+    --bg:#0e1117;
+    --panel:#161b24;
+    --panel2:#1c2230;
+    --line:#2a3242;
+    --text:#e8edf5;
+    --muted:#96a2b4;
+    --accent:#5b8cff;
+    --accent2:#8fb2ff;
+    --paper:#fdfdfb;
+    --desk:#222836;
+    --warn:#ffb454;
+    --ok:#55d6a8;
+    --danger:#ff6b81;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:radial-gradient(1200px 600px at 20% -10%, #1a2438 0%, var(--bg) 55%);
+    color:var(--text);font:14px/1.55 "Segoe UI","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  }
+  .wrap{max-width:1380px;margin:0 auto;padding:26px 24px 40px}
+  header h1{font-size:24px;margin:8px 0 6px;letter-spacing:.2px}
+  header p{margin:0;color:var(--muted);max-width:980px}
+  .kicker{font-size:12px;color:var(--accent2);letter-spacing:.16em;text-transform:uppercase}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 0}
+  .chip{border:1px solid var(--line);background:#131925;color:#c7d2e2;padding:6px 10px;border-radius:999px;font-size:12px}
+  .chip b{color:#fff}
+  .tabs{display:flex;gap:8px;margin:20px 0 14px}
+  .tab{border:1px solid var(--line);background:#121822;color:#b9c4d4;padding:9px 16px;border-radius:10px;cursor:pointer;font:inherit}
+  .tab:hover{border-color:#3d4b66;color:#fff}
+  .tab.active{background:linear-gradient(180deg,#2b4d9e,#233b73);border-color:#4f7be0;color:#fff;box-shadow:0 0 0 1px #4f7be033 inset}
+  .demo{display:grid;grid-template-columns:305px minmax(0,1fr);gap:18px;align-items:start}
+  .hidden{display:none !important}
+  .panel{background:linear-gradient(180deg,var(--panel),#121722);border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:0 10px 40px #0006}
+  .panel h2{font-size:16px;margin:0 0 4px}
+  .panel .sub{color:var(--muted);font-size:12px;margin-bottom:12px}
+  .hint{color:var(--muted);font-size:12px;line-height:1.65;margin:10px 0}
+  .hint b{color:#dbe6f8}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+  button{
+    border:1px solid #33405a;background:#1b2434;color:#dbe6f8;border-radius:9px;padding:8px 11px;
+    font:inherit;font-size:13px;cursor:pointer;transition:.15s border-color,.15s background,.15s transform;
+  }
+  button:hover{border-color:#5376b8;background:#213050}
+  button:active{transform:translateY(1px)}
+  button.primary{background:linear-gradient(180deg,#2e56b5,#23438f);border-color:#5b8cff}
+  button.primary:hover{background:linear-gradient(180deg,#3663c8,#2850a8)}
+  button.ghost{background:transparent}
+  .zoom-label{min-width:52px;text-align:center;font-variant-numeric:tabular-nums;color:#fff;font-weight:600}
+  .check{display:flex;gap:8px;align-items:flex-start;color:#c7d2e2;font-size:12px;margin:10px 0;cursor:pointer}
+  .check input{margin-top:3px;accent-color:var(--accent)}
+  .status{background:#0f141d;border:1px solid #263044;border-radius:10px;padding:10px 11px;font-size:12px;color:#b9c4d4;margin-top:10px;line-height:1.7}
+  .status b{color:#fff}
+  .status .owned{color:var(--ok)}
+  .viewport{
+    background:#0b0f17;border:1px solid var(--line);border-radius:16px;height:590px;overflow:auto;
+    position:relative;box-shadow:0 18px 60px #0007, 0 0 0 1px #ffffff08 inset;
+    scrollbar-color:#3b4a63 #10151e;
+  }
+  .desk{
+    min-height:100%;padding:26px 24px 40px;
+    background:
+      radial-gradient(900px 500px at 50% 0%, #283247 0%, transparent 60%),
+      repeating-linear-gradient(0deg,#ffffff03 0 1px,transparent 1px 26px),
+      repeating-linear-gradient(90deg,#ffffff03 0 1px,transparent 1px 26px),
+      var(--desk);
+  }
+  .page-stack{min-height:100%}
+  .page-wrap{width:720px;margin:0 auto 28px;position:relative}
+  .page-label{display:flex;align-items:center;gap:8px;color:#93a0b5;font-size:12px;margin:0 0 8px 2px;user-select:none}
+  .page-wrap.current .page-label span:first-child{color:#fff}
+  .page-badge{display:none;color:#0e1117;background:var(--ok);border-radius:999px;padding:1px 7px;font-size:11px;font-weight:700}
+  .page-wrap.owned .page-badge{display:inline-block}
+  .paper{
+    background:var(--paper);border-radius:5px;position:relative;overflow:hidden;
+    box-shadow:0 18px 34px #0008, 0 2px 0 #ffffff inset;
+    outline:1px solid #ffffff22;
+  }
+  .paper::after{content:"";position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 0 1px #0000000d}
+  .ink{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:crosshair;display:block}
+  .viewport.desk-click{cursor:not-allowed}
+  .pagebar{display:flex;align-items:center;gap:10px;margin-top:10px;color:var(--muted);font-size:12px}
+  .pagebar .spacer{flex:1}
+  .pagebar .pill{background:#121a27;border:1px solid #2b3850;border-radius:999px;padding:5px 11px;color:#dbe6f8;font-variant-numeric:tabular-nums}
+  .pagebar button{padding:6px 10px;font-size:12px}
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+  .card{background:#101620;border:1px solid #263044;border-radius:12px;padding:12px}
+  .card h3{font-size:12px;margin:0 0 6px;color:#dbe6f8;letter-spacing:.04em}
+  .card p{margin:0;color:var(--muted);font-size:12px;line-height:1.7}
+  .tree{background:#0f141d;border:1px solid #263044;border-radius:10px;padding:8px;margin:10px 0}
+  .tree-root{font-size:12px;color:#fff;padding:5px 7px;font-weight:600}
+  .tree-section{font-size:12px;color:var(--muted);padding:4px 7px 4px 17px}
+  .tree-pages{display:flex;flex-direction:column;gap:3px;margin-top:2px}
+  .page-item{text-align:left;border:1px solid transparent;background:transparent;padding:7px 9px 7px 20px;border-radius:8px;color:#b9c4d4;font-size:12px}
+  .page-item:hover{background:#182234;border-color:#2b3b57}
+  .page-item.active{background:#1b2b48;border-color:#3d5f9c;color:#fff}
+  .page-item::before{content:"▤";color:#6f7f98;margin-right:7px}
+  .toast{
+    position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(10px);
+    background:#0b0f16;border:1px solid #3b4b65;color:#e8edf5;padding:10px 16px;border-radius:10px;
+    box-shadow:0 12px 40px #000a;font-size:13px;opacity:0;pointer-events:none;transition:.2s;z-index:50;
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  @media (max-width: 980px){
+    .demo{grid-template-columns:1fr}
+    .panel{order:2}
+    .viewport{height:520px}
+    .split{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="kicker">InkTeach · 页模型演示</div>
+    <h1>固定页、连续滚动、缩放与页外留白</h1>
+    <p>这个网页只演示三件事：页是固定的“纸”，滚动是连续的“长纸”，缩放只是“相机”。灰蓝色的桌面是页外，不能写。用鼠标/触控笔画两笔，再试试缩放和翻页。</p>
+    <div class="chips">
+      <span class="chip"><b>①</b> 页 = 固定的纸</span>
+      <span class="chip"><b>②</b> 滚动 = 连续长纸，可跨页缝</span>
+      <span class="chip"><b>③</b> 缩放 = 相机，不改纸和字的位置</span>
+      <span class="chip"><b>④</b> 笔落在哪页，就归哪页</span>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <button class="tab active" data-target="wb">白板 · 16:9 分页</button>
+    <button class="tab" data-target="notes">笔记 · 固定 A4</button>
+  </div>
+
+  <!-- 白板 -->
+  <section class="demo" id="wb">
+    <aside class="panel">
+      <h2>白板：固定 16:9 页 × 3</h2>
+      <div class="sub">连续纵向滚动 · 页码条 · 缩放/平移</div>
+
+      <div class="row">
+        <button class="primary" data-act="wb-fit-width">适应宽度</button>
+        <button data-act="wb-fit-page">适应整页</button>
+        <button data-act="wb-100">100%</button>
+      </div>
+      <div class="row">
+        <button data-act="wb-zoom-out">−</button>
+        <span class="zoom-label" id="wbZoom">100%</span>
+        <button data-act="wb-zoom-in">＋</button>
+      </div>
+
+      <label class="check">
+        <input type="checkbox" id="wbClamp" checked>
+        <span>最小缩放限制为“适应整页”（主流分页软件常用）。取消勾选可继续缩到 25%，看看满屏桌面。</span>
+      </label>
+
+      <div class="row">
+        <button data-act="wb-clear">清空当前视口页</button>
+        <button data-act="wb-show-multi">缩到 50%（看多页）</button>
+      </div>
+
+      <div class="status" id="wbStatus"></div>
+
+      <p class="hint">
+        <b>怎么试：</b>把浏览器拉宽/拉窄，看页外留白怎么变；缩到能同时看到两页，在<b>第 2 页</b>上写一笔——
+        页码条仍显示视口页，状态会显示“这一笔归第 2 页”。<br>
+        <b>缩小：</b>“适应整页”不是不能缩小，而是默认/最小缩放；取消勾选可以缩得更小。
+      </p>
+    </aside>
+
+    <div>
+      <div class="viewport" id="wbViewport">
+        <div class="desk">
+          <div class="page-stack" id="wbStack"></div>
+        </div>
+      </div>
+      <div class="pagebar">
+        <button data-act="wb-prev">‹ 上一页</button>
+        <span class="pill" id="wbPageBar">第 1 / 3 页</span>
+        <button data-act="wb-next">下一页 ›</button>
+        <span class="spacer"></span>
+        <span>滚轮连续滚过页缝 · 灰色桌面不可写</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 笔记 -->
+  <section class="demo hidden" id="notes">
+    <aside class="panel">
+      <h2>笔记：固定 A4 纸 × 3</h2>
+      <div class="sub">Notebook / Section / Page · 左侧目录</div>
+
+      <div class="tree">
+        <div class="tree-root">数学笔记</div>
+        <div class="tree-section">函数</div>
+        <div class="tree-pages" id="notesPageList"></div>
+      </div>
+
+      <div class="row">
+        <button class="primary" data-act="notes-fit-width">适应宽度</button>
+        <button data-act="notes-fit-page">适应整页</button>
+        <button data-act="notes-100">100%</button>
+      </div>
+      <div class="row">
+        <button data-act="notes-show-desk">缩到 50%（看桌面）</button>
+      </div>
+      <div class="row">
+        <button data-act="notes-zoom-out">−</button>
+        <span class="zoom-label" id="notesZoom">100%</span>
+        <button data-act="notes-zoom-in">＋</button>
+      </div>
+
+      <label class="check">
+        <input type="checkbox" id="notesClamp" checked>
+        <span>最小缩放限制为“适应整页”。取消勾选可继续缩小，看看 A4 纸周围的灰色桌面。</span>
+      </label>
+
+      <div class="status" id="notesStatus"></div>
+
+      <p class="hint">
+        <b>A4 竖版在横屏窗口：</b>默认“适应宽度”会把纸填满宽度、上下滚动，左右基本不留白；
+        “适应整页”是总览，左右会有页外留白。<br>
+        <b>放大缩小：</b>纸的尺寸不变，字的位置/粗细按纸算；放大只是看得更清楚。
+      </p>
+    </aside>
+
+    <div>
+      <div class="viewport" id="notesViewport">
+        <div class="desk">
+          <div class="page-stack" id="notesStack"></div>
+        </div>
+      </div>
+      <div class="pagebar">
+        <span class="pill" id="notesPageBar">第 1 / 3 页</span>
+        <span class="spacer"></span>
+        <span>左侧目录可跳页 · 灰色桌面不可写</span>
+      </div>
+    </div>
+  </section>
+
+  <div class="split">
+    <div class="card">
+      <h3>主流软件怎么处理页外留白</h3>
+      <p>分页类（GoodNotes / Notability / Xournal++ / 希沃 / OpenBoard）都把纸放在灰色桌面上：纸有阴影、边界清楚，页外不写；默认“适应宽度/整页”，减少留白。要“任意写、没有页外”，那是 OneNote / Microsoft Whiteboard 的无限画布。</p>
+    </div>
+    <div class="card">
+      <h3>缩放与页的关系</h3>
+      <p>页尺寸、页边界、对象归属在文档里固定；缩放只改变显示比例。白板缩小后同时看到多页时，笔落在哪一页就归哪一页（按起笔点），不是按页码条当前页。笔记 A4 同理：纸不变，缩放只是相机。</p>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  const DEMOS = new Map();
+  const toastEl = document.getElementById('toast');
+  let toastTimer = 0;
+
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2300);
+  }
+
+  const clamp01 = v => Math.max(0, Math.min(1, v));
+
+  function createDemo(cfg) {
+    const root = document.getElementById(cfg.id);
+    const viewport = root.querySelector('.viewport');
+    const stack = root.querySelector('.page-stack');
+    const zoomEl = root.querySelector('.zoom-label');
+    const statusEl = root.querySelector('.status');
+    const pageBarEl = root.querySelector('.pagebar .pill');
+    const clampEl = root.querySelector('input[type="checkbox"]');
+    const demo = {
+      ...cfg, root, viewport, stack, zoomEl, statusEl, pageBarEl, clampEl,
+      pages: [], scale: 1, mode: cfg.defaultMode, currentPage: 0, lastOwned: null,
+      pageList: []
+    };
+    for (let i = 0; i < cfg.pageCount; i++) createPage(demo, i);
+    if (cfg.listId) buildPageList(demo);
+    demo.viewport.addEventListener('scroll', () => {
+      if (demo._scrollRaf) return;
+      demo._scrollRaf = requestAnimationFrame(() => {
+        demo._scrollRaf = 0;
+        updateCurrentPage(demo);
+      });
+    });
+    demo.viewport.addEventListener('pointerdown', e => {
+      if (e.target.closest('.paper')) return;
+      if (e.target.closest('button')) return;
+      toast('页外（灰色桌面）不能写');
+    });
+    clampEl.addEventListener('change', () => {
+      if (clampEl.checked) {
+        const fit = fitPageScale(demo);
+        if (demo.scale < fit - 0.001) {
+          applyScale(demo, fit, 'fit-page');
+          toast('已回到最小缩放：适应整页');
+        }
+      }
+      updateStatus(demo);
+    });
+    demo.pages.forEach(p => {
+      const ro = new ResizeObserver(() => resizeCanvas(p));
+      ro.observe(p.paper);
+    });
+    bindControls(demo);
+    updateStatus(demo);
+    return demo;
+  }
+
+  function createPage(demo, index) {
+    const wrap = document.createElement('div');
+    wrap.className = 'page-wrap';
+    wrap.innerHTML =
+      '<div class="page-label"><span>第 ' + (index + 1) + ' 页</span><span class="page-badge">刚写的页</span></div>' +
+      '<div class="paper"><canvas class="ink"></canvas></div>';
+    demo.stack.appendChild(wrap);
+    const paper = wrap.querySelector('.paper');
+    paper.style.aspectRatio = demo.cssRatio;
+    const canvas = wrap.querySelector('canvas');
+    const page = {
+      demo, index, wrap, paper, canvas,
+      ctx: canvas.getContext('2d'),
+      strokes: [], drawing: null
+    };
+    demo.pages.push(page);
+    bindInk(page);
+    return page;
+  }
+
+  function bindInk(page) {
+    const demo = page.demo;
+    const canvas = page.canvas;
+    const pointOf = e => {
+      const r = canvas.getBoundingClientRect();
+      return {
+        x: clamp01((e.clientX - r.left) / Math.max(1, r.width)),
+        y: clamp01((e.clientY - r.top) / Math.max(1, r.height))
+      };
+    };
+    canvas.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      e.preventDefault();
+      try { canvas.setPointerCapture(e.pointerId); } catch {}
+      const p = pointOf(e);
+      const stroke = { points: [p] };
+      page.strokes.push(stroke);
+      page.drawing = stroke;
+      demo.lastOwned = page.index;
+      markOwned(demo, page.index);
+      updateStatus(demo);
+      redrawPage(page);
+    });
+    canvas.addEventListener('pointermove', e => {
+      if (!page.drawing) return;
+      e.preventDefault();
+      const p = pointOf(e);
+      const pts = page.drawing.points;
+      const last = pts[pts.length - 1];
+      if (!last) return;
+      if (Math.hypot(p.x - last.x, p.y - last.y) < 0.0004) return;
+      pts.push(p);
+      const w = page.paper.clientWidth, h = page.paper.clientHeight;
+      const ctx = page.ctx;
+      ctx.strokeStyle = demo.ink;
+      ctx.lineWidth = 2.5;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(last.x * w, last.y * h);
+      ctx.lineTo(p.x * w, p.y * h);
+      ctx.stroke();
+    });
+    const end = () => {
+      if (!page.drawing) return;
+      page.drawing = null;
+      updateStatus(demo);
+    };
+    canvas.addEventListener('pointerup', end);
+    canvas.addEventListener('pointercancel', end);
+    canvas.addEventListener('lostpointercapture', end);
+  }
+
+  function resizeCanvas(page) {
+    const w = page.paper.clientWidth;
+    const h = page.paper.clientHeight;
+    if (!w || !h) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cw = Math.max(1, Math.round(w * dpr));
+    const ch = Math.max(1, Math.round(h * dpr));
+    if (page.canvas.width !== cw || page.canvas.height !== ch) {
+      page.canvas.width = cw;
+      page.canvas.height = ch;
+    }
+    page.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    redrawPage(page);
+  }
+
+  function redrawPage(page) {
+    const w = page.paper.clientWidth;
+    const h = page.paper.clientHeight;
+    if (!w || !h) return;
+    const ctx = page.ctx;
+    ctx.clearRect(0, 0, w, h);
+    ctx.strokeStyle = page.demo.ink;
+    ctx.fillStyle = page.demo.ink;
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (const stroke of page.strokes) {
+      const pts = stroke.points;
+      if (!pts.length) continue;
+      if (pts.length === 1) {
+        const p = pts[0];
+        ctx.beginPath();
+        ctx.arc(p.x * w, p.y * h, 1.35, 0, Math.PI * 2);
+        ctx.fill();
+        continue;
+      }
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x * w, pts[0].y * h);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x * w, pts[i].y * h);
+      ctx.stroke();
+    }
+  }
+
+  function markOwned(demo, index) {
+    demo.pages.forEach(p => p.wrap.classList.toggle('owned', p.index === index));
+  }
+
+  function updateCurrentPage(demo) {
+    const vr = demo.viewport.getBoundingClientRect();
+    const center = vr.top + vr.height / 2;
+    let best = demo.currentPage;
+    let bestDist = Infinity;
+    demo.pages.forEach((p, i) => {
+      const r = p.wrap.getBoundingClientRect();
+      const d = Math.abs((r.top + r.bottom) / 2 - center);
+      if (d < bestDist) { bestDist = d; best = i; }
+    });
+    if (best !== demo.currentPage) {
+      demo.currentPage = best;
+      updateStatus(demo);
+    }
+  }
+
+  function updateStatus(demo) {
+    const cur = demo.currentPage + 1;
+    const owned = demo.lastOwned == null ? '—' : ('第 ' + (demo.lastOwned + 1) + ' 页');
+    const zoom = Math.round(demo.scale * 100) + '%';
+    demo.statusEl.innerHTML =
+      '视口：<b>第 ' + cur + ' / ' + demo.pages.length + ' 页</b>' +
+      ' · 缩放 <b>' + zoom + '</b>' +
+      ' · 这一笔归：<b class="owned">' + owned + '</b>';
+    if (demo.pageBarEl) demo.pageBarEl.textContent = '第 ' + cur + ' / ' + demo.pages.length + ' 页';
+    demo.pages.forEach((p, i) => p.wrap.classList.toggle('current', i === demo.currentPage));
+    if (demo.pageList.length) {
+      demo.pageList.forEach((b, i) => b.classList.toggle('active', i === demo.currentPage));
+    }
+  }
+
+  function fitPageScale(demo) {
+    const vw = Math.max(1, demo.viewport.clientWidth - 64);
+    const vh = Math.max(1, demo.viewport.clientHeight - 78);
+    return Math.min(vw / demo.baseW, vh / demo.baseH);
+  }
+
+  function fitWidthScale(demo) {
+    const vw = Math.max(1, demo.viewport.clientWidth - 64);
+    return vw / demo.baseW;
+  }
+
+  function minScale(demo) {
+    return demo.clampEl.checked ? fitPageScale(demo) : 0.25;
+  }
+
+  function applyScale(demo, scale, mode, opts) {
+    opts = opts || {};
+    const min = opts.force ? 0.15 : minScale(demo);
+    scale = Math.max(min, Math.min(4, scale));
+    demo.scale = scale;
+    demo.mode = mode || 'manual';
+    const w = demo.baseW * scale;
+    demo.pages.forEach(p => { p.wrap.style.width = w + 'px'; });
+    demo.zoomEl.textContent = Math.round(scale * 100) + '%';
+    requestAnimationFrame(() => {
+      demo.pages.forEach(resizeCanvas);
+      if (opts.toTop) {
+        demo.viewport.scrollTop = 0;
+        demo.currentPage = 0;
+      } else if (opts.keepPage) {
+        scrollToPage(demo, demo.currentPage, false);
+      } else if (demo.mode === 'fit-page' || demo.mode === 'fit-width') {
+        demo.viewport.scrollTop = 0;
+      }
+      updateCurrentPage(demo);
+      updateStatus(demo);
+    });
+  }
+
+  function setFitPage(demo) {
+    applyScale(demo, fitPageScale(demo), 'fit-page');
+  }
+  function setFitWidth(demo) {
+    applyScale(demo, fitWidthScale(demo), 'fit-width');
+  }
+  function set100(demo) {
+    applyScale(demo, 1, 'manual', { keepPage: true });
+  }
+  function zoomBy(demo, factor) {
+    const next = demo.scale * factor;
+    const min = minScale(demo);
+    if (next < min - 0.001) {
+      if (demo.clampEl.checked) {
+        toast('已到最小缩放（适应整页）。取消勾选可继续缩小。');
+        applyScale(demo, min, 'fit-page');
+      } else {
+        toast('已到最小缩放 25%');
+      }
+      return;
+    }
+    if (next > 4.001) { toast('已到最大缩放 400%'); return; }
+    applyScale(demo, next, 'manual', { keepPage: true });
+  }
+
+  function scrollToPage(demo, index, smooth) {
+    const page = demo.pages[index];
+    if (!page) return;
+    const top = page.wrap.getBoundingClientRect().top
+      - demo.viewport.getBoundingClientRect().top
+      + demo.viewport.scrollTop - 18;
+    demo.viewport.scrollTo({ top: Math.max(0, top), behavior: smooth ? 'smooth' : 'auto' });
+    demo.currentPage = index;
+    updateStatus(demo);
+  }
+
+  function setDemoZoom(demo, scale) {
+    demo.clampEl.checked = false;
+    applyScale(demo, scale, 'manual', { toTop: true });
+    toast('已取消最小缩放限制：缩到 ' + Math.round(scale * 100) + '%，看看多页和页外桌面');
+  }
+
+  function clearCurrent(demo) {
+    const page = demo.pages[demo.currentPage];
+    page.strokes = [];
+    redrawPage(page);
+    demo.lastOwned = null;
+    markOwned(demo, -1);
+    updateStatus(demo);
+    toast('已清空第 ' + (demo.currentPage + 1) + ' 页（当前视口页）');
+  }
+
+  function buildPageList(demo) {
+    const list = document.getElementById(demo.listId);
+    demo.pages.forEach((p, i) => {
+      const b = document.createElement('button');
+      b.className = 'page-item';
+      b.textContent = '页面 ' + (i + 1);
+      b.addEventListener('click', () => scrollToPage(demo, i, true));
+      list.appendChild(b);
+      demo.pageList.push(b);
+    });
+  }
+
+  function bindControls(demo) {
+    demo.root.querySelectorAll('[data-act]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const act = btn.dataset.act;
+        const prefix = demo.actPrefix;
+        if (!act.startsWith(prefix + '-')) return;
+        const cmd = act.slice(prefix.length + 1);
+        switch (cmd) {
+          case 'fit-page': setFitPage(demo); break;
+          case 'fit-width': setFitWidth(demo); break;
+          case '100': set100(demo); break;
+          case 'zoom-in': zoomBy(demo, 1.18); break;
+          case 'zoom-out': zoomBy(demo, 1 / 1.18); break;
+          case 'clear': clearCurrent(demo); break;
+          case 'show-multi': setDemoZoom(demo, 0.5); break;
+          case 'show-desk': setDemoZoom(demo, 0.5); break;
+          case 'prev': scrollToPage(demo, Math.max(0, demo.currentPage - 1), true); break;
+          case 'next': scrollToPage(demo, Math.min(demo.pages.length - 1, demo.currentPage + 1), true); break;
+        }
+      });
+    });
+  }
+
+  // ---- 创建两个演示 ----
+  const wb = createDemo({
+    id: 'wb', actPrefix: 'wb',
+    baseW: 720, ratio: 16 / 9, cssRatio: '16 / 9',
+    pageCount: 3, defaultMode: 'fit-width',
+    ink: '#1f6feb', listId: null
+  });
+  wb.baseH = wb.baseW * 9 / 16;
+  DEMOS.set('wb', wb);
+
+  const notes = createDemo({
+    id: 'notes', actPrefix: 'notes',
+    baseW: 470, ratio: 297 / 210, cssRatio: '210 / 297',
+    pageCount: 3, defaultMode: 'fit-width',
+    ink: '#c2415a', listId: 'notesPageList'
+  });
+  notes.baseH = notes.baseW * 297 / 210;
+  DEMOS.set('notes', notes);
+
+  // 初始化白板（默认适应宽度，正常使用左右不留白）
+  requestAnimationFrame(() => {
+    setFitWidth(wb);
+    updateCurrentPage(wb);
+    updateStatus(wb);
+  });
+
+  // 标签切换
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
+      const id = tab.dataset.target;
+      try { history.replaceState(null, '', '#' + id); } catch {}
+      document.querySelectorAll('.demo').forEach(s => s.classList.toggle('hidden', s.id !== id));
+      const demo = DEMOS.get(id);
+      requestAnimationFrame(() => {
+        if (demo.mode === 'fit-page') setFitPage(demo);
+        else if (demo.mode === 'fit-width') setFitWidth(demo);
+        else applyScale(demo, demo.scale, 'manual', { keepPage: true });
+        updateCurrentPage(demo);
+        updateStatus(demo);
+      });
+    });
+  });
+
+  // 窗口大小变化
+  let resizeTimer = 0;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      DEMOS.forEach(demo => {
+        if (demo.root.classList.contains('hidden')) return;
+        if (demo.mode === 'fit-page') setFitPage(demo);
+        else if (demo.mode === 'fit-width') setFitWidth(demo);
+        else demo.pages.forEach(resizeCanvas);
+      });
+    }, 120);
+  });
+
+  // 支持用 hash 直接打开某个演示状态（方便演示/截图）
+  if (location.hash === '#notes' || location.hash === '#notes-fitpage') {
+    setTimeout(() => document.querySelector('.tab[data-target="notes"]').click(), 0);
+    if (location.hash === '#notes-fitpage') {
+      setTimeout(() => setFitPage(notes), 80);
+    }
+  }
+  if (location.hash === '#wb-multi') {
+    setTimeout(() => setDemoZoom(wb, 0.5), 120);
+  }
+
+  // 首屏提示
+  setTimeout(() => toast('在纸上写两笔，再缩小试试；灰色桌面点一下会有提示'), 700);
+})();
+</script>
+</body>
+</html>

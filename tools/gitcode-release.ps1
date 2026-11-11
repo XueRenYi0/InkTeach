@@ -22,7 +22,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $owner = 'XueRenYI0'
-$repo = 'InkTeach'
+$repo = 'InkTeach-Releases'
 $tag = "v$Version"
 $api = "https://api.gitcode.com/api/v5/repos/$owner/$repo"
 
@@ -51,15 +51,9 @@ function Read-GcJson([string]$file) {
     return ($raw | ConvertFrom-Json)
 }
 
-# ① 源码镜像（输出里把令牌打码；git 往 stderr 打进度，别被 $ErrorActionPreference=Stop 当成异常）
-Write-Host "  推送源码（main + 标签）到 GitCode…" -ForegroundColor DarkGray
-$prevEap = $ErrorActionPreference
-$ErrorActionPreference = 'Continue'
-$out = & git -C $root push "https://${owner}:${tok}@gitcode.com/$owner/$repo.git" main --tags 2>&1
-$gitExit = $LASTEXITCODE
-$ErrorActionPreference = $prevEap
-$out | Select-Object -Last 2 | ForEach-Object { "    " + ($_.ToString() -replace [regex]::Escape($tok), '***') }
-if ($gitExit -ne 0) { throw "推送 GitCode 失败（git exit=$gitExit）" }
+# ① 闭源发布：**不推源码**（2026-11-11 起）。
+# 这里原来会把 main + 标签推到 GitCode，等于公开源码；现在只上传发行版附件。
+Write-Host "  闭源发布：跳过源码推送，只上传安装包…" -ForegroundColor DarkGray
 
 # ② 发行版
 $rel = $null

@@ -58,6 +58,12 @@ internal static class LibraryLayout
         public RectF TopTabs { get; init; }
         public RectF ShapesTab { get; init; }
         public RectF FavoritesTab { get; init; }
+        /// <summary>面板常驻图钉（一级页签行最右）。</summary>
+        public RectF Pin { get; init; }
+        /// <summary>「单次 / ∞ 连续」两段开关（只有图形页有；收藏页为 Empty）。</summary>
+        public RectF Repeat { get; init; }
+        public RectF RepeatSingle { get; init; }
+        public RectF RepeatContinuous { get; init; }
         public RectF Header { get; init; }
         public RectF Body { get; init; }
         public RectF Grid { get; init; }
@@ -155,7 +161,8 @@ internal static class LibraryLayout
     /// <param name="forceRows">拖动缩放时冻结行数；0 = 按面板高度重新算。</param>
     public static Info Measure(in RectF panel, float dpi, LibraryPanelMode mode,
                                int forceCols = 0, int forceRows = 0,
-                               float cellWLogical = CellWLogical, float cellHLogical = CellHLogical)
+                               float cellWLogical = CellWLogical, float cellHLogical = CellHLogical,
+                               bool showRepeat = false)
     {
         float pad = PadLogical * dpi;
         float headerH = HeaderHLogical * dpi;
@@ -166,13 +173,38 @@ internal static class LibraryLayout
         float icon = IconBtnLogical * dpi;
         bool tabbed = (panel.MaxX - panel.MinX) >= 292f * dpi - 0.5f;
 
+        // 一级页签行最右：📌 常驻 + （图形页）单次/∞ 连续。
+        // 这两个是面板级开关，放在最上面一行；二级顶栏仍留给分类，窄面板也不挤。
+        float topRowH = TopTabHLogical * dpi;
+        float topRowY = panel.MinY + pad;
+        var pin = new RectF
+        {
+            MinX = panel.MaxX - pad - icon,
+            MinY = topRowY + (topRowH - icon) * 0.5f,
+            MaxX = panel.MaxX - pad,
+            MaxY = topRowY + (topRowH + icon) * 0.5f,
+        };
+        var repeat = RectF.Empty;
+        if (showRepeat)
+        {
+            float repeatW = (tabbed ? 88f : 50f) * dpi;
+            repeat = new RectF
+            {
+                MinX = pin.MinX - 4f * dpi - repeatW,
+                MinY = pin.MinY,
+                MaxX = pin.MinX - 4f * dpi,
+                MaxY = pin.MaxY,
+            };
+        }
+        float topTabsRight = (showRepeat ? repeat.MinX : pin.MinX) - 8f * dpi;
         var topTabs = new RectF
         {
-            MinX = panel.MinX + pad, MinY = panel.MinY + pad,
-            MaxX = panel.MaxX - pad, MaxY = panel.MinY + pad + TopTabHLogical * dpi,
+            MinX = panel.MinX + pad, MinY = topRowY,
+            MaxX = MathF.Max(panel.MinX + pad + 80f * dpi, topTabsRight),
+            MaxY = topRowY + topRowH,
         };
         float topGap = 6f * dpi;
-        float topTabW = MathF.Max(60f * dpi, (topTabs.MaxX - topTabs.MinX - topGap) * 0.5f);
+        float topTabW = MathF.Max(36f * dpi, (topTabs.MaxX - topTabs.MinX - topGap) * 0.5f);
         var shapesTab = new RectF
         {
             MinX = topTabs.MinX, MinY = topTabs.MinY,
@@ -183,6 +215,25 @@ internal static class LibraryLayout
             MinX = shapesTab.MaxX + topGap, MinY = topTabs.MinY,
             MaxX = topTabs.MaxX, MaxY = topTabs.MaxY,
         };
+        var repeatSingle = RectF.Empty;
+        var repeatContinuous = RectF.Empty;
+        if (!repeat.IsEmpty)
+        {
+            if (tabbed)
+            {
+                float mid = (repeat.MinX + repeat.MaxX) * 0.5f;
+                repeatSingle = new RectF { MinX = repeat.MinX, MinY = repeat.MinY,
+                                           MaxX = mid, MaxY = repeat.MaxY };
+                repeatContinuous = new RectF { MinX = mid, MinY = repeat.MinY,
+                                               MaxX = repeat.MaxX, MaxY = repeat.MaxY };
+            }
+            else
+            {
+                // 窄面板只画一颗按钮：点整颗切换。
+                repeatSingle = repeat;
+                repeatContinuous = repeat;
+            }
+        }
         var header = new RectF
         {
             MinX = panel.MinX + pad, MinY = topTabs.MaxY + TopTabGapLogical * dpi,
@@ -229,6 +280,8 @@ internal static class LibraryLayout
         return new Info
         {
             Panel = panel, TopTabs = topTabs, ShapesTab = shapesTab, FavoritesTab = favoritesTab,
+            Pin = pin, Repeat = repeat, RepeatSingle = repeatSingle,
+            RepeatContinuous = repeatContinuous,
             Header = header, Body = body, Grid = body,
             Menu = menu, Close = close, Tabs = tabs, CurrentCategory = current,
             Dpi = dpi, Mode = mode, CellW = cellW, CellH = cellH, Cols = cols, Rows = rows,

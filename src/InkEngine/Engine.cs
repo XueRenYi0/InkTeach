@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
@@ -2348,6 +2349,8 @@ public partial class InkEngine
     // ---- perf accounting --------------------------------------------------
     internal readonly Stopwatch _clock = Stopwatch.StartNew();
     private double _lastFrameMs;
+    /// <summary>上一帧 RenderAll 的实际墙钟耗时（含分块光栅、界面准备、上屏等待）。诊断/自检用。</summary>
+    internal double LastFrameMs => _lastFrameMs;
     internal double _fps;
     private int _frames;
     private double _fpsWindowStart;
@@ -2467,6 +2470,7 @@ public partial class InkEngine
     internal double _lastRebuildMs;
     internal double _lastRecordMs;
     internal double _lastPresentMs;
+    internal double _lastPresentWaitMs;
     // 分块缓存的状态（面板与自检读数）
     internal int _tilesUsed, _tilesVisible, _tilesBudget, _tilesRasterized;
     /// <summary>最近一拍预取了几块（HUD 用；见主循环的空闲预取）。</summary>
@@ -2491,7 +2495,8 @@ public partial class InkEngine
     /// <summary>累计渲染帧数。测量模式用它算真实帧率（样本条数 ≠ 帧数）。</summary>
     internal long FrameCounter;
     internal double _nextLogAt;
-    private double _accRecord, _accPresent, _accHud, _accStats;
+    private double _accRecord, _accPresent;
+    private double _accFrame, _accRaster;
     private int _accFrames;
     private double _nextStatsAt;
     private double _lastStatsMs;
@@ -3911,6 +3916,7 @@ public partial class InkEngine
         while (!_quit)
         {
             DrainMessages();
+            DrainUiTasks();               // 后台算完的美化像素，回 UI 线程换图
             PumpUpdate();                 // 自动更新：把后台结果搬过来，该换壳就换壳
             if (_quit) break;
 
@@ -3952,6 +3958,7 @@ public partial class InkEngine
             MaybeDeviceCardUpload();
             StepLogUpload();                  // 日志上传结果轮询（后台线程传，界面不卡）
             StepHandwritingOcr(); StepAiPlot();             // 手写优化：把后台识别结果搬回文档
+            StepImageCard(); StepCardAnswers();             // 图片→题卡 / 卡上生成答案
             StepAppDataJob();                 // 全局备份/恢复结果轮询（后台线程，界面不卡）
             if (NeedsFrame())
             {
@@ -4028,6 +4035,25 @@ public partial class InkEngine
         NowMs = _clock.Elapsed.TotalMilliseconds;
     }
 
+    /// <summary>后台线程算完后，把“换图片像素”这类必须回 UI 线程的活排进来。</summary>
+    private void PostUi(Action action)
+    {
+        if (action == null) return;
+        _uiTasks.Enqueue(action);
+        // 主循环空闲时停在 WaitMessage()：必须叫醒它，否则要等下一次鼠标移动才换图。
+        if (_mainThreadId != 0)
+            Native.PostThreadMessage(_mainThreadId, PptWatcher.WakeMessage, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    private void DrainUiTasks()
+    {
+        while (_uiTasks.TryDequeue(out var action))
+        {
+            try { action(); }
+            catch (Exception ex) { Console.WriteLine("[UI任务] " + ex.Message); }
+        }
+    }
+
     internal void RenderAll()
     {
         FrameCounter++;
@@ -4045,6 +4071,7 @@ public partial class InkEngine
         MaybeDeviceCardUpload();
         StepLogUpload();
         StepHandwritingOcr(); StepAiPlot();
+        StepImageCard(); StepCardAnswers();
         StepAppDataJob();
 
         // PPT 状态机。**为什么两处都调**（这里 + 主循环 Loop 里）：主循环那条路
@@ -4069,8 +4096,6 @@ public partial class InkEngine
         // than drawing the ink does, so they refresh a few times a second rather
         // than every frame. Measured before this change: 2.7 ms + 3.5 ms per
         // frame, against 0.7 ms for the actual rendering.
-        var swHud = Stopwatch.StartNew();
-        bool statsRan = false;
         if (wall0 >= _nextStatsAt)
         {
             // 面板显示时才需要 4 Hz 刷新；只打日志的话 1 Hz 就够。
@@ -4081,9 +4106,7 @@ public partial class InkEngine
             // 那是整条路径里最贵的一步；面板关掉还在跑就纯属浪费——
             // 实测它让空闲 CPU 从 ~0.3% 涨到 2~3.6%（单核）。
             if (ShowHud) HudText = BuildHudText();
-            statsRan = true;
         }
-        swHud.Stop();
 
         // 相机写给各覆盖窗口：渲染的每一处变换都用它（见 OverlayWindow.CanvasToWindow）。
         //
@@ -4150,6 +4173,7 @@ public partial class InkEngine
         _lastRebuildMs = w0.LastRebuildMs;
         _lastRecordMs = w0.LastRecordMs;
         _lastPresentMs = w0.LastPresentMs;
+        _lastPresentWaitMs = w0.LastPresentWaitMs;
         _tilesUsed = w0.LastTileCount;
         _tilesVisible = w0.LastTileVisible;
         _tilesBudget = w0.LastTileBudget;
@@ -4193,10 +4217,11 @@ public partial class InkEngine
 
         _accRecord += _lastRecordMs;
         _accPresent += _lastPresentMs;
+        _accRaster += _lastRebuildMs;
+        _accFrame += _lastFrameMs;
         // 面板自己的代价从窗口那边取（重排 + 贴图），不是这里的"统计"耗时——
         // 混在一起会让"面板很贵"这件事被统计代码盖住。
         _lastHudMs = _windows.Count > 0 ? _windows[0].LastHudMs : 0;
-        _accHud += swHud.Elapsed.TotalMilliseconds;
         _accPanel += _lastHudMs;
         if (_windows.Count > 0)
         {
@@ -4204,7 +4229,6 @@ public partial class InkEngine
             if (redraw > 0) { _hudRedrawSum += redraw; _hudRedrawCount++; }
             _hudRedrawTotal = _windows[0].HudRedraws;
         }
-        if (statsRan) _accStats += _lastStatsMs;
         _accFrames++;
 
         // 运行日志的性能快照（2026-10-17）：每 5 分钟一条窗口快照 + 慢帧（≥150ms）立刻记。
@@ -4223,14 +4247,17 @@ public partial class InkEngine
             Console.WriteLine(
                 $"[{NowMs / 1000,6:F1}s] fps={_fps,5:F1}"
                 + $" 记录={_accRecord / n,5:F2} 上屏={_accPresent / n,5:F2}"
+                  + $" 光栅={_accRaster / n,5:F2}"
                   + $" 面板={_hudRedrawMs,4:F2}ms×{_hudRedrawPerSec:F0}/s 统计={_lastStatsMs,5:F2}"
-                  + $" 合计={(_accRecord + _accPresent + _accHud + _accStats) / n,6:F2}ms"
+                  + $" 总帧={_accFrame / n,6:F2}ms"
                   + $" 置顶={_lastTopmostMs,5:F2}ms"
                   + $" 脏区={_windows[0].LastPresentRectCount}块/{_windows[0].LastPresentAreaPercent,5:F1}%"
+                  + (_windows[0].LastPresentFull ? "（整屏）" : "")
                   + $" 动因={drive}"
                   + (DocView.IsOpen ? $" 页={DocView.ResidentPages}/{DocView.ResidentBytes / 1048576.0:F1}MB" : "")
                   + $" ws={_workingSetMb,6:F1}MB");
-            _accRecord = _accPresent = _accHud = _accStats = 0;
+            _accRecord = _accPresent = 0;
+            _accFrame = _accRaster = 0;
             _hudAvgMs = _accPanel / n;
             _accPanel = 0;
             double secs = Math.Max(0.001, (NowMs - _hudRateWall) / 1000.0);
@@ -4331,12 +4358,12 @@ public partial class InkEngine
         // 内存那一行是重点：三个口径并列，并且把"任务管理器里叫哪一列"写出来
         // ——用户拿它跟任务管理器对照时最需要的就是这句话。
         return
-            $"帧率 {_fps,6:F1} fps（空闲不重绘）   帧耗时 {_lastFrameMs,5:F2} ms   输入→上屏 {_inputToPresentMs,5:F1} ms\n" +
-            $"绘制 {_lastRecordMs,5:F2} ms      上屏 {_lastPresentMs,5:F2} ms      分块光栅 {_lastRebuildMs,5:F2} ms\n" +
+            $"帧率 {_fps,6:F1} fps（空闲不重绘）   帧耗时 {_lastFrameMs,5:F2} ms   输入→Present {_inputToPresentMs,5:F1} ms\n" +
+            $"绘制 {_lastRecordMs,5:F2} ms      上屏 {_lastPresentMs,5:F2} ms（配速等待 {_lastPresentWaitMs,5:F2}）      分块光栅 {_lastRebuildMs,5:F2} ms\n" +
             $"面板 {_hudRedrawMs,4:F2} ms/次 ×{_hudRedrawPerSec,3:F0}/秒（摊到每帧 {_hudAvgMs,4:F2} ms）   统计 {_lastStatsMs,5:F2} ms\n" +
             $"内存 {_privateWsMb,6:F1} MB（专用工作集 = 任务管理器的“内存”）\n" +
             $"已提交 {_privateMb,6:F1} MB（=“提交大小”）   工作集 {_workingSetMb,6:F1} MB（含共享）\n" +
-            $"共享提交 {_sharedCommitMb,6:F1} MB   显存 {_gpuMb,6:F1} MB   CPU {_cpuPercent,4:F1} %\n" +
+            $"共享提交 {_sharedCommitMb,6:F1} MB   显存 {_gpuMb,6:F1} MB   CPU（全机） {_cpuPercent,4:F1} %\n" +
             $"笔画 {Doc.Strokes.Count}      点数 {Doc.TotalPoints}\n" +
             $"选中 {Doc.Selected.Count}      工具 {ToolName(Tool)}{SelectModeTag()}{(PassThrough ? "（穿透中）" : "")}      粗细 {CurrentToolWidthLogical,4:F1}      撤销栈 {Doc.UndoDepth}\n" +
             $"分块 {_tilesUsed}/{_tilesBudget}（可见 {_tilesVisible}，本帧光栅 {_tilesRasterized}，预取 {_prefetchLast}）      网格 {Doc.GridCells}\n" +
@@ -5027,6 +5054,9 @@ public partial class InkEngine
             ApplyCursor();
             return;
         }
+
+        // 图钉灭：开始用画布时面板让开（选卡后先留着，方便改单次/连续）。
+        AutoCloseLibraryOnCanvasUse();
 
         // 从收藏放下的对象还在临时选中：点空白 = 取消选中并回到插入前的工具。
         // 这一下只做“退出”，不落墨；点另一个对象则继续走正常选择。
@@ -5924,6 +5954,9 @@ public partial class InkEngine
 
     /// <summary>自检用：面板选卡的一次性图形还等不等“画完回去”。</summary>
     internal bool ShapeOneShotForTest => _shapeOneShot;
+
+    /// <summary>自检用：当前图形工具是不是从面板卡片选的。</summary>
+    internal bool ShapeFromPanelForTest => _shapeFromPanel;
 
     /// <summary>自检用：状态机在哪一档。</summary>
     internal DwellState DwellStateForTest => _dwell.State;
@@ -8294,6 +8327,23 @@ public partial class InkEngine
     /// <summary>上一次收藏/重复命中时选中的那批对象；用来让"已收藏"的对勾**留在条上**。</summary>
     private Stroke[] _librarySavedSelection;
 
+    /// <summary>后台算完、等主循环回 UI 线程执行的小任务（图片美化等）。</summary>
+    private readonly ConcurrentQueue<Action> _uiTasks = new();
+    private bool _beautifyBusy;
+    internal bool BeautifyBusy => _beautifyBusy;
+
+    /// <summary>选中的是不是全是已经美化过的图片（操作条上那颗星光点亮用）。</summary>
+    internal bool SelectionAllImagesBeautified
+    {
+        get
+        {
+            if (Doc.Selected.Count == 0) return false;
+            foreach (var s in Doc.Selected)
+                if (!s.IsImage || s.Image == null || !s.Image.Beautified) return false;
+            return true;
+        }
+    }
+
     /// <summary>当前选中的还是不是"上一次收进去的那批"（只比引用，不读盘）。</summary>
     internal bool SelectionInLibrary
     {
@@ -8379,6 +8429,19 @@ public partial class InkEngine
 
     /// <summary>使用态选中的那一张（拿起 / 跟着指针）；空 = 没选。整理态不用它。</summary>
     internal ShapeLibrary.Entry LibraryUseSelected;
+    /// <summary>
+    /// 面板常驻图钉（两个页签各记各的，跨重启保留）。
+    /// 图形页默认不常驻（选完落笔就让开），收藏页默认常驻（放完继续放）。
+    /// </summary>
+    internal bool LibraryPinnedShapes;
+    internal bool LibraryPinnedFavorites = true;
+    internal bool LibraryPanelPinned
+        => LibraryTab == LibraryTab.Shapes ? LibraryPinnedShapes : LibraryPinnedFavorites;
+    /// <summary>
+    /// 图形页「单次 / ∞ 连续」。只对**从面板选的图形**生效，主条图形不受影响。
+    /// 默认单次；只记本次运行，重启回单次（避免上节课的连续状态带到下节课）。
+    /// </summary>
+    internal bool ShapeRepeatContinuous;
     /// <summary>拿着一张卡时：面板收成状态条，工具栏也让位，整个屏幕都能放。</summary>
     internal bool LibraryPlacementMode => LibraryUseSelected != null && !LibrarySelectMode;
     /// <summary>放下后临时选择的工具，用来“点空白回到原来的工具”。</summary>
@@ -8387,6 +8450,8 @@ public partial class InkEngine
     /// <summary>图形面板选卡 = 一次性工具：画完一个图形就回到上一次的非图形工具。</summary>
     private Tool _shapeOneShotReturn = Tool.Pen;
     private bool _shapeOneShot;
+    /// <summary>当前图形工具是不是从面板卡片选的（Esc 退出连续画时用来回原工具）。</summary>
+    private bool _shapeFromPanel;
     /// <summary>最近一次非图形工具（笔/荧光笔/橡皮…），一次性图形画完回到它。</summary>
     private Tool _lastNonShapeTool = Tool.Pen;
     /// <summary>0 = 没按卡；1 = 待判；2 = 从卡片拖到画布。</summary>
@@ -8782,6 +8847,42 @@ public partial class InkEngine
         OpenLibraryPanel(LibraryTab.Shapes);
     }
 
+    /// <summary>
+    /// 面板常驻图钉：亮 = 用画布时面板不收起；灭 = 开始画/放时让开。
+    /// 两个页签各记各的，立即落盘。
+    /// </summary>
+    internal void ToggleLibraryPinFromUi()
+    {
+        EnsureLibraryPanelPrefs();
+        if (LibraryTab == LibraryTab.Shapes) LibraryPinnedShapes = !LibraryPinnedShapes;
+        else LibraryPinnedFavorites = !LibraryPinnedFavorites;
+        SetUiPref("libPinShapes", LibraryPinnedShapes ? "1" : null);
+        SetUiPref("libPinFav", LibraryPinnedFavorites ? null : "0");
+        SetInkStatus(LibraryPanelPinned
+            ? "面板常驻：开（画的时候不收起）"
+            : "面板常驻：关（开始画时让开）");
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 图形页「单次 / ∞ 连续」。连续只对**从面板选的图形**生效；
+    /// 主条图形本来就是连续，不受这里影响。默认单次，只记本次运行。
+    /// </summary>
+    internal void SetShapeRepeatContinuousFromUi(bool continuous)
+    {
+        if (ShapeRepeatContinuous == continuous) return;
+        ShapeRepeatContinuous = continuous;
+        // 当前手里正好是从面板选的图形：立即改这一笔之后的去留，不用重选卡片。
+        if (_shapeFromPanel && IsShapeTool(Tool))
+            _shapeOneShot = !continuous;
+        SetInkStatus(continuous
+            ? "图形：连续画（画完继续，Esc 结束）"
+            : "图形：单次（画一个回到原工具）");
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
     /// <summary>把当前页签的高度记到它自己那一份里（位置/宽度/横竖不记）。</summary>
     private void SaveCurrentTabHeight()
     {
@@ -8857,6 +8958,19 @@ public partial class InkEngine
             MaxX = desired.MaxX / dpi, MaxY = desired.MaxY / dpi,
         };
     }
+
+    /// <summary>
+    /// 图钉灭时，第一次真正用画布（落笔/点空白）就把面板让开。
+    /// 选卡后先不关：老师还有机会改「单次 / 连续」，一开始画它才收起。
+    /// </summary>
+    private void AutoCloseLibraryOnCanvasUse()
+    {
+        if (!LibraryPanelVisibleNow || LibraryPanelPinned) return;
+        CloseLibraryPanel();
+    }
+
+    /// <summary>自检用：走一次“开始用画布”的收起判据（不真的画一笔）。</summary>
+    internal void LibraryCanvasUseForTest() => AutoCloseLibraryOnCanvasUse();
 
     internal void CloseLibraryPanel()
     {
@@ -9573,11 +9687,13 @@ public partial class InkEngine
     /// <summary>点面板里的图形卡：换工具 + 直接设到这张卡对应的档位。</summary>
     internal void SetShapePresetFromUi(ShapePreset p)
     {
-        // 一次性：从面板点卡进来时记住“上一次的非图形工具”，画完一个图形就回去。
+        // 从面板点卡进来时记住“上一次的非图形工具”：
+        // 单次 = 画完一个就回去；连续 = 保持图形工具，Esc 再回去。
         var back = _shapeOneShot ? _shapeOneShotReturn : _lastNonShapeTool;
         SetToolFromUi(p.Tool);
         _shapeOneShotReturn = back;
-        _shapeOneShot = true;
+        _shapeFromPanel = true;
+        _shapeOneShot = !ShapeRepeatContinuous;
         switch (p.Tool)
         {
             case Tool.Parabola:
@@ -9752,7 +9868,8 @@ public partial class InkEngine
             resizing ? _libraryResizeCols : 0,
             resizing ? _libraryResizeRows : 0,
             LibraryTab == LibraryTab.Shapes ? LibraryLayout.ShapeCellWLogical : LibraryLayout.CellWLogical,
-            LibraryTab == LibraryTab.Shapes ? LibraryLayout.ShapeCellHLogical : LibraryLayout.CellHLogical);
+            LibraryTab == LibraryTab.Shapes ? LibraryLayout.ShapeCellHLogical : LibraryLayout.CellHLogical,
+            showRepeat: LibraryTab == LibraryTab.Shapes);
         if (!m.Tabbed) return m;
 
         // 页签档：把 CurrentCategory 指到当前页签（抽屉/管理分类定位用）。
@@ -9919,6 +10036,9 @@ public partial class InkEngine
         _libraryHeightShapes = 0f;
         _libraryHeightFavorites = 0f;
         _libraryPanelPrefsLoaded = true;
+        LibraryPinnedShapes = false;
+        LibraryPinnedFavorites = true;
+        ShapeRepeatContinuous = false;
         ShapeCategoryId = "all";
         LibraryCategoryId = "all";
         _libraryCategoryRestored = true;     // 自检要确定性：别让上一轮存下的分类把默认带偏
@@ -10005,6 +10125,9 @@ public partial class InkEngine
         if (_libraryPanelPrefsLoaded) return;
         _libraryPanelPrefsLoaded = true;
         LibraryMode = GetUiPref("libMode") == "v" ? LibraryPanelMode.Vertical : LibraryPanelMode.Horizontal;
+        // 图钉：图形页默认不常驻，收藏页默认常驻；两个页签各记各的。
+        LibraryPinnedShapes = GetUiPref("libPinShapes") == "1";
+        LibraryPinnedFavorites = GetUiPref("libPinFav") != "0";
         if (float.TryParse(GetUiPref("libHShapes"), NumberStyles.Float,
                            CultureInfo.InvariantCulture, out float hs) && hs > 60f)
             _libraryHeightShapes = hs;
@@ -10041,6 +10164,8 @@ public partial class InkEngine
         SetUiPref("shapeCat", ShapeCategoryId);
         if (LibraryCategoryId != ShapeLibrary.TrashCategory) SetUiPref("libCat", LibraryCategoryId);
         SetUiPref("libMode", LibraryMode == LibraryPanelMode.Vertical ? "v" : "h");
+        SetUiPref("libPinShapes", LibraryPinnedShapes ? "1" : null);
+        SetUiPref("libPinFav", LibraryPinnedFavorites ? null : "0");
         SetUiPref("libVer", "2");
         SetUiPref("libHShapes", _libraryHeightShapes > 1f
             ? _libraryHeightShapes.ToString("F1", CultureInfo.InvariantCulture) : null);
@@ -10388,6 +10513,27 @@ public partial class InkEngine
         float dpi = UiUnit;
         var m = LibraryPanelInfoNow();
         var panel = m.Panel;
+
+        // 一级页签行最右：📌 常驻 / 单次-∞连续。先于菜单和卡片处理。
+        // 图钉本体 24×24 偏小，命中区外扩 2px，触摸时更好点。
+        if (m.Pin.Inflate(2f * dpi).Contains(x, y))
+        {
+            if (LibraryMenu != 0) CloseLibraryMenu();
+            LibraryCategoryMenuOpen = false;
+            LibraryCategoryMenuHover = -1;
+            ToggleLibraryPinFromUi();
+            return true;
+        }
+        if (LibraryTab == LibraryTab.Shapes && !m.Repeat.IsEmpty && m.Repeat.Contains(x, y))
+        {
+            if (LibraryMenu != 0) CloseLibraryMenu();
+            LibraryCategoryMenuOpen = false;
+            LibraryCategoryMenuHover = -1;
+            bool continuous = m.Tabbed ? m.RepeatContinuous.Contains(x, y)
+                                        : !ShapeRepeatContinuous;
+            SetShapeRepeatContinuousFromUi(continuous);
+            return true;
+        }
 
         if (LibraryCategoryMenuOpen && m.Tabbed)
         {
@@ -11199,6 +11345,8 @@ public partial class InkEngine
         SetInkStatus(entries.Count == 1
             ? $"已插入「{entries[0].Title}」"
             : $"已插入 {entries.Count} 项");
+        // 图钉灭 = 放完这一张就让开（面板状态仍然保留，再点收藏格可回来）。
+        if (!LibraryPanelPinned) CloseLibraryPanel();
         _dirty = true;
     }
 
@@ -11590,7 +11738,7 @@ public partial class InkEngine
                     // [删除 2026-10-05] 预测器/预测尾/喂 DWM 段数的日志：随预测系统一起移除。
                     // 分配与 GC：低配机排查"偶发卡顿"的**唯一依据**。
                     // 第 2 代那一位出现在书写期间，就说明这一笔画到一半被全堆回收打断过。
-                    + $"，分配 {StrokeAllocBytes / 1024.0:F1} KB/GC {StrokeGc0}/{StrokeGc1}/{StrokeGc2}";
+                    + $"，分配 {StrokeAllocBytes / 1024.0:F1} KB（整笔会话累计，非驻留）/GC {StrokeGc0}/{StrokeGc1}/{StrokeGc2}";
                 Console.WriteLine("[笔画] " + _lastStrokeReport);
                 // `--strokefile`：把这一行**追加到文件**。
                 // 为什么要有它：这一行的数字（尤其"压力 a~b/上限"）是调手感参数的**唯一依据**，
@@ -14294,6 +14442,7 @@ public partial class InkEngine
         Tool = t;
         // 一次性图形：任何主动换工具都取消它；面板选卡会在 SetShapePresetFromUi 里重新置上。
         _shapeOneShot = false;
+        _shapeFromPanel = false;
         if (!IsShapeTool(t)) _lastNonShapeTool = t;
         // **记住"橡皮用的是哪一种形态"**（整笔擦 / 面积擦）：按 Ctrl+E 回来时切回它，
         // 并且下次启动也还在（见 ToolKeyPress 与 Run 里的读取）。
@@ -17220,23 +17369,33 @@ public partial class InkEngine
          : 0;
 
     /// <summary>
-    /// AI 菜单是否只有“识别作图”：文本/图片/矢量图没有“识别文本”这一步；
-    /// 手写才有“识别文本 / 识别作图”两项。
+    /// AI 菜单这次给哪几项（2026-11-10）：
+    ///   · 图片 → 「识别成题卡 / 识别作图」（图片只有一个识别入口，不再拆“识别文本”）；
+    ///   · 手写 → 「识别文本 / 识别作图」；
+    ///   · 文本框 / 矢量图 → 只有「识别作图」。
     /// </summary>
-    internal bool AiMenuPlotOnly
+    internal enum AiMenuKind { PlotOnly, Hand, Image }
+
+    internal AiMenuKind AiMenuKindNow
     {
         get
         {
-            if (Doc.Selected.Count == 0) return false;
+            if (Doc.Selected.Count == 0) return AiMenuKind.PlotOnly;
+            bool image = false;
             foreach (var s in Doc.Selected)
-                if (s != null && s.Kind == StrokeKind.Freehand && s.Tool != Tool.Highlighter)
-                    return false;
-            return true;
+            {
+                if (s == null) continue;
+                if (s.Kind == StrokeKind.Freehand && s.Tool != Tool.Highlighter)
+                    return AiMenuKind.Hand;
+                if (s.Kind == StrokeKind.Image && s.Image != null) image = true;
+            }
+            return image ? AiMenuKind.Image : AiMenuKind.PlotOnly;
         }
     }
 
     internal int AiMenuRows
-        => Doc.Selected.Count == 0 ? 0 : (AiMenuPlotOnly ? 1 : 2);
+        => Doc.Selected.Count == 0 ? 0
+         : AiMenuKindNow == AiMenuKind.PlotOnly ? 1 : 2;
 
     /// <summary>AI 菜单才有状态行（识别进度/结果）；`⋯` 没有。</summary>
     internal bool SelectionMenuHasStatusNow
@@ -18718,12 +18877,20 @@ public partial class InkEngine
                 int row = SelectionHandles.BarMenuRowAt(x, y, menu, ui, SelectionMenuRowsNow);
                 if (SelAiMenuOpen)
                 {
-                    if (AiMenuPlotOnly)
+                    switch (AiMenuKindNow)
                     {
-                        if (row == 0) RecognizePlotFromUi();
+                        case AiMenuKind.Hand:
+                            if (row == 0) RecognizeToTextBoxFromUi();
+                            else if (row == 1) RecognizePlotFromUi();
+                            break;
+                        case AiMenuKind.Image:
+                            if (row == 0) RecognizeImageCardFromUi();
+                            else if (row == 1) RecognizePlotFromUi();
+                            break;
+                        default:
+                            if (row == 0) RecognizePlotFromUi();
+                            break;
                     }
-                    else if (row == 0) RecognizeToTextBoxFromUi();
-                    else if (row == 1) RecognizePlotFromUi();
                 }
                 else if (SelMoreMenuOpen)
                 {
@@ -19779,6 +19946,146 @@ public partial class InkEngine
     /// 操作条按钮。下标与 SelectionHandles.BarButtonAt 的返回值和渲染时的
     /// 图标数组一一对应：0 复制 / 1 删除 / 2 左右翻转 / 3 上下翻转 / 4 旋转。
     /// </summary>
+    /// <summary>
+    /// 图片选中条上的「美化」：去黄 / 提亮 / 纸白 / 轻锐化，一步撤销。
+    /// 只换图片对象的像素，不改尺寸、方向、位置；透明图/已经够白的图直接跳过。
+    /// </summary>
+    private void BeautifySelection()
+    {
+        if (_beautifyBusy)
+        {
+            SetInkStatus("正在美化，请稍等…");
+            _dirty = true;
+            return;
+        }
+        if (Doc.Selected.Count == 0) return;
+        var todo = new List<Stroke>();
+        int already = 0, notImage = 0;
+        foreach (var s in Doc.Selected)
+        {
+            if (!s.IsImage || s.Image == null) { notImage++; continue; }
+            // 已美化且还留着原图 → 这一次就是“恢复原图”；原图丢了才跳过。
+            if (s.Image.Beautified && s.Image.BeautifyOriginal == null) { already++; continue; }
+            todo.Add(s);
+        }
+        if (todo.Count == 0)
+        {
+            SetInkStatus(notImage > 0 && already == 0
+                ? "选中的不是图片"
+                : already > 0 ? "这张已经美化过（原图未保留）" : "没有可美化的图片");
+            _dirty = true;
+            return;
+        }
+
+        // 自检要确定性：直接同步跑；产品里放后台，点下去按钮/画布不卡。
+        if (SelfCheckMode)
+        {
+            var results = BuildBeautifyResults(todo, out int skip);
+            ApplyBeautifyResults(results, skip);
+            return;
+        }
+
+        _beautifyBusy = true;
+        SetInkStatus($"正在美化 {todo.Count} 张…");
+        _dirty = true;
+        NotifyUiStateChanged();
+        var items = todo.ToArray();
+        Task.Run(() =>
+        {
+            try
+            {
+                var results = BuildBeautifyResults(items, out int skip);
+                PostUi(() => ApplyBeautifyResults(results, skip));
+            }
+            catch (Exception ex)
+            {
+                PostUi(() =>
+                {
+                    _beautifyBusy = false;
+                    SetInkStatus("美化失败：" + ex.Message);
+                    _dirty = true;
+                    NotifyUiStateChanged();
+                });
+            }
+        });
+    }
+
+    private List<(Stroke Stroke, ImageData Old, ImageData New, bool Reverted)> BuildBeautifyResults(
+        IReadOnlyList<Stroke> todo, out int skip)
+    {
+        var results = new List<(Stroke, ImageData, ImageData, bool)>(todo.Count);
+        skip = 0;
+        foreach (var s in todo)
+        {
+            var old = s.Image;
+            if (old == null) { skip++; continue; }
+            if (old.Beautified)
+            {
+                // 再点一次 = 恢复原图；原图只在本次进程里保留。
+                if (old.BeautifyOriginal != null)
+                    results.Add((s, old, old.BeautifyOriginal, true));
+                else
+                    skip++;
+                continue;
+            }
+            var pixels = PhotoBeautify.Process(old.Bgra, old.Width, old.Height);
+            if (pixels == null) { skip++; continue; }
+            var enhanced = ImageData.AdoptPremultiplied(old.Width, old.Height, pixels);
+            if (enhanced == null) { skip++; continue; }
+            enhanced.MarkBeautified(old);
+            results.Add((s, old, enhanced, false));
+        }
+        return results;
+    }
+
+    private void ApplyBeautifyResults(
+        List<(Stroke Stroke, ImageData Old, ImageData New, bool Reverted)> results, int skip)
+    {
+        _beautifyBusy = false;
+        if (_quit)
+        {
+            foreach (var r in results)
+                if (!r.Reverted) r.New.Release();
+            return;
+        }
+
+        var compound = new CompoundAction();
+        int done = 0, back = 0;
+        foreach (var r in results)
+        {
+            // 后台算的时候用户可能把图删了/换了：对不上就丢掉，不要往新文档里硬塞。
+            if (!Doc.Strokes.Contains(r.Stroke) || !ReferenceEquals(r.Stroke.Image, r.Old))
+            {
+                if (!r.Reverted) r.New.Release();   // 恢复原图那份不在这里释放
+                skip++;
+                continue;
+            }
+            compound.Steps.Add(new ReplaceImageAction(r.Stroke, r.Old, r.New));
+            if (r.Reverted) back++; else done++;
+        }
+
+        if (compound.Steps.Count == 0)
+        {
+            SetInkStatus(skip > 0 ? "这张已经是白纸 / 透明图，不需要再美化" : "没有可美化的图片");
+            _dirty = true;
+            NotifyUiStateChanged();
+            return;
+        }
+
+        compound.Redo(Doc);                 // 先把新像素换上去，再进撤销栈
+        Doc.CommitInteractive(compound);
+        _dirty = true;
+        NotifyUiStateChanged();
+        string msg = done > 0 && back > 0
+            ? $"已美化 {done} 张、恢复原图 {back} 张；Ctrl+Z 可撤销"
+            : back > 0
+                ? $"已恢复原图 {back} 张；Ctrl+Z 可撤销"
+                : $"已美化 {done} 张；再点一次可恢复原图，Ctrl+Z 可撤销";
+        if (skip > 0) msg += $"（{skip} 张跳过）";
+        SetInkStatus(msg);
+        Console.WriteLine($"[图片] 美化 {done} 张，恢复原图 {back} 张，跳过 {skip} 张");
+    }
+
     private void RunBarAction(int index, in SelectionFrame frame, in RectF aabb)
         => RunBarButton(SelectionHandles.BarButtonOf(index, BarSurfaceNow), frame, aabb);
 
@@ -19810,6 +20117,10 @@ public partial class InkEngine
                 CloseCustomColor();
                 SelPanelOpen = SelPanel.None;
                 CloseSelectionMenu();
+                break;
+
+            case SelBarButton.Beautify:
+                BeautifySelection();
                 break;
 
             case SelBarButton.Ai:
@@ -20897,6 +21208,36 @@ public partial class InkEngine
             _dirty = true;
             return true;
         }
+        // 图形页「∞ 连续」：Esc = 结束连续并回原工具。面板里的下拉/菜单开着时，
+        // 第一下先按老规矩关它们，免得抢掉“关菜单”的手感。
+        if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && ShapeRepeatContinuous
+            && !CaptureActive && !ColorPickActive && !UiOverlayOpen && !PptMode && !PassThrough && !_drawing
+            && (!LibraryPanelOpen
+                || (LibraryPanelVisibleNow
+                    && !LibraryCategoryMenuOpen && !LibraryCategoriesOpen && LibraryMenu == 0
+                    && !LibrarySelectMode && LibraryUseSelected == null)))
+        {
+            ShapeRepeatContinuous = false;
+            _shapeOneShot = false;
+            if (_restoreToolAfterLibrarySelection)
+            {
+                // 上一次单次图形/收藏插入还留着“点空白回原工具”的尾巴，Esc 一起收干净。
+                ExitLibraryPlacementSelection();
+            }
+            else if (_shapeFromPanel && IsShapeTool(Tool))
+            {
+                var back = _shapeOneShotReturn;
+                if (back == Tool.Capture || back == Tool.Laser) back = Tool.Pen;
+                _shapeFromPanel = false;
+                SwitchTool(back);
+            }
+            if (LibraryPanelVisibleNow) CloseLibraryPanel();
+            SetInkStatus("已退出连续画");
+            _dirty = true;
+            NotifyUiStateChanged();
+            return true;
+        }
+
         // 收藏面板：Esc = 先关菜单，再关面板（和其它浮层同一套手感）。
         if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && LibraryPanelVisibleNow)
         {

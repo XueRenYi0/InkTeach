@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace InkEngine;
 
@@ -146,4 +147,275 @@ internal static class AiQuestionClient
 
     private static string Clip(string s, int n)
         => string.IsNullOrEmpty(s) ? "" : s.Length <= n ? s : s[..n] + "…";
+
+    // ================= 图片识别成题卡：文字 → 多张卡 =================
+
+    /// <summary>一道题的结构化结果（一图多题时会有多条）。</summary>
+    internal sealed class CardItem
+    {
+        public string Stem = "";
+        public List<string> Options = new();
+        public string Answer = "";
+        public string Analysis = "";
+        public List<string> Knowledge = new();
+        public bool NeedReview;
+    }
+
+    internal sealed class StructureResult
+    {
+        public bool Ok;
+        public string Error = "";
+        public List<CardItem> Cards = new();
+        public double Seconds;
+        public string Raw = "";
+    }
+
+    /// <summary>
+    /// 卷面 OCR 文字 → 一题一条 <see cref="CardItem"/>。
+    /// 2026-11-10 实测（22 张国内卷面、每张两轮）：
+    ///   · 关思考后 1.4–1.9 秒（只题干）/ 1.8–3.2 秒（带答案解析），22/22 都能解析；
+    ///   · 不关思考会把 4096 tokens 全烧在 reasoning 上、content 为空；
+    ///   · 一张卷面常有 2–3 道题，模型会连着输出多个 JSON 对象，
+    ///     所以这里按**平衡花括号**逐个抠，不假设整个回复只有一个对象。
+    /// </summary>
+    internal static async Task<StructureResult> StructureAsync(
+        string ocrText, OcrClient.OcrConfig cfg, CancellationToken ct, bool withAnswer)
+    {
+        var res = new StructureResult();
+        if (cfg == null || !cfg.IsConfigured)
+        {
+            res.Error = "AI 未配置（Key / BaseUrl / Model）";
+            return res;
+        }
+        if (string.IsNullOrWhiteSpace(ocrText))
+        {
+            res.Error = "没有可整理的文字";
+            return res;
+        }
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            string J(string s) => "\"" + JsonEncodedText.Encode(s ?? "").ToString() + "\"";
+            string sys = "你是数学备课助手。只输出 JSON，不要 markdown，不要解释。";
+            string user =
+                "把下面的题目文本整理成题卡，输出 JSON 数组（即使只有一道题也用数组）：\n" +
+                "[{\"stem\":\"题干\",\"options\":[],\"answer\":\"答案\",\"analysis\":\"解析\"," +
+                "\"knowledge\":[],\"need_review\":false}]\n" +
+                "拆分规则（重要）：只有独立题号（1. 2. 3. 或 一、二、）变化时才分卡；" +
+                "同一道题的 (1)(2)(3) 小问必须合并在同一张卡的 stem 里，绝不拆卡。\n" +
+                (withAnswer
+                    ? "answer 给最终答案，analysis 先思路后步骤、不超过 200 个汉字；" +
+                      "算出结果和选项对不上就写“请核对”并 need_review=true。\n"
+                    : "**不要解题、不要给答案、不要写解析**：answer 与 analysis 一律留空字符串。\n") +
+                "其它：数字 / 条件 / 问法原样保留；选项写完整；无选项给 []；拿不准 need_review=true。\n\n" +
+                "题目：\n" + (ocrText ?? "");
+
+            var body = new System.Text.StringBuilder();
+            body.Append("{\"model\":").Append(J(cfg.Model))
+                .Append(",\"stream\":false,\"temperature\":0,\"max_tokens\":")
+                .Append(withAnswer ? 4096 : 2400)
+                .Append(",\"messages\":[{\"role\":\"system\",\"content\":").Append(J(sys))
+                .Append("},{\"role\":\"user\",\"content\":").Append(J(user)).Append("}]");
+            string think = (cfg.Thinking ?? "auto").Trim().ToLowerInvariant();
+            string host = (cfg.BaseUrl ?? "").ToLowerInvariant();
+            if (think == "auto")
+                think = (host.Contains("deepseek") || host.Contains("bigmodel") ||
+                         host.Contains("volces") || host.Contains("ark.cn"))
+                        ? "disabled" : "none";
+            if (think == "disabled")
+                body.Append(",\"thinking\":{\"type\":\"disabled\"}");
+            else if (think == "low")
+                body.Append(",\"reasoning_effort\":\"low\"");
+            body.Append('}');
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, cfg.Endpoint);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", cfg.Key);
+            req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            req.Content = new StringContent(body.ToString(), Encoding.UTF8, "application/json");
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(60));
+            using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseContentRead, cts.Token)
+                                       .ConfigureAwait(false);
+            string raw = await resp.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode)
+            {
+                res.Error = $"HTTP {(int)resp.StatusCode}: " + Clip(raw, 160);
+                return res;
+            }
+
+            using var doc = JsonDocument.Parse(raw);
+            string content = null;
+            if (doc.RootElement.TryGetProperty("choices", out var choices)
+                && choices.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var c in choices.EnumerateArray())
+                {
+                    if (c.TryGetProperty("message", out var m)
+                        && m.TryGetProperty("content", out var v)
+                        && v.ValueKind == JsonValueKind.String)
+                    {
+                        content = v.GetString();
+                        break;
+                    }
+                }
+            }
+            res.Raw = content ?? "";
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                res.Error = "模型没有返回内容";
+                return res;
+            }
+
+            res.Cards = ParseCards(content);
+            res.Ok = res.Cards.Count > 0;
+            if (!res.Ok) res.Error = "没有解析出题目";
+            return res;
+        }
+        catch (OperationCanceledException)
+        {
+            res.Error = "AI 请求超时";
+            return res;
+        }
+        catch (Exception ex)
+        {
+            res.Error = ex.Message;
+            return res;
+        }
+        finally
+        {
+            res.Seconds = sw.Elapsed.TotalSeconds;
+        }
+    }
+
+    /// <summary>
+    /// 从模型回复里抠出**所有** JSON 对象（数组 / 连着写多个对象都行）。
+    /// 逐字符扫平衡花括号，跳过字符串内部的 `{}` 和转义；单个对象坏了不拖累其它题。
+    /// </summary>
+    internal static List<CardItem> ParseCards(string content)
+    {
+        var list = new List<CardItem>();
+        string s = StripFence(content ?? "");
+        int depth = 0, start = -1;
+        bool inStr = false, esc = false;
+        for (int i = 0; i < s.Length; i++)
+        {
+            char ch = s[i];
+            if (inStr)
+            {
+                if (esc) esc = false;
+                else if (ch == '\\') esc = true;
+                else if (ch == '"') inStr = false;
+                continue;
+            }
+            if (ch == '"') { inStr = true; continue; }
+            if (ch == '{')
+            {
+                if (depth == 0) start = i;
+                depth++;
+            }
+            else if (ch == '}')
+            {
+                if (depth > 0) depth--;
+                if (depth == 0 && start >= 0)
+                {
+                    var item = ReadCard(s.Substring(start, i - start + 1));
+                    if (item != null) list.Add(item);
+                    start = -1;
+                }
+            }
+        }
+        return list;
+    }
+
+    private static CardItem ReadCard(string json)
+    {
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(json); }
+        catch
+        {
+            try { doc = JsonDocument.Parse(Regex.Replace(json, @"\\(?![""\\/bfnrtu])", @"\\")); }
+            catch { return null; }
+        }
+        using (doc)
+        {
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return null;
+            var item = new CardItem
+            {
+                Stem = RecoverLatexEscapes(Str(root, "stem")).Trim(),
+                Answer = RecoverLatexEscapes(Str(root, "answer")).Trim(),
+                Analysis = RecoverLatexEscapes(Str(root, "analysis")).Trim(),
+            };
+            if (item.Stem.Length == 0) return null;
+            if (root.TryGetProperty("options", out var opts) && opts.ValueKind == JsonValueKind.Array)
+                foreach (var o in opts.EnumerateArray())
+                    if (o.ValueKind == JsonValueKind.String)
+                    {
+                        string t = (o.GetString() ?? "").Trim();
+                        if (t.Length > 0) item.Options.Add(t);
+                    }
+            if (root.TryGetProperty("knowledge", out var kn) && kn.ValueKind == JsonValueKind.Array)
+                foreach (var k in kn.EnumerateArray())
+                    if (k.ValueKind == JsonValueKind.String)
+                    {
+                        string t = (k.GetString() ?? "").Trim();
+                        if (t.Length > 0) item.Knowledge.Add(t);
+                    }
+            if (root.TryGetProperty("need_review", out var nr) &&
+                (nr.ValueKind == JsonValueKind.True ||
+                 (nr.ValueKind == JsonValueKind.String &&
+                  bool.TryParse(nr.GetString(), out bool b) && b)))
+                item.NeedReview = true;
+            return item;
+        }
+    }
+
+    private static string StripFence(string s)
+    {
+        s = (s ?? "").Trim();
+        if (!s.StartsWith("```", StringComparison.Ordinal)) return s;
+        int nl = s.IndexOf('\n');
+        if (nl >= 0) s = s[(nl + 1)..];
+        int end = s.LastIndexOf("```", StringComparison.Ordinal);
+        if (end >= 0) s = s[..end];
+        return s.Trim();
+    }
+
+    /// <summary>
+    /// 救回被 JSON 转义吃掉的 LaTeX 命令。
+    /// 模型如果直接把 `\frac` 写进 JSON 字符串，`\f` 是**合法**转义（换页符），
+    /// `json.loads` 不报错但内容变成 `\x0Crac`——比直接失败更危险（悄悄改题）。
+    /// 这里把“控制字符 + 两个以上字母”还原成 `\frac` / `\beta` / `\theta`。
+    /// 只处理 \f \b \t \v 这几种（正文里几乎不会真出现）。
+    /// </summary>
+    private static string RecoverLatexEscapes(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return s ?? "";
+        bool dirty = false;
+        foreach (char ch in s)
+            if (ch is '\f' or '\b' or '\t' or '\v') { dirty = true; break; }
+        if (!dirty) return s;
+
+        var sb = new System.Text.StringBuilder(s.Length + 8);
+        for (int i = 0; i < s.Length; i++)
+        {
+            char ch = s[i];
+            if (ch is '\f' or '\b' or '\t' or '\v'
+                && i + 2 < s.Length
+                && char.IsAsciiLetter(s[i + 1]) && char.IsAsciiLetter(s[i + 2]))
+            {
+                sb.Append('\\').Append(ch switch
+                {
+                    '\f' => 'f',
+                    '\b' => 'b',
+                    '\t' => 't',
+                    _ => 'v',
+                });
+                continue;
+            }
+            sb.Append(ch);
+        }
+        return sb.ToString();
+    }
 }

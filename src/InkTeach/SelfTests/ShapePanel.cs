@@ -60,6 +60,7 @@ internal sealed partial class App
             => ClickPhysical((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
 
         // 1. 图形格 → 图形页
+        ResetLibraryPanelForTest();
         ClickCell(10);
         Check("图形格 → 面板图形页", LibraryPanelOpen && LibraryTab == LibraryTab.Shapes,
               $"open={LibraryPanelOpen} tab={LibraryTab}");
@@ -75,6 +76,40 @@ internal sealed partial class App
               $"tool={Tool} open={LibraryPanelOpen} tab={LibraryTab}");
         Check("选图形后：旧图形上带不再出现", ui.BandCellForTest != 10,
               $"bandCell={ui.BandCellForTest}");
+
+        // 2b. 图钉 / 单次-连续：开关本身 + 改变“画完回不回退”。
+        Check("图形页默认不常驻、收藏页默认常驻",
+              !LibraryPinnedShapes && LibraryPinnedFavorites,
+              $"图形={LibraryPinnedShapes} 收藏={LibraryPinnedFavorites}");
+        Check("页签行右侧有图钉和单次/∞连续",
+              !m.Pin.IsEmpty && !m.Repeat.IsEmpty && !m.RepeatSingle.IsEmpty
+              && !m.RepeatContinuous.IsEmpty,
+              $"pin={m.Pin.MinX:F0}..{m.Pin.MaxX:F0} repeat={m.Repeat.MinX:F0}..{m.Repeat.MaxX:F0}");
+        ClickCanvasRect(m.Pin);
+        Check("点图钉 → 图形页常驻开", LibraryPinnedShapes,
+              $"pin={LibraryPinnedShapes}");
+        ClickCanvasRect(m.Pin);
+        Check("再点图钉 → 图形页常驻关", !LibraryPinnedShapes,
+              $"pin={LibraryPinnedShapes}");
+
+        ClickCanvasRect(m.RepeatContinuous);
+        Check("点∞连续 → 连续模式开", ShapeRepeatContinuous,
+              $"continuous={ShapeRepeatContinuous}");
+        Check("连续模式下当前面板图形不再标一次性",
+              !ShapeOneShotForTest && ShapeFromPanelForTest,
+              $"oneShot={ShapeOneShotForTest} fromPanel={ShapeFromPanelForTest}");
+        int continuousBefore = Doc.Strokes.Count;
+        ShapeDragForTest(300f, 300f, 500f, 420f);
+        Check("连续画：画完工具仍是直线、面板不关",
+              Tool == Tool.Line && LibraryPanelOpen
+              && Doc.Strokes.Count == continuousBefore + 1,
+              $"tool={Tool} open={LibraryPanelOpen} strokes={Doc.Strokes.Count - continuousBefore}");
+        Doc.Clear();
+        Doc.ClearHistory();
+        ClickCanvasRect(m.RepeatSingle);
+        Check("点单次 → 当前面板图形恢复一次性",
+              !ShapeRepeatContinuous && ShapeOneShotForTest,
+              $"continuous={ShapeRepeatContinuous} oneShot={ShapeOneShotForTest}");
 
         // 2a. 39 张档位卡 + 分类；图形卡 72×82，固定 5 行高
         Check("档位展开后共 39 张卡",
@@ -247,6 +282,15 @@ internal sealed partial class App
         Check("收藏蓝、图形不蓝",
               ui.CellActiveForTest(11) && !ui.CellActiveForTest(10),
               $"图形={ui.CellActiveForTest(10)} 收藏={ui.CellActiveForTest(11)}");
+        m = LibraryPanelInfoNow();
+        Check("收藏页只有图钉、没有单次/连续", !m.Pin.IsEmpty && m.Repeat.IsEmpty,
+              $"pin={m.Pin.IsEmpty} repeat={m.Repeat.IsEmpty}");
+        ClickCanvasRect(m.Pin);
+        Check("收藏页图钉可切到不常驻", !LibraryPinnedFavorites,
+              $"favPin={LibraryPinnedFavorites}");
+        ClickCanvasRect(m.Pin);
+        Check("收藏页图钉恢复常驻", LibraryPinnedFavorites,
+              $"favPin={LibraryPinnedFavorites}");
 
         // 4. 收藏页点图形格 = 切回图形页，不是关
         ClickCell(10);
@@ -277,6 +321,53 @@ internal sealed partial class App
         Check("截屏格仍正常：工具=Capture、上带=截屏",
               Tool == Tool.Capture && ui.BandCellForTest == 9 && !ui.SegmentRectForTest(1).IsEmpty,
               $"tool={Tool} bandCell={ui.BandCellForTest} seg1={ui.SegmentRectForTest(1)}");
+
+        // 7. 图钉灭/亮对“开始用画布”的影响。
+        LibraryPinnedShapes = false;
+        ShapeRepeatContinuous = false;
+        ClickCell(10);
+        m = LibraryPanelInfoNow();
+        ClickCanvasRect(LibraryLayout.CellRect(m, 0, 0f));
+        LibraryCanvasUseForTest();
+        Check("图钉灭：开始用画布 → 面板收起", !LibraryPanelOpen,
+              $"pin={LibraryPinnedShapes} open={LibraryPanelOpen}");
+
+        // 真实落笔也走同一条：选卡后在不挡面板的地方按一下，面板应让开。
+        ClickCell(10);
+        m = LibraryPanelInfoNow();
+        ClickCanvasRect(LibraryLayout.CellRect(m, 0, 0f));
+        ClickPhysical(100f, 100f);
+        Check("图钉灭：真实落笔 → 面板收起", !LibraryPanelOpen,
+              $"pin={LibraryPinnedShapes} open={LibraryPanelOpen}");
+
+        ClickCell(10);
+        LibraryPinnedShapes = true;
+        m = LibraryPanelInfoNow();
+        ClickCanvasRect(LibraryLayout.CellRect(m, 0, 0f));
+        LibraryCanvasUseForTest();
+        Check("图钉亮：开始用画布 → 面板不收起", LibraryPanelOpen,
+              $"pin={LibraryPinnedShapes} open={LibraryPanelOpen}");
+        CloseLibraryPanel();
+
+        // 8. 图钉状态跨“重启”（清内存后从偏好恢复）仍在。
+        ReloadLibraryPanelPlacementForTest();
+        OpenLibraryPanel(LibraryTab.Shapes);
+        Check("图钉状态跨重启保留", LibraryPinnedShapes,
+              $"pin={LibraryPinnedShapes} pref={GetUiPref("libPinShapes")}");
+        CloseLibraryPanel();
+
+        // 9. Esc 结束连续：回原工具、收起面板、开关熄灭。
+        LibraryPinnedShapes = true;
+        ShapeRepeatContinuous = true;
+        ClickCell(10);
+        m = LibraryPanelInfoNow();
+        ClickCanvasRect(LibraryLayout.CellRect(m, 0, 0f));
+        Native.PostMessage(_windows[0].Hwnd, (uint)Native.WM_KEYDOWN,
+                           new IntPtr(0x1B), IntPtr.Zero);
+        SettleFrames(200);
+        Check("Esc 结束连续并回原工具",
+              !ShapeRepeatContinuous && Tool == Tool.Pen && !LibraryPanelOpen,
+              $"continuous={ShapeRepeatContinuous} tool={Tool} open={LibraryPanelOpen}");
 
         Console.WriteLine();
         Console.WriteLine($"图形面板专项：通过 {pass} 项，失败 {fail} 项");
@@ -337,6 +428,13 @@ internal sealed partial class App
               $"图形={ui.CellActiveForTest(10)} 收藏={ui.CellActiveForTest(11)}");
 
         var m = LibraryPanelInfoNow();
+        Check("图形页默认不常驻、收藏页默认常驻",
+              !LibraryPinnedShapes && LibraryPinnedFavorites,
+              $"图形={LibraryPinnedShapes} 收藏={LibraryPinnedFavorites}");
+        Check("页签行右侧有图钉和单次/∞连续",
+              !m.Pin.IsEmpty && !m.Repeat.IsEmpty && !m.RepeatSingle.IsEmpty
+              && !m.RepeatContinuous.IsEmpty,
+              $"pin={m.Pin.MinX:F0}..{m.Pin.MaxX:F0} repeat={m.Repeat.MinX:F0}..{m.Repeat.MaxX:F0}");
         Check("档位展开后共 39 张卡",
               ShapeCatalog.All.Length == 39 && ShapeCatalog.CountFor("all") == 39,
               $"all={ShapeCatalog.CountFor("all")}");
@@ -352,6 +450,28 @@ internal sealed partial class App
               && MathF.Abs(m.CellH - LibraryLayout.ShapeCellHLogical * UiUnit) < 0.5f,
               $"cat={ShapeCategoryId} cols={m.Cols} h={m.Panel.MaxY - m.Panel.MinY:F0} cell={m.CellW / UiUnit:F0}×{m.CellH / UiUnit:F0}");
         float shapesPageH = m.Panel.MaxY - m.Panel.MinY;
+
+        // 图钉 / 单次-连续：先验开关本身，再验它改变“画完回不回退”。
+        Click(m.Pin);
+        Check("点图钉 → 图形页常驻开", LibraryPinnedShapes,
+              $"pin={LibraryPinnedShapes}");
+        Click(m.Pin);
+        Check("再点图钉 → 图形页常驻关", !LibraryPinnedShapes,
+              $"pin={LibraryPinnedShapes}");
+
+        Click(m.RepeatContinuous);
+        Check("点∞连续 → 连续模式开", ShapeRepeatContinuous,
+              $"continuous={ShapeRepeatContinuous}");
+        var firstCard = LibraryLayout.CellRect(m, 0, 0f);
+        Click(firstCard);
+        Check("连续模式下选卡：不再标一次性",
+              !ShapeOneShotForTest && ShapeFromPanelForTest && Tool == Tool.Line,
+              $"oneShot={ShapeOneShotForTest} fromPanel={ShapeFromPanelForTest} tool={Tool}");
+        Click(m.RepeatSingle);
+        Check("点单次 → 当前面板图形恢复一次性",
+              !ShapeRepeatContinuous && ShapeOneShotForTest,
+              $"continuous={ShapeRepeatContinuous} oneShot={ShapeOneShotForTest}");
+        ShapeRepeatContinuous = false;
 
         // 2a1. 卡片缝里也能拖面板（和收藏页同一条逻辑）。
         {
@@ -504,6 +624,25 @@ internal sealed partial class App
               !string.IsNullOrEmpty(GetUiPref("libHShapes"))
               && !string.IsNullOrEmpty(GetUiPref("libHFav")),
               $"shapes={GetUiPref("libHShapes")} fav={GetUiPref("libHFav")}");
+
+        // 图钉灭/亮对“开始用画布”的影响：灭 = 让开，亮 = 不收起。
+        LibraryPinnedShapes = false;
+        ShapeRepeatContinuous = false;
+        ToggleShapesPanel();
+        m = LibraryPanelInfoNow();
+        Click(LibraryLayout.CellRect(m, 0, 0f));
+        LibraryCanvasUseForTest();
+        Check("图钉灭：开始用画布 → 面板收起", !LibraryPanelOpen,
+              $"pin={LibraryPinnedShapes} open={LibraryPanelOpen}");
+
+        LibraryPinnedShapes = true;
+        ToggleShapesPanel();
+        m = LibraryPanelInfoNow();
+        Click(LibraryLayout.CellRect(m, 0, 0f));
+        LibraryCanvasUseForTest();
+        Check("图钉亮：开始用画布 → 面板不收起", LibraryPanelOpen,
+              $"pin={LibraryPinnedShapes} open={LibraryPanelOpen}");
+        CloseLibraryPanel();
 
         Console.WriteLine();
         Console.WriteLine($"图形面板专项（直连）：通过 {pass} 项，失败 {fail} 项");

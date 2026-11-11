@@ -171,6 +171,11 @@ internal enum SelBarButton
     Top = 13,
     /// <summary>置底（`⋯` 里的第二行）。</summary>
     Bottom = 14,
+    /// <summary>
+    /// **美化**（2026-11-10）：图片对象专用，去黄 / 提亮 / 白纸。
+    /// 图标-only，放在 AI 左边；只作用于图片像素，不改方向/内容。
+    /// </summary>
+    Beautify = 15,
 }
 
 /// <summary>
@@ -2327,12 +2332,15 @@ internal static class SelectionHandles
         SelBarButton.More,
     };
 
-    /// <summary>图片：**收起 / 保存 / 复制 / AI / 删除 / `⋯`**；AI 用于识别作图。</summary>
+    /// <summary>
+    /// 图片：**收起 / 复制 / 美化 / AI / 删除 / `⋯`**。
+    /// 2026-11-10 用户定：保存移进 `⋯`，把更常用的“美化”放到 AI 左边。
+    /// </summary>
     private static readonly SelBarButton[] ImageBarOrder =
     {
         SelBarButton.Collapse,
-        SelBarButton.Export,
         SelBarButton.Copy,
+        SelBarButton.Beautify,
         SelBarButton.Ai,
         SelBarButton.Delete,
         SelBarButton.More,
@@ -2371,11 +2379,12 @@ internal static class SelectionHandles
         SelBarButton.Lock,
     };
 
-    /// <summary>图片：保存已经在核心，`⋯` 里不再重复。</summary>
+    /// <summary>图片：保存从核心移进 `⋯`（2026-11-10），核心位让给“美化”。</summary>
     private static readonly SelBarButton[] MoreOrderImage =
     {
         SelBarButton.Top,
         SelBarButton.Bottom,
+        SelBarButton.Export,
         SelBarButton.FlipH,
         SelBarButton.FlipV,
         SelBarButton.Lock,
@@ -2471,6 +2480,7 @@ internal static class SelectionHandles
         SelBarButton.Collapse => "收起",
         SelBarButton.FontSize => "字号",
         SelBarButton.Ai => "AI",
+        SelBarButton.Beautify => "美化",
         SelBarButton.More => "更多",
         _ => "",
     };

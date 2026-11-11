@@ -1021,15 +1021,15 @@ internal sealed partial class App
             Console.WriteLine($"    {name,-30}{(ok ? "PASS" : "FAIL")}  {detail}");
         }
 
-        const int T = 256;                                  // 块边长，和 CanvasTileCache 一致
+        int T = CanvasTileCache.TileSize;                   // 块边长（跟着 --tilesize 走）
         ViewOffsetY = 0f;
         foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
 
         // ---- 1) 粗横线压在横向块边界上 ----------------------------------
-        // 边界取 y = 3T = 768（画布坐标 = 屏幕坐标，因为相机为 0、原点为 0）。
+        // 边界取 y = 2T（256 时 512；512 时 1024——都在一屏内，块中间也一样）
         float w2 = 40f;
-        int onSeam = DrawAndCountHorizontal(_virtualX + 300, 3 * T, 1200, w2);
-        int midTile = DrawAndCountHorizontal(_virtualX + 300, 3 * T + T / 2, 1200, w2);
+        int onSeam = DrawAndCountHorizontal(_virtualX + 300, 2 * T, 1200, w2);
+        int midTile = DrawAndCountHorizontal(_virtualX + 300, 2 * T + T / 2, 1200, w2);
         int diffY = Math.Abs(onSeam - midTile);
         Check("横线压在块边界上不缺墨", onSeam > 40000 && diffY < midTile * 0.03,
               $"边界 {onSeam} vs 块中间 {midTile}（差 {diffY}，允许 {midTile * 0.03:F0}）");
@@ -1084,7 +1084,7 @@ internal sealed partial class App
 
         // ---- 5) 常驻块数不超过预算 --------------------------------------
         Check("常驻分块不超预算", w0.LastTileCount <= Math.Max(w0.LastTileBudget, 1),
-              $"{w0.LastTileCount} 块 / 预算 {w0.LastTileBudget}（每块 256KB）");
+              $"{w0.LastTileCount} 块 / 预算 {w0.LastTileBudget}（每块 {CanvasTileCache.TileBytes / 1024}KB）");
 
         Console.WriteLine();
         Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：块边界无缝、跨块笔画完整、回程免重画、内存有上界");
@@ -1362,10 +1362,10 @@ internal sealed partial class App
         Console.WriteLine();
         Console.WriteLine("--- summary ---");
         Console.WriteLine($"  rendering verified : {LastCaptureReport}");
-        Console.WriteLine($"  fps                : {_fps:F1}");
-        Console.WriteLine($"  record per frame   : {_lastRecordMs:F2} ms");
-        Console.WriteLine($"  present per frame  : {_lastPresentMs:F2} ms");
-        Console.WriteLine($"  full rebuild       : {_lastRebuildMs:F1} ms");
+        Console.WriteLine($"  fps (stress loop)  : {_fps:F1}");
+        Console.WriteLine($"  record (last frame): {_lastRecordMs:F2} ms");
+        Console.WriteLine($"  present (last frame): {_lastPresentMs:F2} ms");
+        Console.WriteLine($"  full rebuild (10k) : {_lastBenchRebuildMs:F1} ms");
         Console.WriteLine($"  working set        : {Process.GetCurrentProcess().WorkingSet64 / 1048576.0:F1} MB");
         Console.WriteLine($"  peak working set   : {_peakWorkingSetMb:F1} MB");
         Console.WriteLine();

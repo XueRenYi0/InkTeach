@@ -7,7 +7,7 @@ Not "one more whiteboard" — a board layer *pasted over* someone else's softwar
 on its own layer, the slide underneath is untouched, and one click hands the mouse back.
 
 [![Release](https://img.shields.io/github/v/release/XueRenYi0/InkTeach?label=release&color=blue)](https://github.com/XueRenYi0/InkTeach/releases/latest)
-[![License](https://img.shields.io/github/license/XueRenYi0/InkTeach)](LICENSE)
+[![License](https://img.shields.io/badge/license-Proprietary-lightgrey)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011%20x64-lightgrey)
 [![Downloads](https://img.shields.io/github/downloads/XueRenYi0/InkTeach/total)](https://github.com/XueRenYi0/InkTeach/releases)
 
@@ -373,6 +373,12 @@ approach fits, we align with it instead of reinventing it:
 | GC during writing | `SustainedLowLatency` held for a whole stroke, asserted no 2nd-gen collection |
 | Memory (idle / 10,000 strokes) | 93 MB / 392 MB committed |
 
+> **2026-11-10 re-test note** (2520×1680 / 90Hz / Iris Xe): the table above is the historical
+> 2880×1800 baseline and is not directly comparable. Re-test: idle commit ~91 MB; 10k single-screen
+> full re-tile ~227–231 ms; 10k scroll worst *work* frame 18–19 ms (root cause: lazy geometry build
+> + gen-2 GC, not the tile cache), mean work frame ~5 ms. Full data:
+> `reports/性能数据审计-20261110.md` (Chinese).
+
 ---
 
 ## Lightweight: Windows 10 / 11, no .NET
@@ -488,11 +494,11 @@ InkTeach   host: CLI / self-test / benchmarks (double-click InkTeach.exe when pu
 
 ## Licence
 
-**Copyright (C) 2026 XueRenYi0**. Released under **GPL-3.0** (see [LICENSE](LICENSE)): free to
-use, modify and redistribute (including commercially); derivatives must stay open source under
-GPL-3.0 and keep the attribution and licence notices. For **closed-source commercial use or
-embedding in your own product**, contact the author about a **commercial licence** (copyright is
-held solely by the author, so dual licensing is possible).
+**Copyright (C) 2026 XueRenYi0**. From **9.7.0**, InkTeach is **proprietary software**
+(see [LICENSE](LICENSE)): the installer may be used free of charge for personal, educational
+or commercial purposes and passed on unmodified; **modifying, decompiling, redistributing or
+selling it is not allowed**, and the source code is not published. **9.6.0 and earlier remain
+GPL-3.0**; rights already granted for those versions are unaffected.
 
 Projects we took ideas from but copied no code from (Ink Canvas / Inkeys / perfect-freehand / $P and
 others) are listed with their licences in

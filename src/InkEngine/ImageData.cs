@@ -39,6 +39,24 @@ internal sealed class ImageData
     /// <summary>预乘好的 BGRA32 像素，长度 = Width*Height*4。</summary>
     public byte[] Bgra { get; private set; }
 
+    /// <summary>
+    /// 这份像素是否已经过“美化”（去黄/纸白）。只用于本次运行里的按钮状态；
+    /// 存档不写这一位，重启后靠 <see cref="PhotoBeautify"/> 的“已经够白”判据避免重复处理。
+    /// </summary>
+    public bool Beautified { get; private set; }
+
+    /// <summary>
+    /// 美化前的原图引用（**只在本进程内保留**）：再点一次“美化”可以换回它。
+    /// 不写存档；重启后为 null，原图不保留，避免 .ink 文件双倍膨胀。
+    /// </summary>
+    public ImageData BeautifyOriginal { get; private set; }
+
+    internal void MarkBeautified(ImageData original = null)
+    {
+        Beautified = true;
+        BeautifyOriginal = original;
+    }
+
     /// <summary>D2D 位图缓存。设备相关，跟几何缓存同一个道理（见 Stroke.Geometry）。</summary>
     private ID2D1Bitmap _bitmap;
 

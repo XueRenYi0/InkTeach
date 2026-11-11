@@ -2245,3 +2245,63 @@ internal sealed class TextBoxTextAction : EditAction
         doc.Version++;
     }
 }
+
+/// <summary>
+/// 题卡「生成答案」：把 AI 填进来的答案 / 解析 + 展开状态 + 来源行一起进撤销栈。
+/// 只改题卡的答案字段，不动题干和选项；撤销回到“答案还是空的”那一步。
+/// </summary>
+internal sealed class TextBoxAnswersAction : EditAction
+{
+    private readonly Stroke _stroke;
+    private readonly (string A, string An)[] _before, _after;
+    private readonly bool _showBefore, _showAfter;
+    private readonly string _metaBefore, _metaAfter;
+    private readonly RectF _beforeBounds, _afterBounds;
+
+    public TextBoxAnswersAction(Stroke s,
+                                (string A, string An)[] before, (string A, string An)[] after,
+                                bool showBefore, bool showAfter,
+                                string metaBefore, string metaAfter,
+                                RectF beforeBounds, RectF afterBounds)
+    {
+        _stroke = s;
+        _before = before; _after = after;
+        _showBefore = showBefore; _showAfter = showAfter;
+        _metaBefore = metaBefore; _metaAfter = metaAfter;
+        _beforeBounds = beforeBounds; _afterBounds = afterBounds;
+    }
+
+    public override int HeldStrokes => 1;
+    public override RectF AffectedBefore => _beforeBounds;
+    public override RectF AffectedAfter => _afterBounds;
+
+    public override void Undo(InkDocument doc) => Apply(doc, _before, _showBefore, _metaBefore);
+    public override void Redo(InkDocument doc) => Apply(doc, _after, _showAfter, _metaAfter);
+
+    private void Apply(InkDocument doc, (string A, string An)[] snap, bool show, string meta)
+    {
+        var box = _stroke.TextBox;
+        if (box == null || snap == null) return;
+        var old = _stroke.PaddedBounds;
+        int n = Math.Min(snap.Length, box.Questions.Count);
+        for (int i = 0; i < n; i++)
+        {
+            box.Questions[i].Answer = snap[i].A;
+            box.Questions[i].Analysis = snap[i].An;
+        }
+        box.ShowAnswers = show;
+        box.Meta = meta ?? "";
+        box.InvalidateLayout();
+        _ = box.EnsureLayout();
+        var origin = _stroke.Points.Count > 0
+            ? new Vector2(_stroke.Points[0].X, _stroke.Points[0].Y)
+            : Vector2.Zero;
+        _stroke.SetTextBoxRect(origin, box.Width, box.LayoutHeight);
+        _stroke.SyncTextBoxBounds();
+        doc.RefreshStrokeGrid(_stroke);
+        doc.Dirty.Add(old);
+        doc.Dirty.Add(_stroke.PaddedBounds);
+        doc.StructureChangedSinceRender = true;
+        doc.Version++;
+    }
+}

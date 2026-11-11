@@ -83,12 +83,12 @@ $proj = Join-Path $root "src\InkTeach\InkTeach.csproj"
 #       Gitee：     $updateBase = "https://gitee.com/<账号>/<仓库>/raw/<分支>"
 #       局域网共享：$updateBase = "\\教室服务器\InkTeach"
 #       对象存储：   $updateBase = "https://<桶>.oss-cn-….aliyuncs.com"
-$updateBase = "https://github.com/XueRenYi0/InkTeach/releases/latest/download"
+$updateBase = "https://github.com/XueRenYi0/InkTeach-Releases/releases/latest/download"
 
-# 国内镜像（GitCode：源码随发版推送、zip/Setup 挂发行版附件；2026-10-03 起用）。
+# 国内镜像（GitCode：**只放发行版附件，不再推源码**；2026-11-11 闭源起）。
 # 配了它：① GitHub 清单里多写一个 "cn"（App 优先从国内下 zip）；② 生成 dist\update-mirror.json 留档。
 # 留空 = 不做国内镜像。
-$mirrorOwnerRepo  = "XueRenYI0/InkTeach"
+$mirrorOwnerRepo  = "XueRenYI0/InkTeach-Releases"
 $mirrorReleaseBase = if ($mirrorOwnerRepo) { "https://gitcode.com/$mirrorOwnerRepo/releases/download" } else { "" }
 
 # ---- 版本号从工程里读，不在这里再写一份（写两份迟早对不上）----------------------------
@@ -337,6 +337,12 @@ Set-Content -Path (Join-Path $docDir "使用说明.txt") -Value $readme -Encodin
 $privacySrc = Join-Path $root "PRIVACY.md"
 if (Test-Path $privacySrc) { Copy-Item $privacySrc (Join-Path $outDir "PRIVACY.md") -Force }
 
+# 许可与第三方声明随包带（2026-11-11 闭源起：LICENSE 必须随二进制分发）
+$licenseSrc = Join-Path $root "LICENSE"
+if (Test-Path $licenseSrc) { Copy-Item $licenseSrc (Join-Path $outDir "LICENSE.txt") -Force }
+$noticesSrc = Join-Path $root "src\InkEngine\THIRD-PARTY-NOTICES.md"
+if (Test-Path $noticesSrc) { Copy-Item $noticesSrc (Join-Path $outDir "THIRD-PARTY-NOTICES.md") -Force }
+
 # ---- 压 zip ---------------------------------------------------------------------------
 $zip = Join-Path $root "dist\$name.zip"
 if (-not $NoZip) {
@@ -471,7 +477,7 @@ else {
         $rootJson = Join-Path $root "update.json"
         Set-Content -Path $rootJson -Value $body -Encoding UTF8
         # 让 jsDelivr（国内清单源之一）立刻刷新缓存；失败不影响发布。
-        try { curl.exe -s -o NUL --max-time 20 "https://purge.jsdelivr.net/gh/XueRenYi0/InkTeach@main/update.json" | Out-Null } catch { }
+        try { curl.exe -s -o NUL --max-time 20 "https://purge.jsdelivr.net/gh/XueRenYi0/InkTeach-Releases@main/update.json" | Out-Null } catch { }
         Write-Host "  自动更新清单 dist\update.json ＋ 仓库根 update.json（sha256 $($hash.Substring(0,12))…）" -ForegroundColor Green
         Write-Host "  ⚠ 发新版：先 git add update.json && git commit && git push（App 从 raw 地址取它），再把 zip 和 setup.exe 一起挂到 release 附件" -ForegroundColor Yellow
     }

@@ -7,7 +7,7 @@
 底下那个 PPT 一点没动，点一下就把鼠标还给 PPT。
 
 [![Release](https://img.shields.io/github/v/release/XueRenYi0/InkTeach?label=release&color=blue)](https://github.com/XueRenYi0/InkTeach/releases/latest)
-[![License](https://img.shields.io/github/license/XueRenYi0/InkTeach)](LICENSE)
+[![License](https://img.shields.io/badge/license-Proprietary-lightgrey)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011%20x64-lightgrey)
 [![Downloads](https://img.shields.io/github/downloads/XueRenYi0/InkTeach/total)](https://github.com/XueRenYi0/InkTeach/releases)
 
@@ -346,6 +346,11 @@ Excalidraw 的相机处理、Windows Terminal 的后缓冲不变量**。能直�
 | 书写期间 GC | `SustainedLowLatency`，一笔全程保持，自检断言无第 2 代回收 |
 | 内存（空载 / 一万笔） | 提交 93 MB / 392 MB |
 
+> **2026-11-10 复测备注**（2520×1680 / 90Hz / Iris Xe）：本表是 2880×1800 的历史基准，
+> 不能直接和上面的旧数字横比。复测结果：空载提交约 91 MB；10k 单屏整层重铺约 227~231 ms；
+> 10k 滚动最慢工作帧 18~19 ms（根因是懒建几何 + 第 2 代 GC，不是分块缓存），
+> 平均工作帧约 5 ms。完整数据与修复建议见 `reports/底层-分块与脏区-实测-20261110.md`。
+
 ---
 
 ## 轻量：Windows 10 / 11，免装 .NET
@@ -461,9 +466,9 @@ InkTeach   宿主：命令行 / 自检 / 基准（发布版双击 InkTeach.exe�
 
 ## 许可
 
-**Copyright (C) 2026 XueRenYi0**。本项目采用 **GPL-3.0**（见 [LICENSE](LICENSE)）：
-可自由使用、修改、分发（包括商用），衍生项目需按 GPL-3.0 开源并保留出处与许可声明。
-需要**闭源商用 / 嵌入自有产品**的，可联系作者谈**商业授权**（版权归作者一人所有，具备双许可条件）。
+**Copyright (C) 2026 XueRenYi0**。从 **9.7.0** 起，本项目改为**专有软件**（见 [LICENSE](LICENSE)）：
+安装包可免费用于个人、教学或商业场景，也可原样转交他人；**不得修改、反编译、二次分发或销售**，
+源代码不公开。**9.6.0 及更早版本仍按 GPL-3.0 发布**，已经获得的旧版本权利不受影响。
 
 参考过思路但未复制代码的项目（Ink Canvas / Inkeys / perfect-freehand / $P 等）的出处与许可，
 见 [src/InkEngine/THIRD-PARTY-NOTICES.md](src/InkEngine/THIRD-PARTY-NOTICES.md)。

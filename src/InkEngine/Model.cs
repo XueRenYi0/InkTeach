@@ -6951,6 +6951,38 @@ internal sealed class SetStrokePropAction : EditAction
 /// 只做这两个动作，不做"上移/下移一格"（见 调研-选中框-反馈-导出-层级-属性.md 第三节）。
 /// 撤销 = 按原下标插回去。
 /// </summary>
+/// <summary>
+/// 图片美化：把一条图片对象换成/换回另一份 <see cref="ImageData"/>。
+/// 旧图仍留在撤销栈里（撤销能回原图）；非活动那份只释放 D2D 位图，Bgra 还留着。
+/// </summary>
+internal sealed class ReplaceImageAction : EditAction
+{
+    private readonly Stroke _stroke;
+    private readonly ImageData _old;
+    private readonly ImageData _new;
+
+    public ReplaceImageAction(Stroke stroke, ImageData oldImage, ImageData newImage)
+    {
+        _stroke = stroke;
+        _old = oldImage;
+        _new = newImage;
+    }
+
+    public override int HeldStrokes => 1;
+    public override RectF AffectedBefore => _stroke.PaddedBounds;
+    public override RectF AffectedAfter => _stroke.PaddedBounds;
+
+    public override void Undo(InkDocument doc) => Apply(doc, _old, _new);
+    public override void Redo(InkDocument doc) => Apply(doc, _new, _old);
+
+    private void Apply(InkDocument doc, ImageData image, ImageData release)
+    {
+        doc.Dirty.Add(_stroke.PaddedBounds);
+        _stroke.Image = image;
+        release?.Release();
+    }
+}
+
 internal sealed class ReorderStrokesAction : EditAction
 {
     private readonly Stroke[] _targets;

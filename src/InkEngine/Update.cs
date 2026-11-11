@@ -51,7 +51,7 @@ internal static class UpdateFeed
 {
     /// <summary>清单在 GitHub 仓库里的原始地址（所有加速站都指向它）。</summary>
     private const string RawUrl =
-        "https://raw.githubusercontent.com/XueRenYi0/InkTeach/main/update.json";
+        "https://raw.githubusercontent.com/XueRenYi0/InkTeach-Releases/main/update.json";
 
 
 
@@ -87,14 +87,14 @@ internal static class UpdateFeed
         // 用户另一台机"不开代理死活检查失败、开了才能更新"，就缺它这一类源：
         // GitHub 被墙、加速站/jsDelivr 也不通时，全靠它兜底。zip 下载那边清单的
         // `cn`（GitCode 发行版直链）本来就在；这条补的是**清单本身**的国内直连。
-        ("", "https://gitcode.com/api/v5/repos/XueRenYI0/InkTeach/raw/update.json?ref=main", true),
+        ("", "https://gitcode.com/api/v5/repos/XueRenYI0/InkTeach-Releases/raw/update.json?ref=main", true),
         ("",                          RawUrl, false),   // GitHub 直连（能上的机器走它最省事）
         // jsDelivr：把 GitHub 仓库里的清单从国内 CDN 取（2026-10-03 实测 4 个域名全通，
         // 不需要任何国内账号/实名）。缓存最长 12 小时——刚发新版时它可能稍旧，但**有别的源
         // 先报新版**，它只在"全说已是最新"时提供最快的国内应答；发版时 publish.ps1 会 purge。
-        ("", "https://cdn.jsdelivr.net/gh/XueRenYi0/InkTeach@main/update.json", true),
-        ("", "https://fastly.jsdelivr.net/gh/XueRenYi0/InkTeach@main/update.json", true),
-        ("", "https://gcore.jsdelivr.net/gh/XueRenYi0/InkTeach@main/update.json", true),
+        ("", "https://cdn.jsdelivr.net/gh/XueRenYi0/InkTeach-Releases@main/update.json", true),
+        ("", "https://fastly.jsdelivr.net/gh/XueRenYi0/InkTeach-Releases@main/update.json", true),
+        ("", "https://gcore.jsdelivr.net/gh/XueRenYi0/InkTeach-Releases@main/update.json", true),
     };
 
     /// <summary>

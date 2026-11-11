@@ -44,6 +44,7 @@ $icons = [ordered]@{
     # 注意：**不能叫 lock** —— 那是 C# 关键字，生成的常量名会编译不过（实测踩到）。
     'lockClosed' = @('Lock Closed')                   # 已锁定
     'unlock'     = @('Lock Open')                     # 未锁定
+    'pin'        = @('Pin')                           # 面板常驻图钉
     # 导出用 **Save**（软盘）而不是 Arrow Export Up：后者画出来是"上箭头 + 底托"，
     # 和置顶用的 Arrow Upload 几乎一模一样，同一屏里两个一样的图标就废了（实测发现）。
     'export'     = @('Save', 'Arrow Export Up')       # 导出（另存为）

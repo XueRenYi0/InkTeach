@@ -53,6 +53,32 @@ public partial class InkEngine
         => StartHandOcr(HandOcrMode.TextBox, true);
 
     /// <summary>
+    /// AI 菜单「识别成题卡」：选中图片 → OCR → 一题一条 → 一张卡（原图保留）。
+    /// 图片只给这一个识别入口：手写那边已经有「识别文本」，再来一个用户分不清。
+    /// </summary>
+    internal void RecognizeImageCardFromUi()
+    {
+        Stroke image = null;
+        int images = 0;
+        foreach (var s in Doc.Selected)
+        {
+            if (s == null || s.Kind != StrokeKind.Image || s.Image == null) continue;
+            images++;
+            if (image == null) image = s;
+        }
+        if (image == null)
+        {
+            SetHandOcrStatus("请先选中一张图片");
+            return;
+        }
+        if (images > 1)
+            SetHandOcrStatus($"一次识别一张：先处理选中的第一张（共 {images} 张）");
+        else
+            SetHandOcrStatus("正在识别图片里的题目…");
+        InsertImageCardFromUi(image);
+    }
+
+    /// <summary>
     /// AI 菜单「识别作图」：
     ///   · 选中图片 → 模型直接看图，反推函数/圆锥/几何；
     ///   · 选中文本框/题卡 → 用现有文字直接解析；
