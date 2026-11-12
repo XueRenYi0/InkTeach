@@ -111,6 +111,8 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetEraserPreferred() => _engine.SetEraserPreferredFromUi();
     public void CycleParabolaAxis() => _engine.CycleParabolaAxis();
     public void CycleLineDash() => _engine.CycleLineDash();
+    public void SetClearOnArrow(bool on) => _engine.SetClearOnArrowFromUi(on);
+    public void ClearDesktopOnArrow() => _engine.ClearDesktopOnArrowFromUi();
     public void CycleSolidSides() => _engine.CycleSolidSides();
     public void CycleHyperbolaAsymptotes() => _engine.CycleHyperbolaAsymptotes();
     public void ToggleLibraryPanel() => _engine.ToggleLibraryPanel();

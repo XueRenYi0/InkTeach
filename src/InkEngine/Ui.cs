@@ -343,6 +343,11 @@ public interface IEngineCommands
     /// 不为虚线直线 / 点线直线各开一格。
     /// </summary>
     void CycleLineDash();
+
+    /// <summary>「点箭头清屏」设置开关（只在桌面批注生效，见 <see cref="UiState.ClearOnArrowActive"/>）。</summary>
+    void SetClearOnArrow(bool on);
+    /// <summary>点箭头时调用：满足条件才清空桌面这一屏（引擎自己判，白板/PPT/文档不动）。</summary>
+    void ClearDesktopOnArrow();
     /// <summary>
     /// **换下一档立体**：3 → 4 → 5 → 6 → 3（底面几边形）——只动**当前工具那一格**，
     /// 另外两格的档**不受影响**（各记各的，见 <see cref="UiState.SidesOf"/>）。
@@ -1151,6 +1156,12 @@ public readonly struct UiState
     public bool PptMode { get; init; }
     /// <summary>**当前有没有打开文档**（图片/PDF 页层，2026-10-07）。"关闭文档"那格按它亮/灰。</summary>
     public bool DocOpen { get; init; }
+    /// <summary>白板开着（板面模式）。界面用它判断“点箭头清屏”这条设置现在生效不生效。</summary>
+    public bool BoardOn { get; init; }
+    /// <summary>设置项「点箭头清屏」开着。</summary>
+    public bool ClearOnArrow { get; init; }
+    /// <summary>此刻点箭头会不会真的清屏（设置开 + 桌面批注；白板/PPT/文档时不生效）。</summary>
+    public bool ClearOnArrowActive { get; init; }
     /// <summary>文档描述（"椭圆错题.pdf · 2 页"；没文档时空串）。提示行用。</summary>
     public string DocInfo { get; init; }
     /// <summary>当前工具实际用的颜色（荧光笔是半透明的）。</summary>

@@ -354,7 +354,7 @@ public sealed partial class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。外观 / 书写 / 墨迹三列并排；
     /// `AutoStart` 排在表尾，但由 <see cref="MoreRowRect"/> 画在外观列最后一格。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, TouchMode, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart, AiApi }
+    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, TouchMode, ClearOnArrow, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart, AiApi }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -388,6 +388,10 @@ public sealed partial class FullUi : IOverlayUi
         // 唯一算法 = 线性预测（Chromium 同族），只剩这一个开关）。
         // 链路：行表 → ActivateRow → IsOn → SavePrefs（"开过"才写 "1"）。
         (Row.Predict, "墨迹预测", false, false, "开了让墨尾更跟手一点；默认关，想跟手就在这里打开"),
+        // 「点箭头清屏」（2026-11-12 用户定）：只在**桌面批注**生效——
+        // 白板能翻屏、PPT/PDF 一页一存，都不需要；默认关。
+        (Row.ClearOnArrow, "点箭头清屏", false, false,
+         "只在桌面批注时生效：点箭头进入穿透前，先清空桌面上的批注（可 Ctrl+Z 撤销）"),
         // 触摸模式（2026-10-24）：红外屏杆子/手指同源，面积橡皮取消后给老师一个
         // “只写字、完全不要手势”的保险档；默认仍是手势模式。
         (Row.TouchMode, "触摸模式", false, false,
@@ -3753,7 +3757,8 @@ public sealed partial class FullUi : IOverlayUi
 
     private static bool IsToggleRow(Row kind)
         => kind is Row.DarkTheme or Row.AutoHide or Row.RailPin or Row.DwellShape
-           or Row.Pressure or Row.Predict or Row.Privacy or Row.RestoreInk or Row.PptAutoSave or Row.AutoStart;
+           or Row.Pressure or Row.Predict or Row.Privacy or Row.RestoreInk or Row.PptAutoSave
+           or Row.AutoStart or Row.ClearOnArrow;
 
     private bool IsToggleRow(int i) => IsToggleRow(Rows[i].Kind);
 
@@ -4051,6 +4056,10 @@ public sealed partial class FullUi : IOverlayUi
             case Row.AutoStart:
                 _host.Commands.SetAutoStart(!_host.State.AutoStartOn);
                 break;
+            // 「点箭头清屏」：引擎持有并落盘（clearOnArrow）。
+            case Row.ClearOnArrow:
+                _host.Commands.SetClearOnArrow(!_host.State.ClearOnArrow);
+                break;
         }
         Invalidate();
     }
@@ -4129,7 +4138,7 @@ public sealed partial class FullUi : IOverlayUi
     private static readonly Row[] SettingsGeneralRows =
         { Row.DarkTheme, Row.AutoHide, Row.RailPin, Row.UiSize, Row.AutoStart };
     private static readonly Row[] SettingsWritingRows =
-        { Row.DwellShape, Row.Pressure, Row.Predict, Row.TouchMode };
+        { Row.DwellShape, Row.Pressure, Row.Predict, Row.TouchMode, Row.ClearOnArrow };
     private static readonly Row[] SettingsInkRows =
         { Row.RestoreInk, Row.PptAutoSave, Row.HistoryDays };
     private static readonly Row[] SettingsAiRows = { Row.AiApi };
@@ -6479,7 +6488,11 @@ public sealed partial class FullUi : IOverlayUi
 
         switch (idx)
         {
-            case 1: cmd.SetPassThrough(!st.PassThrough); break;
+            case 1:
+                // 进穿透前先清屏（设置开着 + 桌面批注才真的清；引擎自己判）。
+                if (!st.PassThrough) cmd.ClearDesktopOnArrow();
+                cmd.SetPassThrough(!st.PassThrough);
+                break;
             // 白板那一格：**点三下是一个来回**（用户 2026-09-27 第三次定的）。
             //
             //   ① 板关着               → 开板（顺手把设置条拿过来）
@@ -7810,6 +7823,8 @@ public sealed partial class FullUi : IOverlayUi
         Row.RestoreInk => _host.GetPref("restoreInk") == "1",
         Row.PptAutoSave => _host.GetPref("pptAutoSave") != "0",
         Row.AutoStart => _host != null && _host.State.AutoStartOn,
+        // 「点箭头清屏」：引擎持有（只在桌面批注生效，界面只显示开关）。
+        Row.ClearOnArrow => _host != null && _host.State.ClearOnArrow,
         _ => _hideEnabled,
     };
 
@@ -7892,6 +7907,23 @@ public sealed partial class FullUi : IOverlayUi
         if (CellUnavailable(i, st)) ink = new Color4(ink.R, ink.G, ink.B, 0.30f);
         if (PerfSkipIcons) return;
         DrawCellIcon(ctx, i, r, Tokens.Icon, ink, active, st);
+        // 「点箭头清屏」开着且在桌面批注：右下角常驻一枚小橡皮徽标，
+        // 让老师在点之前就知道这一下会擦（2026-11-12）。
+        if (i == 1 && st.ClearOnArrowActive) DrawClearBadge(ctx, r, ink);
+    }
+
+    /// <summary>箭头格右下角的小橡皮徽标（只在“点箭头清屏”真正生效时画）。</summary>
+    private void DrawClearBadge(ID2D1DeviceContext ctx, RectF r, in Color4 ink)
+    {
+        const float d = 13f;
+        var c = new Vector2(r.MaxX - d * 0.5f - 3f, r.MaxY - d * 0.5f - 2f);
+        var ring = new Ellipse(c, d * 0.5f, d * 0.5f);
+        ctx.FillEllipse(ring, Brush(ctx, Tokens.AccentInk));
+        ctx.DrawEllipse(ring, Brush(ctx, ink), 1.2f);
+        IconAtlas.DrawCentered(ctx, "eraserPure",
+            new RectF { MinX = c.X - d * 0.34f, MinY = c.Y - d * 0.34f,
+                        MaxX = c.X + d * 0.34f, MaxY = c.Y + d * 0.34f },
+            d * 0.62f, Brush(ctx, ink));
     }
 
     /// <summary>
@@ -8208,7 +8240,10 @@ public sealed partial class FullUi : IOverlayUi
             return id switch
             {
                 // 0 号收起格、球（-2）：自解释，不配（收窄）
-                1 => (c.Tip, Key(KeyAction.TogglePassThrough), "打开后点击落到底下的程序；再点回来是画笔"),
+                1 => (c.Tip, Key(KeyAction.TogglePassThrough),
+                      _host != null && _host.State.ClearOnArrowActive
+                          ? "点一下 = 清空桌面批注并穿透（Ctrl+Z 撤销）；再点回来是画笔"
+                          : "打开后点击落到底下的程序；再点回来是画笔"),
                 2 => (c.Tip, Key(KeyAction.ToggleBoard), $"{Key(KeyAction.FlipPageUp)} / {Key(KeyAction.FlipPageDown)} 翻屏"),
                 3 => (c.Tip, Key(KeyAction.ToolPen), "已经是笔 → 再按换颜色"),
                 4 => (c.Tip, Key(KeyAction.ToolHighlighter), ""),

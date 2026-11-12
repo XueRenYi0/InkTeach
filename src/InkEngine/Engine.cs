@@ -3288,6 +3288,8 @@ public partial class InkEngine
         // 上次用的线型（实线 / 虚线 / 点线）
         if (int.TryParse(GetUiPref("lineDash"), out int dash) && dash >= 0 && dash <= 2)
             LineDash = (StrokeDash)dash;
+        // 「点箭头清屏」（2026-11-12）：只在桌面批注生效。
+        ClearOnArrow = GetUiPref("clearOnArrow") == "1";
         // **粗细的"数值"版**：滑条拖动现在**吸附在档上**，所以这份数值正常就等于某档；
         // 早期版本存过任意值（如 2.37）——读回来时吸附到最近的档，界面不会显示一个"不存在"的档。
         if (float.TryParse(GetUiPref("wv.pen"), out float vPen))
@@ -13022,6 +13024,34 @@ public partial class InkEngine
     public StrokeDash LineDash { get; private set; } = StrokeDash.Solid;
 
     /// <summary>
+    /// 「点箭头清屏」（2026-11-12 用户定）：开启后，点工具栏箭头**进入穿透**前，
+    /// 先清空**桌面批注**当前这一屏（一步撤销）。只在桌面模式生效——
+    /// 白板能翻屏、PPT/PDF 一页一存，都不需要这个动作。
+    /// </summary>
+    internal bool ClearOnArrow;
+
+    /// <summary>此刻点箭头会不会真的清屏（设置开着 + 在桌面批注，不在白板/PPT/文档/回放）。</summary>
+    internal bool ClearOnArrowActiveNow
+        => ClearOnArrow && !BoardOn && !PptMode && !DocView.IsOpen && _replay == null;
+
+    internal void SetClearOnArrowFromUi(bool on)
+    {
+        if (ClearOnArrow == on) return;
+        ClearOnArrow = on;
+        SetUiPref("clearOnArrow", on ? "1" : null);
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>点箭头时调用：满足条件才清桌面这一屏；不满足时什么都不做（照常穿透）。</summary>
+    internal void ClearDesktopOnArrowFromUi()
+    {
+        if (!ClearOnArrowActiveNow) return;
+        if (Doc.Strokes.Count == 0) return;
+        ClearCurrentPageFromUi();
+    }
+
+    /// <summary>
     /// 换下一档直线线型：**实线 → 虚线 → 点线 → 实线**（见 <see cref="LineDash"/>）。
     /// 只影响**下一笔**画出来的直线，不碰已经画好的对象。
     /// </summary>
@@ -14211,6 +14241,8 @@ public partial class InkEngine
             // 穿透开关（全局 Ctrl+Alt+Shift+T 这条同一条路）：退出时恢复进穿透前的板态，
             // 见 SetPassThrough 的 restoreBoard。用户主动退出 = 回到画笔（2026-10-24）。
             case KeyAction.TogglePassThrough:
+                // 和点箭头同一条路：进穿透前按设置清桌面（白板/PPT/文档不动）。
+                if (!PassThrough) ClearDesktopOnArrowFromUi();
                 SetPassThrough(!PassThrough, restoreBoard: true, toPen: PassThrough);
                 break;
             // 呼出盘：按住才出来的"标迹菜单"（松手确认，见 OpenRadialPalette）。
@@ -14990,6 +15022,9 @@ public partial class InkEngine
         InkStatus = InkStatus,                  // 界面「墨迹」页的状态行
         DocOpen = DocView.IsOpen,
         DocInfo = DocView.IsOpen ? $"{DocView.Title} · {DocView.Count} 页" : "",
+        BoardOn = BoardOn,
+        ClearOnArrow = ClearOnArrow,
+        ClearOnArrowActive = ClearOnArrowActiveNow,
         ReplayActive = ReplayActive,
         ReplayPlaying = ReplayPlaying,
         ReplaySpeed = ReplaySpeed,

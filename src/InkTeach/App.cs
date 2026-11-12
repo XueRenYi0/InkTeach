@@ -562,6 +562,13 @@ internal sealed partial class App : InkEngine.InkEngine
             FacesProbe();
             _quit = true;
         }
+        else if (mode == "--arrowcleartest")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ArrowClearTest();
+            _quit = true;
+        }
         else if (mode == "--imgcardlive")
         {
             _autoExitAt = double.MaxValue;
