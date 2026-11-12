@@ -7927,11 +7927,18 @@ public sealed partial class FullUi : IOverlayUi
         var brush = Brush(ctx, ink);
         switch (cell)
         {
-            // 箭头 + 「箭头清屏」：直接换成**扫帚**（清屏语义，2026-11-12 用户反馈
-            // 箭头挂橡皮“不好看”）。悬停提示会说明“清屏并穿透”；关掉设置就还是箭头。
+            // 箭头 + 「箭头清屏」：箭头保持原样，右上角加一个小圆点
+            // （2026-11-12 用户从三版里选的：比圆点大一圈、勉强能看清，又不抢箭头）。
             case 1 when st.ClearOnArrowActive:
-                IconAtlas.DrawCentered(ctx, "broom", r, size, brush);
+            {
+                IconAtlas.DrawCentered(ctx, CellIconName(1, st), r, size, brush);
+                float ix = (r.MinX + r.MaxX) * 0.5f - size * 0.5f;
+                float iy = (r.MinY + r.MaxY) * 0.5f - size * 0.5f;
+                var c = new Vector2(ix + 20.0f / 24f * size, iy + 4.6f / 24f * size);
+                float rad = 1.9f / 24f * size;
+                ctx.FillEllipse(new Ellipse(c, rad, rad), brush);
                 return;
+            }
             // 白板：板开着的时候板面填成**这块板的颜色**（见 IconAtlas.DrawBoard）
             case 2:
                 IconAtlas.DrawBoard(ctx, r, size, brush, active ? st.BoardColor : null);
