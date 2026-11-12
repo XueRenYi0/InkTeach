@@ -9680,7 +9680,7 @@ public partial class InkEngine
         if (Tool != p.Tool) return false;
         return p.Tool switch
         {
-            Tool.Line => true,
+            Tool.Line => LineDash == (StrokeDash)Math.Clamp(p.Variant, 0, 2),
             Tool.Parabola => p.Variant == 0 ? ParabolaAxis == CurveAxis.OpenUp : ParabolaAxis != CurveAxis.OpenUp,
             Tool.Hyperbola => HyperbolaAsymptotes == (p.Variant == 0),
             Tool.ConicEllipse => EllipseFocusTriangle == (p.Variant == 0),
@@ -9702,6 +9702,13 @@ public partial class InkEngine
         _shapeOneShot = !ShapeRepeatContinuous;
         switch (p.Tool)
         {
+            // 直线卡画的是**实线图标**，选它就该画实线（2026-11-12 用户反馈：
+            // 面板第一张写着“直线”，画出来却是虚线——因为 LineDash 还是上次切到的档）。
+            // 想要虚线/点线走工具栏那一格切换，面板这张卡固定按图标来。
+            case Tool.Line:
+                LineDash = (StrokeDash)Math.Clamp(p.Variant, 0, 2);
+                SetUiPref("lineDash", ((int)LineDash).ToString());
+                break;
             case Tool.Parabola:
                 ParabolaAxis = p.Variant == 0 ? CurveAxis.OpenUp : CurveAxis.OpenRight;
                 break;

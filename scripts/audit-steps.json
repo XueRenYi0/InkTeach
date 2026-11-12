@@ -1,0 +1,17 @@
+[
+  { "_comment": "坐标是「窗口内坐标」，不是屏幕坐标。屏幕坐标 = 窗口 left/top + 这里的 x/y。先用 audit-ui.ps1 -Calibrate 生成带网格的截图，照着图填。" },
+  { "_comment": "动作总时长必须小于 -Seconds，否则录像会在动作做完前结束。粗算：所有 ms 加起来 + 每个动作 200ms 余量。" },
+  { "_comment": "改完坐标先小跑一次，看 reports/frames 里有没有拍到目标控件，再正式跑。" },
+
+  { "action": "move",  "x": 120, "y": 60,  "ms": 400 },
+  { "action": "hover", "x": 120, "y": 60,  "ms": 700 },
+  { "action": "click", "x": 120, "y": 60 },
+  { "action": "wait",  "ms": 500 },
+
+  { "_comment": "从 (300,400) 拖到 (700,400)，用 900ms 模拟真人速度；改 x2/y2 就是改终点。" },
+  { "action": "drag",  "x": 300, "y": 400, "x2": 700, "y2": 400, "ms": 900 },
+  { "action": "wait",  "ms": 500 },
+
+  { "action": "wheel", "delta": -240 },
+  { "action": "wait",  "ms": 500 }
+]
