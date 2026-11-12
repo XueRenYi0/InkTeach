@@ -2718,6 +2718,19 @@ public partial class InkEngine
             foreach (var w in InkSettings.LoadUiPrefs(UiPrefs))
                 Console.WriteLine("settings: " + w);
 
+        // 隐私同意单独存一份（不进备份包），恢复设置也不会再弹一次（2026-11-13）。
+        // 老版本写在 settings.json 里的记录仍然认；文件优先。
+        if (!SelfCheckMode)
+        {
+            var pv = PrivacyStore.Load();
+            if (pv != null)
+            {
+                UiPrefs["privacy.ver"] = pv.Value.Ver.ToString();
+                UiPrefs["privacy.consent"] = pv.Value.Consent;
+                UiPrefs["privacy.at"] = pv.Value.At ?? "";
+            }
+        }
+
         // 开机自启：Run 值是唯一真源（不另存 settings.json）。
         // 已启用但路径变了（换目录 / 升级）就在这里修回当前 exe。
         if (!SelfCheckMode)
@@ -15267,7 +15280,7 @@ public partial class InkEngine
             + "包含：安装 ID、软件版本、首次/最近使用日期、系统/硬件型号、屏幕、帧率/慢帧/内存、触摸统计；\n"
             + "以及你主动上传的运行日志（可能含文件名/路径和错误堆栈，但不含文档内容）。\n"
             + "不会上传：姓名、账号、课件、作业、板书内容或屏幕截图。\n\n"
-            + "拒绝不影响使用；以后可在「设置 → 书写 → 设备与性能统计」中修改。\n"
+            + "拒绝不影响使用；以后可在「设置 → 关于 → 设备与性能统计」中修改。\n"
             + "详见官网「隐私说明」或安装目录 PRIVACY.md。\n"
             + "选择“是”= 同意，选择“否”= 暂不。";
 
@@ -15279,6 +15292,7 @@ public partial class InkEngine
         SetUiPref("privacy.consent", granted ? "granted" : "denied");
         SetUiPref("privacy.ver", PrivacyVersion.ToString());
         SetUiPref("privacy.at", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        PrivacyStore.Save(PrivacyVersion, granted, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
         if (!granted) DiagLog.StartDeviceCardDelete();
         Console.WriteLine($"[隐私] 设备与性能统计：{(granted ? "同意" : "暂不")}");
         NotifyUiStateChanged();
@@ -15296,6 +15310,7 @@ public partial class InkEngine
         SetUiPref("privacy.consent", "denied");
         SetUiPref("privacy.ver", PrivacyVersion.ToString());
         SetUiPref("privacy.at", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        PrivacyStore.Save(PrivacyVersion, false, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
         DiagLog.StartDeviceCardDelete();
         Console.WriteLine("[隐私] 设备与性能统计：已关闭");
         NotifyUiStateChanged();
