@@ -120,15 +120,18 @@ internal sealed partial class App
               && ShapeCatalog.CountFor("solid") == 17,
               $"常用={ShapeCatalog.CountFor("common")} 曲线={ShapeCatalog.CountFor("curve")} 立体={ShapeCatalog.CountFor("solid")}");
 
-        // 2026-11-12 用户反馈：面板第一张写着“直线”，画出来却是虚线（沿用了上次的线型）。
-        // 卡面画的是实线图标，选它就必须画实线。
+        // 2026-11-12 用户定：直线卡只是“形状入口”，线型跟着工具栏那一格走，
+        // 面板这张卡不覆盖它；卡面也一直显示“直线”。
         {
             Host.Commands.CycleLineDash();           // Solid → Dashed
             bool dashedBefore = Host.State.LineDash == StrokeDash.Dashed;
             SetShapePresetFromUi(ShapeCatalog.All[0]);
-            Check("点「直线」卡 → 回到实线（和卡面一致）",
-                  dashedBefore && Tool == Tool.Line && Host.State.LineDash == StrokeDash.Solid,
+            Check("点「直线」卡 → 不改线型（虚线仍是虚线）",
+                  dashedBefore && Tool == Tool.Line
+                  && Host.State.LineDash == StrokeDash.Dashed,
                   $"before={dashedBefore} tool={Tool} dash={Host.State.LineDash}");
+            Host.Commands.CycleLineDash();           // Dashed → Dotted
+            Host.Commands.CycleLineDash();           // Dotted → Solid，还原
         }
         Check("图形页默认「全部」、9 列 × 5 行、卡片 72×82",
               ShapeCategoryId == "all" && m.Cols == 9 && m.Rows == 5
