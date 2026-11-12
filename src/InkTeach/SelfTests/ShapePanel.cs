@@ -192,6 +192,14 @@ internal sealed partial class App
               && LibraryPanelInfoNow().Rows == 5,
               $"cat={ShapeCategoryId} n={ShapeCardsNow().Length} rows={LibraryPanelInfoNow().Rows}");
 
+        // 2026-11-12 用户反馈：PPT 放映时图形/收藏面板也得能出来（画布本来就能画）。
+        {
+            SetPptModeForTest(true);
+            Check("PPT 放映时图形面板仍然显示", LibraryPanelVisibleNow && LibraryPanelOpen,
+                  $"visible={LibraryPanelVisibleNow} open={LibraryPanelOpen}");
+            SetPptModeForTest(false);
+        }
+
         // 2a2. 点卡直接选：第 8 张 = 梯形
         var cards = ShapeCardsNow();
         m = LibraryPanelInfoNow();

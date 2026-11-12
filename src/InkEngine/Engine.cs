@@ -8421,10 +8421,12 @@ public partial class InkEngine
     internal bool UiOverlayOpen;
     /// <summary>
     /// 这一刻收藏弹窗该不该显示 / 收输入。
-    /// 全屏层、截图、放映、**穿透**时暂时藏；退出后自动回来，状态不销毁。
+    /// 全屏层、截图、**穿透**时暂时藏；退出后自动回来，状态不销毁。
+    /// **PPT 放映时不藏**（2026-11-12 用户反馈：放映时也要能取图形/收藏；
+    /// 画布本来就能画，没有理由只把这两个面板锁住）。
     /// </summary>
     internal bool LibraryPanelVisibleNow
-        => LibraryPanelOpen && !PassThrough && !UiOverlayOpen && !CaptureActive && !PptMode;
+        => LibraryPanelOpen && !PassThrough && !UiOverlayOpen && !CaptureActive;
     /// <summary>正在改名的分类 id（空 = 没在改名）。</summary>
     internal string LibraryRenamingId;
     /// <summary>改名/日志/其他小输入共用的字体缓存（原生 EDIT 用）。</summary>

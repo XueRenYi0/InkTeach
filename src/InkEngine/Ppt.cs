@@ -170,6 +170,9 @@ public partial class InkEngine
 
     /// <summary>正在 PPT 模式（页隔离生效、界面显示页码）。</summary>
     internal bool PptMode { get; private set; }
+
+    /// <summary>自检用：直接切放映态（不走 COM 进入/退出），只验证 UI 门控。</summary>
+    internal void SetPptModeForTest(bool on) => PptMode = on;
     /// <summary>放映到第几页（1 起；0 = 没在放映）。</summary>
     internal int PptSlide { get; private set; }
     internal int PptTotal { get; private set; }
