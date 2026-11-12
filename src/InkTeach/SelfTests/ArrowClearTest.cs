@@ -52,6 +52,7 @@ internal sealed partial class App
         Check("桌面：设置开 → 生效",
               Host.State.ClearOnArrow && Host.State.ClearOnArrowActive,
               $"on={Host.State.ClearOnArrow} active={Host.State.ClearOnArrowActive}");
+        SettleFrames(240);
         ScreenProbe.SaveBmp("reports/arrow-clear-badge.bmp",
             (int)_virtualX, (int)_virtualY, (int)_virtualW, (int)_virtualH);
         int before = Doc.Strokes.Count;

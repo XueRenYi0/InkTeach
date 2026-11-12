@@ -7910,41 +7910,6 @@ public sealed partial class FullUi : IOverlayUi
     }
 
     /// <summary>
-    /// 箭头格 + 「箭头清屏」：箭头缩一点往左上让，橡皮贴在它的尾巴上，
-    /// 两件叠成**一个整体**（不再是一枚挂角上的圆徽标，2026-11-12 用户反馈）。
-    /// 橡皮底下垫一圈底色，把箭头尾巴隔开，远看仍是一个标记。
-    /// </summary>
-    private void DrawArrowClearCell(ID2D1DeviceContext ctx, RectF r, float size,
-                                    in Color4 ink, bool active)
-    {
-        var arrow = new RectF
-        {
-            MinX = r.MinX + 1.0f, MinY = r.MinY - 1.0f,
-            MaxX = r.MaxX - 9.0f, MaxY = r.MaxY - 12.0f,
-        };
-        IconAtlas.DrawCentered(ctx, "cursorArrow", arrow, size * 0.92f, Brush(ctx, ink));
-
-        float es = size * 0.60f;
-        float cx = r.MinX + (r.MaxX - r.MinX) * 0.64f;
-        float cy = r.MinY + (r.MaxY - r.MinY) * 0.58f;
-        var er = new RectF
-        {
-            MinX = cx - es * 0.5f, MinY = cy - es * 0.5f,
-            MaxX = cx + es * 0.5f, MaxY = cy + es * 0.5f,
-        };
-        var bg = active ? Tokens.Accent
-            : _dark ? new Color4(0.125f, 0.125f, 0.125f, 1f)
-                    : new Color4(0.984f, 0.984f, 0.992f, 1f);
-        var halo = new RectF
-        {
-            MinX = er.MinX - 1.6f, MinY = er.MinY - 1.6f,
-            MaxX = er.MaxX + 1.6f, MaxY = er.MaxY + 1.6f,
-        };
-        IconAtlas.DrawCentered(ctx, "eraserPure", halo, es + 2.6f, Brush(ctx, bg));
-        IconAtlas.DrawCentered(ctx, "eraserPure", er, es, Brush(ctx, ink));
-    }
-
-    /// <summary>
     /// **画某一格的图标**——主条（<see cref="DrawCell"/>）和「更多」面板里那排钉住宫格
     /// **共用这一处**。
     ///
@@ -7962,9 +7927,10 @@ public sealed partial class FullUi : IOverlayUi
         var brush = Brush(ctx, ink);
         switch (cell)
         {
-            // 箭头 + 「箭头清屏」：合成一个图标（见 DrawArrowClearCell）。
+            // 箭头 + 「箭头清屏」：直接换成**扫帚**（清屏语义，2026-11-12 用户反馈
+            // 箭头挂橡皮“不好看”）。悬停提示会说明“清屏并穿透”；关掉设置就还是箭头。
             case 1 when st.ClearOnArrowActive:
-                DrawArrowClearCell(ctx, r, size, ink, active);
+                IconAtlas.DrawCentered(ctx, "broom", r, size, brush);
                 return;
             // 白板：板开着的时候板面填成**这块板的颜色**（见 IconAtlas.DrawBoard）
             case 2:
@@ -8262,7 +8228,8 @@ public sealed partial class FullUi : IOverlayUi
             return id switch
             {
                 // 0 号收起格、球（-2）：自解释，不配（收窄）
-                1 => (c.Tip, Key(KeyAction.TogglePassThrough),
+                1 => (_host != null && _host.State.ClearOnArrowActive ? "清屏并穿透" : c.Tip,
+                      Key(KeyAction.TogglePassThrough),
                       _host != null && _host.State.ClearOnArrowActive
                           ? "点一下 = 清空桌面批注并穿透（Ctrl+Z 撤销）；再点回来是画笔"
                           : "打开后点击落到底下的程序；再点回来是画笔"),
