@@ -3288,7 +3288,7 @@ public partial class InkEngine
         // 上次用的线型（实线 / 虚线 / 点线）
         if (int.TryParse(GetUiPref("lineDash"), out int dash) && dash >= 0 && dash <= 2)
             LineDash = (StrokeDash)dash;
-        // 「点箭头清屏」（2026-11-12）：只在桌面批注生效。
+        // 「箭头清屏」（2026-11-12）：只在桌面批注生效。
         ClearOnArrow = GetUiPref("clearOnArrow") == "1";
         // **粗细的"数值"版**：滑条拖动现在**吸附在档上**，所以这份数值正常就等于某档；
         // 早期版本存过任意值（如 2.37）——读回来时吸附到最近的档，界面不会显示一个"不存在"的档。
@@ -13024,7 +13024,7 @@ public partial class InkEngine
     public StrokeDash LineDash { get; private set; } = StrokeDash.Solid;
 
     /// <summary>
-    /// 「点箭头清屏」（2026-11-12 用户定）：开启后，点工具栏箭头**进入穿透**前，
+    /// 「箭头清屏」（2026-11-12 用户定）：开启后，点工具栏箭头**进入穿透**前，
     /// 先清空**桌面批注**当前这一屏（一步撤销）。只在桌面模式生效——
     /// 白板能翻屏、PPT/PDF 一页一存，都不需要这个动作。
     /// </summary>

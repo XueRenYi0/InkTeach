@@ -344,7 +344,7 @@ public interface IEngineCommands
     /// </summary>
     void CycleLineDash();
 
-    /// <summary>「点箭头清屏」设置开关（只在桌面批注生效，见 <see cref="UiState.ClearOnArrowActive"/>）。</summary>
+    /// <summary>「箭头清屏」设置开关（只在桌面批注生效，见 <see cref="UiState.ClearOnArrowActive"/>）。</summary>
     void SetClearOnArrow(bool on);
     /// <summary>点箭头时调用：满足条件才清空桌面这一屏（引擎自己判，白板/PPT/文档不动）。</summary>
     void ClearDesktopOnArrow();
@@ -1156,9 +1156,9 @@ public readonly struct UiState
     public bool PptMode { get; init; }
     /// <summary>**当前有没有打开文档**（图片/PDF 页层，2026-10-07）。"关闭文档"那格按它亮/灰。</summary>
     public bool DocOpen { get; init; }
-    /// <summary>白板开着（板面模式）。界面用它判断“点箭头清屏”这条设置现在生效不生效。</summary>
+    /// <summary>白板开着（板面模式）。界面用它判断“箭头清屏”这条设置现在生效不生效。</summary>
     public bool BoardOn { get; init; }
-    /// <summary>设置项「点箭头清屏」开着。</summary>
+    /// <summary>设置项「箭头清屏」开着。</summary>
     public bool ClearOnArrow { get; init; }
     /// <summary>此刻点箭头会不会真的清屏（设置开 + 桌面批注；白板/PPT/文档时不生效）。</summary>
     public bool ClearOnArrowActive { get; init; }

@@ -6,13 +6,13 @@ namespace InkTeach;
 internal sealed partial class App
 {
     /// <summary>
-    /// 自检：「点箭头清屏」只在**桌面批注**生效（2026-11-12 用户定）。
+    /// 自检：「箭头清屏」只在**桌面批注**生效（2026-11-12 用户定）。
     ///   --arrowcleartest
     /// </summary>
     private void ArrowClearTest()
     {
         Console.WriteLine();
-        Console.WriteLine("=== 点箭头清屏 ===");
+        Console.WriteLine("=== 箭头清屏 ===");
         SetUiFactory(() => new InkUi.FullUi());
         SettleFrames(160);
         PassThrough = false;

@@ -388,9 +388,9 @@ public sealed partial class FullUi : IOverlayUi
         // 唯一算法 = 线性预测（Chromium 同族），只剩这一个开关）。
         // 链路：行表 → ActivateRow → IsOn → SavePrefs（"开过"才写 "1"）。
         (Row.Predict, "墨迹预测", false, false, "开了让墨尾更跟手一点；默认关，想跟手就在这里打开"),
-        // 「点箭头清屏」（2026-11-12 用户定）：只在**桌面批注**生效——
+        // 「箭头清屏」（2026-11-12 用户定）：只在**桌面批注**生效——
         // 白板能翻屏、PPT/PDF 一页一存，都不需要；默认关。
-        (Row.ClearOnArrow, "点箭头清屏", false, false,
+        (Row.ClearOnArrow, "箭头清屏", false, false,
          "只在桌面批注时生效：点箭头进入穿透前，先清空桌面上的批注（可 Ctrl+Z 撤销）"),
         // 触摸模式（2026-10-24）：红外屏杆子/手指同源，面积橡皮取消后给老师一个
         // “只写字、完全不要手势”的保险档；默认仍是手势模式。
@@ -4056,7 +4056,7 @@ public sealed partial class FullUi : IOverlayUi
             case Row.AutoStart:
                 _host.Commands.SetAutoStart(!_host.State.AutoStartOn);
                 break;
-            // 「点箭头清屏」：引擎持有并落盘（clearOnArrow）。
+            // 「箭头清屏」：引擎持有并落盘（clearOnArrow）。
             case Row.ClearOnArrow:
                 _host.Commands.SetClearOnArrow(!_host.State.ClearOnArrow);
                 break;
@@ -7823,7 +7823,7 @@ public sealed partial class FullUi : IOverlayUi
         Row.RestoreInk => _host.GetPref("restoreInk") == "1",
         Row.PptAutoSave => _host.GetPref("pptAutoSave") != "0",
         Row.AutoStart => _host != null && _host.State.AutoStartOn,
-        // 「点箭头清屏」：引擎持有（只在桌面批注生效，界面只显示开关）。
+        // 「箭头清屏」：引擎持有（只在桌面批注生效，界面只显示开关）。
         Row.ClearOnArrow => _host != null && _host.State.ClearOnArrow,
         _ => _hideEnabled,
     };
@@ -7907,23 +7907,41 @@ public sealed partial class FullUi : IOverlayUi
         if (CellUnavailable(i, st)) ink = new Color4(ink.R, ink.G, ink.B, 0.30f);
         if (PerfSkipIcons) return;
         DrawCellIcon(ctx, i, r, Tokens.Icon, ink, active, st);
-        // 「点箭头清屏」开着且在桌面批注：右下角常驻一枚小橡皮徽标，
-        // 让老师在点之前就知道这一下会擦（2026-11-12）。
-        if (i == 1 && st.ClearOnArrowActive) DrawClearBadge(ctx, r, ink);
     }
 
-    /// <summary>箭头格右下角的小橡皮徽标（只在“点箭头清屏”真正生效时画）。</summary>
-    private void DrawClearBadge(ID2D1DeviceContext ctx, RectF r, in Color4 ink)
+    /// <summary>
+    /// 箭头格 + 「箭头清屏」：箭头缩一点往左上让，橡皮贴在它的尾巴上，
+    /// 两件叠成**一个整体**（不再是一枚挂角上的圆徽标，2026-11-12 用户反馈）。
+    /// 橡皮底下垫一圈底色，把箭头尾巴隔开，远看仍是一个标记。
+    /// </summary>
+    private void DrawArrowClearCell(ID2D1DeviceContext ctx, RectF r, float size,
+                                    in Color4 ink, bool active)
     {
-        const float d = 13f;
-        var c = new Vector2(r.MaxX - d * 0.5f - 3f, r.MaxY - d * 0.5f - 2f);
-        var ring = new Ellipse(c, d * 0.5f, d * 0.5f);
-        ctx.FillEllipse(ring, Brush(ctx, Tokens.AccentInk));
-        ctx.DrawEllipse(ring, Brush(ctx, ink), 1.2f);
-        IconAtlas.DrawCentered(ctx, "eraserPure",
-            new RectF { MinX = c.X - d * 0.34f, MinY = c.Y - d * 0.34f,
-                        MaxX = c.X + d * 0.34f, MaxY = c.Y + d * 0.34f },
-            d * 0.62f, Brush(ctx, ink));
+        var arrow = new RectF
+        {
+            MinX = r.MinX + 1.0f, MinY = r.MinY - 1.0f,
+            MaxX = r.MaxX - 9.0f, MaxY = r.MaxY - 12.0f,
+        };
+        IconAtlas.DrawCentered(ctx, "cursorArrow", arrow, size * 0.92f, Brush(ctx, ink));
+
+        float es = size * 0.60f;
+        float cx = r.MinX + (r.MaxX - r.MinX) * 0.64f;
+        float cy = r.MinY + (r.MaxY - r.MinY) * 0.58f;
+        var er = new RectF
+        {
+            MinX = cx - es * 0.5f, MinY = cy - es * 0.5f,
+            MaxX = cx + es * 0.5f, MaxY = cy + es * 0.5f,
+        };
+        var bg = active ? Tokens.Accent
+            : _dark ? new Color4(0.125f, 0.125f, 0.125f, 1f)
+                    : new Color4(0.984f, 0.984f, 0.992f, 1f);
+        var halo = new RectF
+        {
+            MinX = er.MinX - 1.6f, MinY = er.MinY - 1.6f,
+            MaxX = er.MaxX + 1.6f, MaxY = er.MaxY + 1.6f,
+        };
+        IconAtlas.DrawCentered(ctx, "eraserPure", halo, es + 2.6f, Brush(ctx, bg));
+        IconAtlas.DrawCentered(ctx, "eraserPure", er, es, Brush(ctx, ink));
     }
 
     /// <summary>
@@ -7944,6 +7962,10 @@ public sealed partial class FullUi : IOverlayUi
         var brush = Brush(ctx, ink);
         switch (cell)
         {
+            // 箭头 + 「箭头清屏」：合成一个图标（见 DrawArrowClearCell）。
+            case 1 when st.ClearOnArrowActive:
+                DrawArrowClearCell(ctx, r, size, ink, active);
+                return;
             // 白板：板开着的时候板面填成**这块板的颜色**（见 IconAtlas.DrawBoard）
             case 2:
                 IconAtlas.DrawBoard(ctx, r, size, brush, active ? st.BoardColor : null);
