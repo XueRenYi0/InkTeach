@@ -2109,7 +2109,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --selbeautifyshow [图]  出图：图片选中条（美化 / 保存进⋯）");
         Console.WriteLine("  --bandactiontest    选择带上带的三连（全选 / 复制 / 粘贴）几何与提示");
         Console.WriteLine("  --qrtest            反馈群二维码（读图 / 打开 / 点一下关闭）");
-        Console.WriteLine("  --shapeaudittest    图形面板 39 张卡逐张仿真（种类 / 档位 / 紧框 / 手柄 / 小样）");
+        Console.WriteLine("  --shapeaudittest    图形面板 41 张卡逐张仿真（种类 / 档位 / 紧框 / 手柄 / 小样）");
         Console.WriteLine("  --librarysizetest   面板尺寸记忆专项（图形/收藏的位置·宽·高 + 重启读回）");
         Console.WriteLine("  --textboxsim        文本框仿真自检（真实鼠标/键盘 + 截图 reports/textbox-sim/）");
         Console.WriteLine("  --textboxedit       文本框编辑截图（reports/textbox-edit.bmp）");

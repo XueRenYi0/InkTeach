@@ -9680,8 +9680,8 @@ public partial class InkEngine
         if (Tool != p.Tool) return false;
         return p.Tool switch
         {
-            // 直线卡代表“直线”这个形状，不区分线型（线型在工具栏那一格）。
-            Tool.Line => true,
+            // 直线三张卡各代表一档线型：只有当前 LineDash 对得上时才高亮。
+            Tool.Line => LineDash == (StrokeDash)Math.Clamp(p.Variant, 0, 2),
             Tool.Parabola => p.Variant == 0 ? ParabolaAxis == CurveAxis.OpenUp : ParabolaAxis != CurveAxis.OpenUp,
             Tool.Hyperbola => HyperbolaAsymptotes == (p.Variant == 0),
             Tool.ConicEllipse => EllipseFocusTriangle == (p.Variant == 0),
@@ -9703,10 +9703,13 @@ public partial class InkEngine
         _shapeOneShot = !ShapeRepeatContinuous;
         switch (p.Tool)
         {
-            // 直线卡是“形状入口”，不是线型开关（2026-11-12 用户定）：
-            // 线型（实线/虚线/点线）永远跟工具栏直线那一格同步，面板这张卡不改它。
-            // 卡面也一直画“直线”（实线图标），不跟着线型换图标——否则别的卡
-            // 也得跟着颜色/粗细同步，越滚越大。
+            // 直线卡自己带线型（实线/虚线/点线各一张，2026-11-12 用户定）：
+            // 点哪张就用哪档，**不受工具栏上次切到哪档影响**；同时同步 LineDash，
+            // 工具栏那颗直线图标跟着变，画到画布上也是同一档。
+            case Tool.Line:
+                LineDash = (StrokeDash)Math.Clamp(p.Variant, 0, 2);
+                SetUiPref("lineDash", ((int)LineDash).ToString());
+                break;
             case Tool.Parabola:
                 ParabolaAxis = p.Variant == 0 ? CurveAxis.OpenUp : CurveAxis.OpenRight;
                 break;

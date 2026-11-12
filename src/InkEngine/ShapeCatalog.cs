@@ -34,8 +34,13 @@ internal static class ShapeCatalog
 {
     public static readonly ShapePreset[] All =
     {
-        // ---- 常用 12 ----
-        new(Tool.Line, "直线", ShapeGroup.Common, 0),
+        // ---- 常用 14 ----
+        // 直线 3 张：实线 / 虚线 / 点线（2026-11-12 用户定）。
+        // 面板自己决定线型，不受工具栏那边“上一次切到哪档”影响；
+        // 反过来点卡会同步 LineDash，工具栏图标也跟着变。
+        new(Tool.Line, "直线（实线）", ShapeGroup.Common, 0),
+        new(Tool.Line, "直线（虚线）", ShapeGroup.Common, 1),
+        new(Tool.Line, "直线（点线）", ShapeGroup.Common, 2),
         new(Tool.Rectangle, "矩形", ShapeGroup.Common, 0),
         new(Tool.Ellipse, "椭圆", ShapeGroup.Common, 0),
         new(Tool.Circle, "圆", ShapeGroup.Common, 0),

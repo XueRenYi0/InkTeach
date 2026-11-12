@@ -112,26 +112,34 @@ internal sealed partial class App
               $"continuous={ShapeRepeatContinuous} oneShot={ShapeOneShotForTest}");
 
         // 2a. 39 张档位卡 + 分类；图形卡 72×82，固定 5 行高
-        Check("档位展开后共 39 张卡",
-              ShapeCatalog.All.Length == 39 && ShapeCatalog.CountFor("all") == 39,
+        Check("档位展开后共 41 张卡",
+              ShapeCatalog.All.Length == 41 && ShapeCatalog.CountFor("all") == 41,
               $"all={ShapeCatalog.CountFor("all")}");
-        Check("分类数量：全部39 / 常用12 / 曲线10 / 立体17",
-              ShapeCatalog.CountFor("common") == 12 && ShapeCatalog.CountFor("curve") == 10
+        Check("分类数量：全部41 / 常用14 / 曲线10 / 立体17",
+              ShapeCatalog.CountFor("common") == 14 && ShapeCatalog.CountFor("curve") == 10
               && ShapeCatalog.CountFor("solid") == 17,
               $"常用={ShapeCatalog.CountFor("common")} 曲线={ShapeCatalog.CountFor("curve")} 立体={ShapeCatalog.CountFor("solid")}");
 
-        // 2026-11-12 用户定：直线卡只是“形状入口”，线型跟着工具栏那一格走，
-        // 面板这张卡不覆盖它；卡面也一直显示“直线”。
+        // 2026-11-12 用户定：直线拆成 3 张卡（实线 / 虚线 / 点线），
+        // 点哪张就是哪档，不受工具栏上次切到哪档影响。
         {
-            Host.Commands.CycleLineDash();           // Solid → Dashed
-            bool dashedBefore = Host.State.LineDash == StrokeDash.Dashed;
-            SetShapePresetFromUi(ShapeCatalog.All[0]);
-            Check("点「直线」卡 → 不改线型（虚线仍是虚线）",
-                  dashedBefore && Tool == Tool.Line
-                  && Host.State.LineDash == StrokeDash.Dashed,
-                  $"before={dashedBefore} tool={Tool} dash={Host.State.LineDash}");
-            Host.Commands.CycleLineDash();           // Dashed → Dotted
-            Host.Commands.CycleLineDash();           // Dotted → Solid，还原
+            var solidCard = ShapeCatalog.All[0];
+            var dashCard = ShapeCatalog.All[1];
+            var dotCard = ShapeCatalog.All[2];
+            Host.Commands.CycleLineDash();           // 先把工具栏切到虚线
+            SetShapePresetFromUi(solidCard);
+            Check("点「直线（实线）」→ Solid",
+                  Tool == Tool.Line && Host.State.LineDash == StrokeDash.Solid,
+                  $"tool={Tool} dash={Host.State.LineDash}");
+            SetShapePresetFromUi(dashCard);
+            Check("点「直线（虚线）」→ Dashed",
+                  Host.State.LineDash == StrokeDash.Dashed,
+                  $"dash={Host.State.LineDash}");
+            SetShapePresetFromUi(dotCard);
+            Check("点「直线（点线）」→ Dotted",
+                  Host.State.LineDash == StrokeDash.Dotted,
+                  $"dash={Host.State.LineDash}");
+            SetShapePresetFromUi(solidCard);         // 还原
         }
         Check("图形页默认「全部」、9 列 × 5 行、卡片 72×82",
               ShapeCategoryId == "all" && m.Cols == 9 && m.Rows == 5
@@ -168,8 +176,8 @@ internal sealed partial class App
         }
 
         ClickShapeTab("common");
-        Check("点「常用」→ 12 张、面板不变高",
-              ShapeCategoryId == "common" && ShapeCardsNow().Length == 12
+        Check("点「常用」→ 14 张、面板不变高",
+              ShapeCategoryId == "common" && ShapeCardsNow().Length == 14
               && MathF.Abs((LibraryPanelRectNow().MaxY - LibraryPanelRectNow().MinY) - shapesPageH) < 1f,
               $"cat={ShapeCategoryId} n={ShapeCardsNow().Length} h={(LibraryPanelRectNow().MaxY - LibraryPanelRectNow().MinY):F0}");
         ClickShapeTab("curve");
@@ -179,21 +187,21 @@ internal sealed partial class App
         Check("点「立体」→ 17 张", ShapeCategoryId == "solid" && ShapeCardsNow().Length == 17,
               $"cat={ShapeCategoryId} n={ShapeCardsNow().Length}");
         ClickShapeTab("all");
-        Check("点「全部」→ 39 张、仍是 5 行高",
-              ShapeCategoryId == "all" && ShapeCardsNow().Length == 39
+        Check("点「全部」→ 41 张、仍是 5 行高",
+              ShapeCategoryId == "all" && ShapeCardsNow().Length == 41
               && LibraryPanelInfoNow().Rows == 5,
               $"cat={ShapeCategoryId} n={ShapeCardsNow().Length} rows={LibraryPanelInfoNow().Rows}");
 
-        // 2a2. 点卡直接选：第 6 张 = 梯形
+        // 2a2. 点卡直接选：第 8 张 = 梯形
         var cards = ShapeCardsNow();
         m = LibraryPanelInfoNow();
-        ClickCanvasRect(LibraryLayout.CellRect(m, 5, 0f));
+        ClickCanvasRect(LibraryLayout.CellRect(m, 7, 0f));
         Check("点「梯形」卡 = 选梯形",
-              Tool == Tool.Trapezoid && ShapePresetActive(cards[5]),
-              $"tool={Tool} active={ShapePresetActive(cards[5])}");
+              Tool == Tool.Trapezoid && ShapePresetActive(cards[7]),
+              $"tool={Tool} active={ShapePresetActive(cards[7])}");
         Check("梯形卡高亮、直线卡不高亮",
-              ShapePresetActive(cards[5]) && !ShapePresetActive(cards[0]),
-              $"直线={ShapePresetActive(cards[0])} 梯形={ShapePresetActive(cards[5])}");
+              ShapePresetActive(cards[7]) && !ShapePresetActive(cards[0]),
+              $"直线={ShapePresetActive(cards[0])} 梯形={ShapePresetActive(cards[7])}");
         Check("面板选图形后标记为一次性", ShapeOneShotForTest,
               $"oneShot={ShapeOneShotForTest} tool={Tool}");
         int strokesBefore = Doc.Strokes.Count;
@@ -236,12 +244,12 @@ internal sealed partial class App
 
         // 五角星 / 扇形各画一个，确认新工具真的能落笔。
         m = LibraryPanelInfoNow();
-        ClickCanvasRect(LibraryLayout.CellRect(m, 8, 0f));
+        ClickCanvasRect(LibraryLayout.CellRect(m, 10, 0f));
         ShapeDragForTest(300f, 260f, 470f, 390f);
         Check("五角星能画出来", Doc.Strokes.Count > 0 && Doc.Strokes[^1].Kind == StrokeKind.Star,
               $"kind={(Doc.Strokes.Count > 0 ? Doc.Strokes[^1].Kind.ToString() : "无")}");
         m = LibraryPanelInfoNow();
-        ClickCanvasRect(LibraryLayout.CellRect(m, 9, 0f));
+        ClickCanvasRect(LibraryLayout.CellRect(m, 11, 0f));
         ShapeDragForTest(600f, 260f, 760f, 390f);
         Check("扇形能画出来", Doc.Strokes.Count > 0 && Doc.Strokes[^1].Kind == StrokeKind.Sector,
               $"kind={(Doc.Strokes.Count > 0 ? Doc.Strokes[^1].Kind.ToString() : "无")}");
@@ -449,11 +457,11 @@ internal sealed partial class App
               !m.Pin.IsEmpty && !m.Repeat.IsEmpty && !m.RepeatSingle.IsEmpty
               && !m.RepeatContinuous.IsEmpty,
               $"pin={m.Pin.MinX:F0}..{m.Pin.MaxX:F0} repeat={m.Repeat.MinX:F0}..{m.Repeat.MaxX:F0}");
-        Check("档位展开后共 39 张卡",
-              ShapeCatalog.All.Length == 39 && ShapeCatalog.CountFor("all") == 39,
+        Check("档位展开后共 41 张卡",
+              ShapeCatalog.All.Length == 41 && ShapeCatalog.CountFor("all") == 41,
               $"all={ShapeCatalog.CountFor("all")}");
-        Check("分类数量：常用12 / 曲线10 / 立体17",
-              ShapeCatalog.CountFor("common") == 12 && ShapeCatalog.CountFor("curve") == 10
+        Check("分类数量：常用14 / 曲线10 / 立体17",
+              ShapeCatalog.CountFor("common") == 14 && ShapeCatalog.CountFor("curve") == 10
               && ShapeCatalog.CountFor("solid") == 17,
               $"常用={ShapeCatalog.CountFor("common")} 曲线={ShapeCatalog.CountFor("curve")} 立体={ShapeCatalog.CountFor("solid")}");
         Check("图形页默认「全部」、9 列 × 5 行、卡片 72×82",
@@ -504,8 +512,8 @@ internal sealed partial class App
         }
 
         ClickShapeTab("common");
-        Check("点「常用」→ 12 张、面板不变高",
-              ShapeCategoryId == "common" && ShapeCardsNow().Length == 12
+        Check("点「常用」→ 14 张、面板不变高",
+              ShapeCategoryId == "common" && ShapeCardsNow().Length == 14
               && MathF.Abs((LibraryPanelRectNow().MaxY - LibraryPanelRectNow().MinY) - shapesPageH) < 1f,
               $"cat={ShapeCategoryId} n={ShapeCardsNow().Length}");
         ClickShapeTab("curve");
@@ -518,13 +526,13 @@ internal sealed partial class App
 
         var cards = ShapeCardsNow();
         m = LibraryPanelInfoNow();
-        Click(LibraryLayout.CellRect(m, 5, 0f));
+        Click(LibraryLayout.CellRect(m, 7, 0f));
         Check("点「梯形」卡 = 选梯形",
-              Tool == Tool.Trapezoid && ShapePresetActive(cards[5]),
-              $"tool={Tool} active={ShapePresetActive(cards[5])}");
+              Tool == Tool.Trapezoid && ShapePresetActive(cards[7]),
+              $"tool={Tool} active={ShapePresetActive(cards[7])}");
         Check("梯形卡高亮、直线卡不高亮",
-              ShapePresetActive(cards[5]) && !ShapePresetActive(cards[0]),
-              $"直线={ShapePresetActive(cards[0])} 梯形={ShapePresetActive(cards[5])}");
+              ShapePresetActive(cards[7]) && !ShapePresetActive(cards[0]),
+              $"直线={ShapePresetActive(cards[0])} 梯形={ShapePresetActive(cards[7])}");
         Check("面板选图形后标记为一次性",
               ShapeOneShotForTest,
               $"oneShot={ShapeOneShotForTest} tool={Tool}");

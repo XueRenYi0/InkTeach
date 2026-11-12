@@ -2167,7 +2167,7 @@ internal sealed partial class App
               rb == null ? "没有对象" : $"{rb.Kind}，{rb.Points.Count} 个点");
 
         Check("立体组开头：空间坐标系是第 1 张，立体 17 / 全部 39",
-              ShapeCatalog.All.Length == 39 && ShapeCatalog.CountFor("solid") == 17
+              ShapeCatalog.All.Length == 41 && ShapeCatalog.CountFor("solid") == 17
               && ShapeCatalog.ForCategory("solid")[0].Tool == Tool.SpaceCoordinate,
               $"all={ShapeCatalog.All.Length} solid={ShapeCatalog.CountFor("solid")}"
               + $" first={ShapeCatalog.ForCategory("solid")[0].Tool}");

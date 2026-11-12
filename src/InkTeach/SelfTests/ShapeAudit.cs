@@ -6,7 +6,7 @@ namespace InkTeach;
 internal sealed partial class App
 {
     /// <summary>
-    /// 图形面板 **39 张卡逐张仿真**（2026-11-03 用户："把所有图形全部挨个仿真检测"）。
+    /// 图形面板 **41 张卡逐张仿真**（2026-11-03 用户："把所有图形全部挨个仿真检测"）。
     ///
     /// 每张卡都走正式路径：`SetShapePresetFromUi(p)` 设工具 / 档位 → 按
     /// `ShapeStepCount` 拖 1~2 笔 → 检查 `StrokeKind`、档位、紧框、轮廓、手柄、卡片小样。
@@ -15,7 +15,7 @@ internal sealed partial class App
     private void ShapeAuditTest()
     {
         Console.WriteLine();
-        Console.WriteLine("=== 图形面板 · 39 张卡逐张仿真 ===");
+        Console.WriteLine("=== 图形面板 · 41 张卡逐张仿真 ===");
         int pass = 0, fail = 0;
         void Check(string name, bool ok, string detail)
         {
