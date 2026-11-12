@@ -8238,7 +8238,7 @@ public sealed partial class FullUi : IOverlayUi
                 1 => (_host != null && _host.State.ClearOnArrowActive ? "清屏并穿透" : c.Tip,
                       Key(KeyAction.TogglePassThrough),
                       _host != null && _host.State.ClearOnArrowActive
-                          ? "点一下 = 清空桌面批注并穿透（Ctrl+Z 撤销）；再点回来是画笔"
+                          ? "清空桌面批注（Ctrl+Z 撤销）"
                           : "打开后点击落到底下的程序；再点回来是画笔"),
                 2 => (c.Tip, Key(KeyAction.ToggleBoard), $"{Key(KeyAction.FlipPageUp)} / {Key(KeyAction.FlipPageDown)} 翻屏"),
                 3 => (c.Tip, Key(KeyAction.ToolPen), "已经是笔 → 再按换颜色"),
