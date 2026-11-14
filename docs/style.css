@@ -164,3 +164,21 @@ footer .en { color: #8a939d; }
   .topbar .lang { margin-left: 8px; max-width: 118px; }
   table.keys td:first-child { width: auto; }
 }
+
+@media (max-width: 700px) {
+  .topbar .wrap {
+    height: auto; min-height: 56px; flex-wrap: wrap;
+    padding-top: 8px; padding-bottom: 8px; row-gap: 4px;
+  }
+  .topbar nav {
+    display: flex; flex-wrap: wrap; align-items: center;
+    justify-content: flex-end; width: 100%;
+  }
+  .topbar nav a { margin-left: 0; margin-right: 12px; font-size: 13px; }
+  .topbar .lang { margin-left: 0; max-width: 130px; }
+  .hero { padding-top: 36px; }
+  .hero h1 { font-size: 28px; }
+  .hero .lead { font-size: 15px; }
+  .hero .note { font-size: 12.5px; }
+  .wrap { padding-left: 16px; padding-right: 16px; }
+}

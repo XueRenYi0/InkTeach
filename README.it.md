@@ -12,7 +12,7 @@
 
 ## Lingua
 
-**Impostazioni → Generali → Lingua**, scegli una delle 10 lingue e riavvia. Da riga di comando: `--lang it`.
+**Impostazioni → Generale → Lingua**, scegli una delle 10 lingue e riavvia. Da riga di comando: `--lang it`.
 
 ## Licenza
 

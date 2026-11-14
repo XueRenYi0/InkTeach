@@ -12,7 +12,7 @@
 
 ## Langue
 
-**Réglages → Général → Langue**, choisissez l'une des 10 langues puis redémarrez. En ligne de commande : `--lang fr`.
+**Paramètres → Général → Langue**, choisissez l'une des 10 langues puis redémarrez. En ligne de commande : `--lang fr`.
 
 ## Licence
 
