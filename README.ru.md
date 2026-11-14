@@ -1,4 +1,4 @@
-# InkTeach · Прозрачные аннотации для класса Windows
+# InkTeach · Прозрачные аннотации для занятий в Windows
 
 [中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [Português (Brasil)](README.pt-BR.md) | [Русский](README.ru.md) | [Italiano](README.it.md)
 
