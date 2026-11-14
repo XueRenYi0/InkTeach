@@ -6,19 +6,19 @@
 它不是"又一个白板"，是一块**贴在别人软件上面的板书层**——板书写在自己的图层里，
 底下那个 PPT 一点没动，点一下就把鼠标还给 PPT。
 
-[![Release](https://img.shields.io/github/v/release/XueRenYi0/InkTeach?label=release&color=blue)](https://github.com/XueRenYi0/InkTeach/releases/latest)
-[![License](https://img.shields.io/badge/license-Proprietary-lightgrey)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/XueRenYi0/InkTeach-Releases?label=release&color=blue)](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest)
+[![License](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011%20x64-lightgrey)
-[![Downloads](https://img.shields.io/github/downloads/XueRenYi0/InkTeach/total)](https://github.com/XueRenYi0/InkTeach/releases)
+[![Downloads](https://img.shields.io/github/downloads/XueRenYi0/InkTeach-Releases/total)](https://github.com/XueRenYi0/InkTeach-Releases/releases)
 
-**下载**：[GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest)（`InkTeach-Setup-<版本>.exe` 双击下一步，
-或绿色版 `InkTeach-<版本>-win-x64.zip` 解压即用）｜[GitCode 国内镜像](https://gitcode.com/XueRenYI0/InkTeach/releases)
+**下载**：[GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest)（`InkTeach-Setup-<版本>.exe` 双击下一步，
+或绿色版 `InkTeach-<版本>-win-x64.zip` 解压即用）｜[GitCode 国内镜像](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 ｜**官网**：<https://xuerenyi0.github.io/InkTeach/>
 
-> **最新 9.4.4（2026-10-29）**：自动更新更稳了——换壳前先确认旧进程已退出、更新包根目录确实有
-> `InkTeach.exe`，解压后再校验一次；从 `.old` 备份启动时改为更新稳定主目录，不再套娃。
-> 新版本启动 5 秒后会自动清理同目录遗留的 `*.old-*`，绿色版和安装版都清；安装包卸载时也会
-> 一并删掉这些旧备份。原有下载、校验、换壳流程不变，不影响用户更新。
+> **最新 9.8.0（2026-11-14）**：面向国际的多语言版——安装器和软件内都支持**简体中文 / English /
+> 日本語 / 한국어 / Deutsch / Français / Español / Português (Brasil) / Русский / Italiano** 共 10 种；
+> 设置 → 常规 →「语言」选择后重启生效。源码恢复 **GPL-3.0** 开源。另含 9.7.0 的图片美化与
+> 图片识别成题卡、41 张图形卡、箭头清屏、隐私同意只记录一次等更新。
 > 完整更新见 [发版历史](调研/优化记录/发版历史.md)。
 
 <p align="center"><img src="design/readme/00-演示.gif" width="800" alt="演示：手写一个圆 → 停顿变图形 → 选中拖动 → 截图取景"></p>
@@ -27,7 +27,7 @@
 
 ## 30 秒上手
 
-1. 下 `InkTeach-Setup-9.4.4.exe`，双击 → 下一步 → 完成；不想安装就用绿色版 zip。
+1. 下 `InkTeach-Setup-9.8.0.exe`，双击 → 下一步 → 完成；不想安装就用绿色版 zip。
 2. 打开 PPT / WPS 放映，或任意软件；底部就是 InkTeach 工具带。
 3. 直接用手写笔/鼠标写。按 `Ctrl+L` 切激光笔，`Ctrl+E` 切橡皮，`Ctrl+Alt+Shift+T` 把鼠标还给下层软件。
 4. 想换工具又不想找面板：按住 `Ctrl+Alt+Shift+Q`，在光标处划向扇区，松手切换。
@@ -478,9 +478,9 @@ InkTeach   宿主：命令行 / 自检 / 基准（发布版双击 InkTeach.exe�
 
 ## 许可
 
-**Copyright (C) 2026 XueRenYi0**。从 **9.7.0** 起，本项目改为**专有软件**（见 [LICENSE](LICENSE)）：
-安装包可免费用于个人、教学或商业场景，也可原样转交他人；**不得修改、反编译、二次分发或销售**，
-源代码不公开。**9.6.0 及更早版本仍按 GPL-3.0 发布**，已经获得的旧版本权利不受影响。
+**Copyright (C) 2026 XueRenYi0**。本项目以 **GPL-3.0** 发布（见 [LICENSE](LICENSE)）：
+可自由使用、修改和再分发，修改后的版本同样按 GPL-3.0 开源。**9.7.0 曾短暂采用专有许可，
+从 9.8.0 起恢复 GPL-3.0**；9.6.0 及更早版本本来就按 GPL-3.0 发布。
 
 参考过思路但未复制代码的项目（Ink Canvas / Inkeys / perfect-freehand / $P 等）的出处与许可，
 见 [src/InkEngine/THIRD-PARTY-NOTICES.md](src/InkEngine/THIRD-PARTY-NOTICES.md)。

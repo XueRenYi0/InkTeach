@@ -6,21 +6,20 @@
 Not "one more whiteboard" — a board layer *pasted over* someone else's software. Your ink lives
 on its own layer, the slide underneath is untouched, and one click hands the mouse back.
 
-[![Release](https://img.shields.io/github/v/release/XueRenYi0/InkTeach?label=release&color=blue)](https://github.com/XueRenYi0/InkTeach/releases/latest)
-[![License](https://img.shields.io/badge/license-Proprietary-lightgrey)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/XueRenYi0/InkTeach-Releases?label=release&color=blue)](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest)
+[![License](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011%20x64-lightgrey)
-[![Downloads](https://img.shields.io/github/downloads/XueRenYi0/InkTeach/total)](https://github.com/XueRenYi0/InkTeach/releases)
+[![Downloads](https://img.shields.io/github/downloads/XueRenYi0/InkTeach-Releases/total)](https://github.com/XueRenYi0/InkTeach-Releases/releases)
 
-**Download**: [GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest) (`InkTeach-Setup-<ver>.exe`, or the portable `InkTeach-<ver>-win-x64.zip`)
-｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach/releases)
+**Download**: [GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest) (`InkTeach-Setup-<ver>.exe`, or the portable `InkTeach-<ver>-win-x64.zip`)
+｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 
-> **Latest 9.4.4 (2026-10-29)**: the updater is sturdier. It now verifies that the old process
-> has exited and that the package contains `InkTeach.exe` at its root, checks again after
-> extraction, and updates the stable install folder when launched from an `.old-*` backup
-> instead of nesting another backup. Five seconds after startup, the new build removes leftover
-> `*.old-*` folders next to both portable and installed builds; the uninstaller removes them too.
-> The normal download / checksum / swap flow is unchanged.
+> **Latest 9.8.0 (2026-11-14)**: the international release — the installer and the app now
+> support **10 languages**: Simplified Chinese / English / Japanese / Korean / German / French /
+> Spanish / Brazilian Portuguese / Russian / Italian. Pick one in **Settings → General → Language**
+> and restart. The source is **GPL-3.0** again. It also includes the 9.7.0 image beautifier and
+> image-to-question-card OCR, 41 shape cards, clear-on-arrow, and one-time privacy consent.
 >
 > *This English README is a summary. The Chinese [README.md](README.md) is the authoritative, most
 > current version.*
@@ -34,7 +33,7 @@ PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else
 
 ## Quick start
 
-1. Download `InkTeach-Setup-9.4.4.exe`, double-click, Next, Done — or unzip the portable build.
+1. Download `InkTeach-Setup-9.8.0.exe`, double-click, Next, Done — or unzip the portable build.
 2. Open PowerPoint/WPS in slideshow mode, or any app; the InkTeach toolbar sits at the bottom.
 3. Write with a pen or mouse. `Ctrl+L` = laser, `Ctrl+E` = eraser, `Ctrl+Alt+Shift+T` hands the mouse back; press it again to return to the pen (9.3.2).
 4. Hold `Ctrl+Alt+Shift+Q` and flick to a sector to switch tools without hunting for the toolbar.
@@ -507,11 +506,10 @@ InkTeach   host: CLI / self-test / benchmarks (double-click InkTeach.exe when pu
 
 ## Licence
 
-**Copyright (C) 2026 XueRenYi0**. From **9.7.0**, InkTeach is **proprietary software**
-(see [LICENSE](LICENSE)): the installer may be used free of charge for personal, educational
-or commercial purposes and passed on unmodified; **modifying, decompiling, redistributing or
-selling it is not allowed**, and the source code is not published. **9.6.0 and earlier remain
-GPL-3.0**; rights already granted for those versions are unaffected.
+**Copyright (C) 2026 XueRenYi0**. InkTeach is released under the **GPL-3.0**
+(see [LICENSE](LICENSE)): you may use, modify and redistribute it, and modified versions
+must stay under GPL-3.0. **9.7.0 was briefly proprietary; from 9.8.0 it is GPL-3.0 again.**
+9.6.0 and earlier were GPL-3.0 from the start.
 
 Projects we took ideas from but copied no code from (Ink Canvas / Inkeys / perfect-freehand / $P and
 others) are listed with their licences in
