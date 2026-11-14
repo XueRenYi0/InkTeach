@@ -1,6 +1,6 @@
 # InkTeach · Annotation overlay for the Windows classroom
 
-[中文](README.md) | [English](README.en.md)
+[中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [Português (Brasil)](README.pt-BR.md) | [Русский](README.ru.md) | [Italiano](README.it.md)
 
 **A transparent overlay that lets you write on top of PowerPoint, WPS, or literally any app.**
 Not "one more whiteboard" — a board layer *pasted over* someone else's software. Your ink lives

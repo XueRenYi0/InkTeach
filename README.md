@@ -1,6 +1,6 @@
 # InkTeach · Windows 课堂批注
 
-[中文](README.md) | [English](README.en.md)
+[中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [Português (Brasil)](README.pt-BR.md) | [Русский](README.ru.md) | [Italiano](README.it.md)
 
 **一层透明覆盖层：在 PPT / WPS / 任意软件上直接写板书。**
 它不是"又一个白板"，是一块**贴在别人软件上面的板书层**——板书写在自己的图层里，

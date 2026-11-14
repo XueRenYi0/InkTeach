@@ -32,6 +32,18 @@ a { color: inherit; }
   box-shadow: 0 1px 3px rgba(31,35,40,.18); }
 .topbar nav a { margin-left: 18px; text-decoration: none; color: var(--gray); font-size: 14px; }
 .topbar nav a:hover { color: var(--ink); }
+.topbar .lang {
+  margin-left: 18px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--gray);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+.topbar .lang:hover { color: var(--ink); }
 
 /* 首屏 */
 .hero { padding: 56px 0 24px; text-align: center; }
@@ -149,5 +161,6 @@ footer .en { color: #8a939d; }
   .grid, .grid.two, .shots.two, .feat, .math-grid, .darkband .pair { grid-template-columns: 1fr; }
   .hero h1 { font-size: 30px; }
   .topbar nav a { margin-left: 10px; font-size: 13px; }
+  .topbar .lang { margin-left: 8px; max-width: 118px; }
   table.keys td:first-child { width: auto; }
 }
