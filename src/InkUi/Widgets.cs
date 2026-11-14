@@ -1,4 +1,5 @@
 using InkEngine;
+using InkLocalization;
 using Vortice.Direct2D1;
 using Vortice.DirectWrite;
 using Vortice.Mathematics;
@@ -18,7 +19,7 @@ namespace InkUi;
 internal sealed class Widgets
 {
     private readonly IUiHost _host;
-    private readonly Dictionary<(float Size, bool Center), IDWriteTextFormat> _formats = new();
+    private readonly Dictionary<(float Size, bool Center, int LangVer), IDWriteTextFormat> _formats = new();
 
     public Widgets(IUiHost host) => _host = host;
 
@@ -26,20 +27,21 @@ internal sealed class Widgets
 
     private IDWriteTextFormat Format(float sizeLogical, bool center)
     {
-        if (_formats.TryGetValue((sizeLogical, center), out var f)) return f;
+        var key = (sizeLogical, center, Loc.Version);
+        if (_formats.TryGetValue(key, out var f)) return f;
 
         // **字号就是逻辑像素，不要再乘 DPI**：引擎画界面时已经把整个上下文按 DPI 缩放过
         // 一次（Overlay.DrawUi 里的 CreateScale(dpiScale)），再乘一次等于放大两遍——
         // 症状是"标签大得离谱、三个字的按钮标题被挤成两行"（这一版就是这么被看出来的）。
         float px = MathF.Max(9f, sizeLogical);
-        f = _host.TextFactory.CreateTextFormat("Microsoft YaHei UI", null,
-            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+        f = _host.TextFactory.CreateTextFormat(Loc.FontFamily, null,
+            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
         if (center)
         {
             f.TextAlignment = TextAlignment.Center;
             f.ParagraphAlignment = ParagraphAlignment.Center;
         }
-        _formats[(sizeLogical, center)] = f;
+        _formats[key] = f;
         return f;
     }
 
@@ -51,7 +53,7 @@ internal sealed class Widgets
     public void Text(ID2D1DeviceContext ctx, string text, RectF box, float size,
                      ID2D1Brush brush, bool center = true)
     {
-        ctx.DrawText(text, Format(size, center),
+        ctx.DrawText(Loc.Tr(text), Format(size, center),
                      new Rect(box.MinX, box.MinY, box.MaxX - box.MinX, box.MaxY - box.MinY),
                      brush);
     }
@@ -66,8 +68,24 @@ internal sealed class Widgets
         if (string.IsNullOrEmpty(text)) return 0f;
         try
         {
-            using var layout = _host.TextFactory.CreateTextLayout(text, Format(size, false), 4096f, 1024f);
+            using var layout = _host.TextFactory.CreateTextLayout(Loc.Tr(text), Format(size, false), 4096f, 1024f);
             return layout.Metrics.Width;
+        }
+        catch { return 0f; }
+    }
+
+    /// <summary>
+    /// 量一段文字在给定宽度下**折行后**的高度（逻辑像素）。
+    /// 德语/俄语的长标签会折成两行，固定 28px 行高会让下一行叠上去。
+    /// </summary>
+    public float MeasureWrappedHeight(string text, float width, float size)
+    {
+        if (string.IsNullOrEmpty(text) || width <= 1f) return 0f;
+        try
+        {
+            using var layout = _host.TextFactory.CreateTextLayout(Loc.Tr(text), Format(size, false),
+                                                                  width, 4096f);
+            return layout.Metrics.Height;
         }
         catch { return 0f; }
     }
@@ -84,22 +102,23 @@ internal sealed class Widgets
     {
         float h = LineHeight(size);
         float y = box.MinY + MathF.Max(0f, ((box.MaxY - box.MinY) - h) * 0.5f);
-        ctx.DrawText(text, Format(size, false),
+        ctx.DrawText(Loc.Tr(text), Format(size, false),
                      new Rect(box.MinX, y, box.MaxX - box.MinX, h), brush);
     }
 
-    private readonly Dictionary<float, float> _lineHeights = new();
+    private readonly Dictionary<(float size, int lang), float> _lineHeights = new();
 
     private float LineHeight(float size)
     {
-        if (_lineHeights.TryGetValue(size, out float h)) return h;
+        var key = (size, Loc.Version);
+        if (_lineHeights.TryGetValue(key, out float h)) return h;
         try
         {
-            using var layout = _host.TextFactory.CreateTextLayout("汉", Format(size, false), 4096f, 4096f);
+            using var layout = _host.TextFactory.CreateTextLayout(Loc.SampleText, Format(size, false), 4096f, 4096f);
             h = layout.Metrics.Height;
         }
         catch { h = size * 1.4f; }
-        _lineHeights[size] = h;
+        _lineHeights[key] = h;
         return h;
     }
 

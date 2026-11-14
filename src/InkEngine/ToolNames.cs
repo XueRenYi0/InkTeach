@@ -1,20 +1,16 @@
+using InkLocalization;
+
 namespace InkEngine;
 
 /// <summary>
-/// 工具的中文名（HUD / 日志 / 悬停提示共用）。
+/// 工具名（HUD / 日志 / 悬停提示共用）。
 ///
-/// 为什么单独成一份：这张 switch 原来只活在 `Engine.ToolName` 里（HUD 和橡皮日志用），
-/// 2026-10-02 悬停提示要在界面层显示"双曲线 / 正弦 / 棱台"这些名字——两处各写一份
-/// 就会在"加图形忘了补名字"时静默漂移（仓库教训：`Engine.ToolName` 自己就为这漏过五个，
-/// 见原注释）。所以把它提成公开静态表，引擎和界面都读它。
-///
-/// ⚠ **加图形时别忘了这里**：漏了不报错，只是 HUD / 日志 / 提示里显示成 "?"。
-/// `--shapebandtest` 的"逐个真拖一笔"会打印名字，看到问号就回来补。
+/// 中文源文保留在这张 switch 里，`Loc.Tr` 在出口统一翻译；加图形时仍然只补这一处。
 /// </summary>
 public static class ToolNames
 {
-    /// <summary>工具的中文名（认不出来返回 "?"）。</summary>
-    public static string Of(Tool t) => t switch
+    /// <summary>工具名（认不出来返回 "?"）。</summary>
+    public static string Of(Tool t) => Loc.Tr(t switch
     {
         Tool.Pen => "笔",
         Tool.Highlighter => "荧光笔",
@@ -53,5 +49,5 @@ public static class ToolNames
         Tool.Sector => "扇形",
         Tool.Text => "文本",
         _ => "?",
-    };
+    });
 }

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using InkLocalization;
 using Vortice.Direct2D1;
 using Vortice.Mathematics;
 
@@ -2684,6 +2685,12 @@ public partial class InkEngine
         //   真敲错了 mode 名的行为不变，仍旧进自检模式。）
         if (IsSwitchNotMode(mode)) mode = "";
         SelfCheckMode = mode.Length > 0;
+
+        if (mode == "--langaudit")
+        {
+            Loc.AuditAll();
+            return 0;
+        }
         // 设置页后台自检：**不建覆盖层、不接 PPT、不注册热键、不装键盘看门狗**。
         // 它只摆几何/命中/逐行执行，用户在用电脑时也能跑。
         bool headlessSettingsAudit = mode == "--settingsaudit";
@@ -2717,6 +2724,18 @@ public partial class InkEngine
         if (!SelfCheckMode)
             foreach (var w in InkSettings.LoadUiPrefs(UiPrefs))
                 Console.WriteLine("settings: " + w);
+
+        // 界面语言：命令行 --lang > 用户设置 ui.lang > 安装器写入的语言 > 系统 UI 语言。
+        // 必须在创建任何 UI / 文字格式之前初始化。
+        string langArg = null;
+        for (int i = 0; i + 1 < args.Length; i++)
+            if (args[i] == "--lang") { langArg = args[i + 1]; break; }
+        string langPref = langArg
+                          ?? (SelfCheckMode ? null : GetUiPref("lang"))
+                          ?? (SelfCheckMode ? null : InkSettings.LoadInstallLanguage());
+        Loc.Initialize(langPref);
+        if (args.Contains("--lang"))
+            Console.WriteLine($"界面语言: {Loc.CurrentCode}（{Loc.CurrentDisplayName}）");
 
         // 隐私同意单独存一份（不进备份包），恢复设置也不会再弹一次（2026-11-13）。
         // 老版本写在 settings.json 里的记录仍然认；文件优先。
@@ -3418,6 +3437,13 @@ public partial class InkEngine
         {
             // 暂存的也是**白板槽**（2026-10-16）：装回白板并直接进白板给它看。
             var strokes = InkSerializer.LoadStrokes(blob, out int maxId);
+            // **空暂存不打开白板**（2026-11-13）：换语言重启时如果当时在桌面批注，
+            // 旧路径会恢复一份 0 笔的会话并把 BoardOn 打开，看着像"莫名弹白板"。
+            if (strokes.Count == 0)
+            {
+                Console.WriteLine("会话暂存是空的：不切白板");
+                return;
+            }
             Doc.LoadPageContent(InkDocument.BoardPageKey, strokes, maxId);
             _boardReturnKey = 0;
             Doc.SwitchPage(InkDocument.BoardPageKey);
@@ -6853,7 +6879,7 @@ public partial class InkEngine
         {
             Doc.SelectOnly(new[] { placed });
             Tool = Tool.Marquee;             // 刚截完图，最可能的下一件事是摆放它
-            SetInkStatus($"截图 {w}×{h} 已落图并选中");
+            SetInkStatus(Loc.T("截图 {0}×{1} 已落图并选中", w, h));
         }
         Console.WriteLine($"截图 {w}×{h} 物理像素 → 原位落在画布 ({px:F0},{py:F0})，已选中");
         RegainKeyboardFocus();          // 回到批注态：前台/键盘要回来（见那段注释）
@@ -7971,12 +7997,12 @@ public partial class InkEngine
         SelFlashUntilMs = NowMs + SelFlashMs;
         if (duplicated)
         {
-            SetInkStatus($"已复制 {n} 个对象：原件保留，新副本已选中");
+            SetInkStatus(Loc.T("已复制 {0} 个对象：原件保留，新副本已选中", n));
             return true;
         }
 
         string why = string.IsNullOrEmpty(Doc.LastRejectReason) ? "副本创建失败" : Doc.LastRejectReason;
-        SetInkStatus($"复制失败：{why}");
+        SetInkStatus(Loc.T("复制失败：{0}", why));
         return false;
     }
 
@@ -8288,7 +8314,7 @@ public partial class InkEngine
             Tool = Tool.Marquee;
             NotifyUiStateChanged();
             _dirty = true;
-            SetInkStatus($"已粘贴 {objs.Count} 个对象（仍是可编辑对象）");
+            SetInkStatus(Loc.T("已粘贴 {0} 个对象（仍是可编辑对象）", objs.Count));
             Console.WriteLine($"粘贴 {objs.Count} 个对象（仍是可编辑对象）");
             return true;
         }
@@ -8747,16 +8773,18 @@ public partial class InkEngine
         }
 
         string extra = "";
-        if (duplicate > 0) extra += $"，{duplicate} 张已在收藏里";
-        if (failed > 0) extra += $"，{failed} 张失败";
+        if (duplicate > 0) extra += Loc.T("，{0} 张已在收藏里", duplicate);
+        if (failed > 0) extra += Loc.T("，{0} 张失败", failed);
         if (ok > 0)
-            SetInkStatus($"已导入 {ok} 张到「{targetName}」{extra}；选中卡片 → 放置");
+            SetInkStatus(Loc.T("已导入 {0} 张到「{1}」{2}；选中卡片 → 放置",
+                               ok, Loc.Tr(targetName), extra));
         else if (duplicate > 0 || failed > 0)
         {
-            string msg = duplicate > 0 ? $"这 {duplicate} 张已经在收藏里了" : "没有导入图片";
+            string msg = duplicate > 0 ? Loc.T("这 {0} 张已经在收藏里了", duplicate)
+                                       : Loc.Tr("没有导入图片");
             if (failed > 0)
-                msg += string.IsNullOrEmpty(firstError) ? $"；{failed} 张失败"
-                                                        : $"；{failed} 张失败：{firstError}";
+                msg += string.IsNullOrEmpty(firstError) ? Loc.T("；{0} 张失败", failed)
+                                                        : Loc.T("；{0} 张失败：{1}", failed, firstError);
             SetInkStatus(msg);
         }
         else
@@ -9273,7 +9301,7 @@ public partial class InkEngine
             {
                 string after = ShapeLibrary.CategoryNameOf(id);
                 if (!string.Equals(before, after, StringComparison.Ordinal))
-                    SetInkStatus($"分类已改名：{after}");
+                    SetInkStatus(Loc.T("分类已改名：{0}", after));
             }
         }
         LibraryCategories = ShapeLibrary.ListCategories();
@@ -9327,7 +9355,7 @@ public partial class InkEngine
     internal int EmptyLibraryTrash()
     {
         int n = ShapeLibrary.EmptyTrash();
-        if (n > 0) SetInkStatus($"已清空回收站（{n} 项）");
+        if (n > 0) SetInkStatus(Loc.T("已清空回收站（{0} 项）", n));
         if (LibraryCategoryId == ShapeLibrary.TrashCategory)
         {
             LibrarySelected.Clear();
@@ -9350,7 +9378,7 @@ public partial class InkEngine
         ShapeLibrary.ReorderToTop(moving);
         LibrarySelected.Clear();
         ReloadLibrary();
-        SetInkStatus($"已移动到「{ShapeLibrary.CategoryNameOf(categoryId)}」（{moving.Count} 项，排最前）");
+        SetInkStatus(Loc.T("已移动到「{0}」（{1} 项，排最前）", Loc.Tr(ShapeLibrary.CategoryNameOf(categoryId)), moving.Count));
         NotifyUiStateChanged();
     }
 
@@ -9365,7 +9393,7 @@ public partial class InkEngine
             if (permanent) ShapeLibrary.Delete(e.Path);
             else ShapeLibrary.Trash(e);
         }
-        SetInkStatus(permanent ? $"已永久删除 {n} 项" : $"已移入回收站（{n} 项）");
+        SetInkStatus(permanent ? Loc.T("已永久删除 {0} 项", n) : Loc.T("已移入回收站（{0} 项）", n));
         LibrarySelected.Clear();
         LibraryConfirm = "";
         ReloadLibrary();
@@ -9384,19 +9412,19 @@ public partial class InkEngine
         var r = ShapeLibrary.Replace(entry, Doc.Selected);
         if (r.Success)
         {
-            SetInkStatus($"已更新收藏「{r.Entry?.Title}」（{r.Entry?.Objects} 个对象）");
+            SetInkStatus(Loc.T("已更新收藏「{0}」（{1} 个对象）", r.Entry?.Title, r.Entry?.Objects));
         }
         else if (r.Duplicate)
         {
-            SetInkStatus($"改完的内容和「{r.DuplicateEntry?.CategoryName}」里已有的收藏重复，没有更新");
+            SetInkStatus(Loc.T("改完的内容和「{0}」里已有的收藏重复，没有更新", Loc.Tr(r.DuplicateEntry?.CategoryName)));
         }
         else if (r.Unchanged)
         {
-            SetInkStatus("内容和这条收藏一样，没有变化");
+            SetInkStatus(Loc.Tr("内容和这条收藏一样，没有变化"));
         }
         else
         {
-            SetInkStatus("更新收藏失败：" + (r.Error ?? "未知原因"));
+            SetInkStatus(Loc.T("更新收藏失败：{0}", r.Error ?? "未知原因"));
         }
         if (r.Success)
         {
@@ -9416,7 +9444,7 @@ public partial class InkEngine
         var rows = new List<LibraryMenuItem>(8);
         if (LibraryMenu == 3)
         {
-            rows.Add(new LibraryMenuItem("back", "‹ 返回", false, true));
+            rows.Add(new LibraryMenuItem("back", Loc.Tr("‹ 返回"), false, true));
             var cats = _libraryCategoryInfos;
             int pages = Math.Max(1, (cats.Length + LibraryMenuPerPage - 1) / LibraryMenuPerPage);
             int page = Math.Clamp(LibraryMenuPage, 0, pages - 1);
@@ -9425,38 +9453,38 @@ public partial class InkEngine
             for (int i = start; i < end; i++)
             {
                 if (cats[i].Id == LibraryCategoryIds.All || cats[i].Id == LibraryCategoryIds.Trash) continue;
-                rows.Add(new LibraryMenuItem("move:" + cats[i].Id, cats[i].Name, false, true));
+                rows.Add(new LibraryMenuItem("move:" + cats[i].Id, Loc.Tr(cats[i].Name), false, true));
             }
             if (pages > 1)
-                rows.Add(new LibraryMenuItem("nextmove", $"下一页 {page + 1}/{pages} ›", false, true));
+                rows.Add(new LibraryMenuItem("nextmove", Loc.T("下一页 {0}/{1} ›", page + 1, pages), false, true));
             return rows;
         }
 
         // ☰ 主菜单：只放“调整 / 补充内容”，使用态不出现删除/改名。
         // “导入图片”是**内容导入**（透明贴纸），不是收藏备份的导入/导出。
-        rows.Add(new LibraryMenuItem("importimg", "导入图片 / 贴纸…", false, true));
-        rows.Add(new LibraryMenuItem("manage", "整理收藏…", false, true));
-        rows.Add(new LibraryMenuItem("categories", "管理分类…", false, true));
+        rows.Add(new LibraryMenuItem("importimg", Loc.Tr("导入图片 / 贴纸…"), false, true));
+        rows.Add(new LibraryMenuItem("manage", Loc.Tr("整理收藏…"), false, true));
+        rows.Add(new LibraryMenuItem("categories", Loc.Tr("管理分类…"), false, true));
         bool trashView = LibraryCategoryId == ShapeLibrary.TrashCategory;
         int trashN = 0;
         foreach (var e in LibraryAllEntries) if (e.InTrash) trashN++;
         if (trashView)
         {
-            rows.Add(new LibraryMenuItem("backcat", "‹ 返回收藏", false, true));
+            rows.Add(new LibraryMenuItem("backcat", Loc.Tr("‹ 返回收藏"), false, true));
             rows.Add(new LibraryMenuItem("emptytrash",
-                LibraryConfirm == "emptytrash" ? "再点一次：清空回收站" : $"清空回收站 · {trashN} 个",
+                LibraryConfirm == "emptytrash" ? Loc.Tr("再点一次：清空回收站") : Loc.T("清空回收站 · {0} 个", trashN),
                 true, trashN > 0));
         }
         else
         {
             rows.Add(new LibraryMenuItem("trash",
-                trashN > 0 ? $"回收站 · {trashN} 个" : "回收站（空）", false, true));
+                trashN > 0 ? Loc.T("回收站 · {0} 个", trashN) : Loc.Tr("回收站（空）"), false, true));
         }
         // 方向和位置分开：拖动只挪位置，要换横/竖排走这里，不靠“拖到哪儿”。
         rows.Add(new LibraryMenuItem("orientation",
-            LibraryMode == LibraryPanelMode.Horizontal ? "切换为竖排" : "切换为横排",
+            LibraryMode == LibraryPanelMode.Horizontal ? Loc.Tr("切换为竖排") : Loc.Tr("切换为横排"),
             false, true));
-        rows.Add(new LibraryMenuItem("reset", "重置位置与大小", false, true));
+        rows.Add(new LibraryMenuItem("reset", Loc.Tr("重置位置与大小"), false, true));
         return rows;
     }
 
@@ -10405,7 +10433,7 @@ public partial class InkEngine
         }
         else
         {
-            SetInkStatus($"已选中「{entry.Title}」：点画布落下，Esc 返回");
+            SetInkStatus(Loc.T("已选中「{0}」：点画布落下，Esc 返回", entry.Title));
         }
         _dirty = true;
         NotifyUiStateChanged();
@@ -10676,7 +10704,7 @@ public partial class InkEngine
                             foreach (var c in _libraryCategoryInfos)
                                 if (c.Id == id) { count = c.Count; break; }
                             LibraryConfirm = "delcat:" + id;
-                            SetInkStatus($"再点一次删除分类；{count} 个内容会移到「未分类」");
+                            SetInkStatus(Loc.T("再点一次删除分类；{0} 个内容会移到「未分类」", count));
                             _dirty = true;
                         }
                         return true;
@@ -10848,7 +10876,7 @@ public partial class InkEngine
                 string t = LibraryEntries[idx].Title;
                 ShapeLibrary.Restore(LibraryEntries[idx]);
                 ReloadLibrary();
-                SetInkStatus($"已恢复「{t}」");
+                SetInkStatus(Loc.T("已恢复「{0}」", t));
                 NotifyUiStateChanged();
                 return true;
             }
@@ -11332,7 +11360,7 @@ public partial class InkEngine
             && LibraryConfirm != "deleteselected")
         {
             LibraryConfirm = "deleteselected";
-            SetInkStatus($"再点一次：永久删除选中的 {LibrarySelected.Count} 项");
+            SetInkStatus(Loc.T("再点一次：永久删除选中的 {0} 项", LibrarySelected.Count));
             _dirty = true;
             return;
         }
@@ -14805,6 +14833,7 @@ public partial class InkEngine
             Console.WriteLine($"输入精度统计: himetric 映射 {InputPrecision.MappedPoints} 点 / "
                               + $"退回整数像素 {InputPrecision.FallbackPoints} 点");
         TouchStats.WriteSummary();
+        Loc.DumpMissing();
         Console.WriteLine("shutdown complete");
     }
 
@@ -16039,12 +16068,40 @@ public partial class InkEngine
 
     internal void RestartFromUi()
     {
+        FlushSettings();             // 语言/界面偏好等先落盘，再起新进程
         Recovery.DiscardSession();   // 保证新进程是空白：不写，而且删掉上次的残留
         AutoSaveNow();               // 盘上留一份（不受"下次打开要不要接上"那个偏好影响）
 
         if (!RestartSelf("界面上的重启"))
         {
             Console.WriteLine("重启没成功，继续用（板书还在）");
+            return;
+        }
+        RestartRequested = true;
+        _quit = true;
+    }
+
+    /// <summary>
+    /// 切换语言后重启：和“重启软件”不同，**当前板书要接回来**。
+    /// 先落设置，再把板书写进会话暂存，新进程启动时由 RestoreSessionIfAny 读回。
+    /// </summary>
+    internal void RestartForLanguageFromUi()
+    {
+        FlushSettings();
+        // **空板不存**：以前无条件写一份空会话，新进程 RestoreSessionIfAny 会把 BoardOn
+        // 打开，用户就"换个语言怎么冒出一块白板"。桌面批注本来就不在 BoardForSave 里。
+        var board = BoardForSave();
+        try
+        {
+            if (board.Count > 0) Recovery.SaveSession(InkSerializer.SaveStrokes(board));
+            else Recovery.DiscardSession();
+        }
+        catch (Exception ex) { Console.WriteLine("切换语言：板书暂存失败（继续重启）：" + ex.Message); }
+
+        if (!RestartSelf("切换语言"))
+        {
+            Recovery.DiscardSession();      // 没拉起来：别把暂存留到下次启动
+            Console.WriteLine("切换语言：重启没成功，继续用当前语言");
             return;
         }
         RestartRequested = true;
@@ -20081,7 +20138,7 @@ public partial class InkEngine
         }
 
         _beautifyBusy = true;
-        SetInkStatus($"正在美化 {todo.Count} 张…");
+        SetInkStatus(Loc.T("正在美化 {0} 张…", todo.Count));
         _dirty = true;
         NotifyUiStateChanged();
         var items = todo.ToArray();

@@ -15,6 +15,7 @@ param(
     [int]$Seconds = 6,
     [string]$Steps = '',
     [string]$ProcessName = 'InkTeach',
+    [int]$ProcessId = 0,
     [string]$OutDir = 'reports',
     [int]$FrameFps = 4,
     [switch]$Check,
@@ -51,6 +52,9 @@ public static class NativeUi {
     public struct RECT { public int Left, Top, Right, Bottom; }
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int cmd);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extra);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
     [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out RECT rect, int size);
@@ -59,32 +63,45 @@ public static class NativeUi {
 [NativeUi]::SetProcessDPIAware() | Out-Null
 
 function Get-AppWindow {
-    param([string]$Name)
-    $p = Get-Process -Name $Name -ErrorAction SilentlyContinue |
-        Where-Object { $_.MainWindowHandle -ne 0 } |
-        Select-Object -First 1
-    if (-not $p) { return $null }
-    $rect = New-Object NativeUi+RECT
-    $ok = $false
-    try {
-        # DWMWA_EXTENDED_FRAME_BOUNDS = 9，比 GetWindowRect 少算 Win10 的隐形边框
-        $ok = ([NativeUi]::DwmGetWindowAttribute($p.MainWindowHandle, 9, [ref]$rect, 16) -eq 0)
-    } catch { $ok = $false }
-    if (-not $ok) { [NativeUi]::GetWindowRect($p.MainWindowHandle, [ref]$rect) | Out-Null }
+    param([string]$Name, [int]$Id = 0)
+    $procs = if ($Id -gt 0) {
+        Get-Process -Id $Id -ErrorAction SilentlyContinue
+    } else {
+        Get-Process -Name $Name -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }
+    }
+    $best = $null; $bestArea = -1; $bestRect = $null
+    foreach ($p in @($procs)) {
+        if (-not $p -or $p.MainWindowHandle -eq 0) { continue }
+        $rect = New-Object NativeUi+RECT
+        $ok = $false
+        try {
+            # DWMWA_EXTENDED_FRAME_BOUNDS = 9，比 GetWindowRect 少算 Win10 的隐形边框
+            $ok = ([NativeUi]::DwmGetWindowAttribute($p.MainWindowHandle, 9, [ref]$rect, 16) -eq 0)
+        } catch { $ok = $false }
+        if (-not $ok) { [NativeUi]::GetWindowRect($p.MainWindowHandle, [ref]$rect) | Out-Null }
+        $area = ($rect.Right - $rect.Left) * ($rect.Bottom - $rect.Top)
+        if ($area -gt $bestArea) { $bestArea = $area; $best = $p; $bestRect = $rect }
+    }
+    if (-not $best) { return $null }
+    # 录屏是抓屏幕区域，窗口被别的程序盖住就会录错。先还原、置顶、置前。
+    [NativeUi]::ShowWindow($best.MainWindowHandle, 9) | Out-Null
+    [NativeUi]::SetWindowPos($best.MainWindowHandle, [IntPtr](-1), 0, 0, 0, 0, 0x0003) | Out-Null
+    [NativeUi]::SetForegroundWindow($best.MainWindowHandle) | Out-Null
+    Start-Sleep -Milliseconds 400
     return [pscustomobject]@{
-        Process = $p
-        Left    = $rect.Left
-        Top     = $rect.Top
-        Width   = $rect.Right - $rect.Left
-        Height  = $rect.Bottom - $rect.Top
+        Process = $best
+        Left    = $bestRect.Left
+        Top     = $bestRect.Top
+        Width   = $bestRect.Right - $bestRect.Left
+        Height  = $bestRect.Bottom - $bestRect.Top
     }
 }
 
 function Wait-AppWindow {
-    param([string]$Name, [int]$TimeoutSec)
+    param([string]$Name, [int]$Id = 0, [int]$TimeoutSec)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        $w = Get-AppWindow -Name $Name
+        $w = Get-AppWindow -Name $Name -Id $Id
         if ($w) { return $w }
         Start-Sleep -Milliseconds 500
     }
@@ -101,8 +118,8 @@ if ($Launch) {
         -WorkingDirectory $root -WindowStyle Hidden | Out-Null
 }
 
-$win = Get-AppWindow -Name $ProcessName
-if (-not $win -and $Launch) { $win = Wait-AppWindow -Name $ProcessName -TimeoutSec $LaunchTimeoutSec }
+$win = Get-AppWindow -Name $ProcessName -Id $ProcessId
+if (-not $win -and $Launch) { $win = Wait-AppWindow -Name $ProcessName -Id $ProcessId -TimeoutSec $LaunchTimeoutSec }
 
 if ($win) {
     $w = $win.Width - ($win.Width % 2)

@@ -15,6 +15,7 @@
 // 内容：系统/版本/键位表（启动时本来就打）+ 状态切换 + 文件操作 + 异常……
 // 都落在 `%LOCALAPPDATA%\InkTeach\Logs`；「更多 → 设置 → 导出日志…」打包成 zip 给支持。
 
+using InkLocalization;
 using Microsoft.Win32;
 using System.Globalization;
 using System.IO.Compression;
@@ -1013,12 +1014,12 @@ public partial class InkEngine
         try
         {
             DiagLog.ExportZip(dest, includeOlder, note, LogContextSummary());
-            SetInkStatus($"日志已导出：{dest}");
+            SetInkStatus(Loc.T("日志已导出：{0}", dest));
             Console.WriteLine($"[日志] 已导出 {dest}（{(includeOlder ? "最多4份" : "最近2份")}）");
         }
         catch (Exception ex)
         {
-            SetInkStatus("日志导出失败：" + ex.Message);
+            SetInkStatus(Loc.T("日志导出失败：{0}", ex.Message));
             Console.WriteLine("[日志] 导出失败：" + ex);
         }
     }
@@ -1161,12 +1162,12 @@ public partial class InkEngine
         if (st != 2 && st != 3) return;
         if (st == 2)
         {
-            SetInkStatus($"日志已上传：{leaf}（把这个编号告诉开发）");
+            SetInkStatus(Loc.T("日志已上传：{0}（把这个编号告诉开发）", leaf));
             Console.WriteLine($"[日志] 已上传 {leaf}");
         }
         else
         {
-            SetInkStatus("上传失败：" + msg + "——已改为导出");
+            SetInkStatus(Loc.T("上传失败：{0}——已改为导出", msg));
             Console.WriteLine("[日志] 上传失败，转导出：" + msg);
             ExportLogsFromUi();
         }

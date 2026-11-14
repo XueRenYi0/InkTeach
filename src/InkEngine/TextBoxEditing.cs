@@ -322,9 +322,16 @@ public partial class InkEngine
     internal void SetSelectedTextFaceFromUi(int index)
     {
         if (index < 0 || index >= TextBoxFaces.Visible.Length) return;
-        TextBoxFaces.EnsureBundled(TextBoxFaces.Visible[index].Face);
-        ApplySelectedTextStyle(TextBoxFaces.Visible[index].Face, null);
-        RememberFace(TextBoxFaces.Visible[index].Face, "");
+        var info = TextBoxFaces.Visible[index];
+        if (info.Face == TextBoxFace.Custom)
+        {
+            ApplySelectedTextStyle(TextBoxFace.Custom, null, info.DirectWrite);
+            RememberFace(TextBoxFace.Custom, info.DirectWrite);
+            return;
+        }
+        TextBoxFaces.EnsureBundled(info.Face);
+        ApplySelectedTextStyle(info.Face, null);
+        RememberFace(info.Face, "");
     }
 
     /// <summary>
@@ -416,16 +423,20 @@ public partial class InkEngine
             if (_fontListEntries != null) return _fontListEntries;
             var all = new HashSet<string>(TextBoxFaces.SystemFamilies,
                                           StringComparer.OrdinalIgnoreCase);
+            var allowed = new HashSet<string>(TextBoxFaces.FamiliesForCurrentLanguage,
+                                              StringComparer.OrdinalIgnoreCase);
             var list = new List<string>(256);
-            // 最近使用（只保留这台机器真的有的字体）
+            // 最近使用：只保留当前语言能用的字体（英文界面不把以前用过的中文字体顶上来）。
             foreach (string f in FontRecent)
-                if (all.Contains(f) && !list.Contains(f, StringComparer.OrdinalIgnoreCase))
+                if ((allowed.Contains(f)
+                     || (TextBoxFaces.IsCjkUi && FontListShowLatin && all.Contains(f)))
+                    && !list.Contains(f, StringComparer.OrdinalIgnoreCase))
                     list.Add(f);
             _fontListRecentCount = list.Count;
-            // 只列中文字体；开关打开才追加西文。
-            foreach (string f in TextBoxFaces.CjkFamilies)
+            // 先列当前界面语言能用的字体；中文/日/韩再按开关追加西文。
+            foreach (string f in TextBoxFaces.FamiliesForCurrentLanguage)
                 if (!list.Contains(f, StringComparer.OrdinalIgnoreCase)) list.Add(f);
-            if (FontListShowLatin)
+            if (TextBoxFaces.IsCjkUi && FontListShowLatin)
                 foreach (string f in TextBoxFaces.SystemFamilies)
                     if (!list.Contains(f, StringComparer.OrdinalIgnoreCase)) list.Add(f);
             _fontListEntries = list.ToArray();
@@ -604,7 +615,8 @@ public partial class InkEngine
         {
             var r = FontListRectNow();
             // 底部开关：显示 / 隐藏西文字体。
-            if (SelectionHandles.FontListFooterRect(r, UiUnit).Contains(x, y))
+            if (TextBoxFaces.IsCjkUi
+                && SelectionHandles.FontListFooterRect(r, UiUnit).Contains(x, y))
             {
                 ToggleFontListLatin();
                 return true;
@@ -641,11 +653,21 @@ public partial class InkEngine
             string s = GetUiPref("textFace");
             if (int.TryParse(s, out int i) && i >= 0 && i <= (int)TextBoxFace.Custom)
                 return (TextBoxFace)i;
-            return TextBoxFace.YaHei;
+            // 没选过：中文默认雅黑，其它语言默认本语言第一档（Segoe UI / 游ゴシック / 맑은 고딕…）。
+            return TextBoxFaces.Visible[0].Face;
         }
     }
 
-    internal string DefaultTextFaceName => GetUiPref("textFaceName") ?? "";
+    internal string DefaultTextFaceName
+    {
+        get
+        {
+            string saved = GetUiPref("textFaceName");
+            if (!string.IsNullOrWhiteSpace(saved)) return saved;
+            var first = TextBoxFaces.Visible[0];
+            return first.Face == TextBoxFace.Custom ? first.DirectWrite : "";
+        }
+    }
 
     /// <summary>文字操作条「行距」：换整个文本框的行距倍数。</summary>
     internal void SetSelectedTextSpacingFromUi(float spacing)

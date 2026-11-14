@@ -19,6 +19,10 @@
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\InkLocalization\InkLocalization.csproj" />
+  </ItemGroup>
+
   <!-- 让测试/基准程序可以直接访问引擎内部状态（只在开发期使用，
        产品代码只走公开的 IOverlayUi / InkEngine 接口）。 -->
   <ItemGroup>

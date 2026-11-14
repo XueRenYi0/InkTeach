@@ -3,6 +3,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
+using InkLocalization;
 
 namespace InkEngine;
 
@@ -19,9 +20,9 @@ namespace InkEngine;
 internal static class ImageFile
 {
     /// <summary>打开对话框的过滤器（第一项专门给透明贴纸）。</summary>
-    public const string OpenFilter =
-        "透明贴纸 / PNG（推荐）\0*.png\0"
-      + "图片（PNG / JPG / BMP / GIF / TIFF）\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff\0\0";
+    public static string OpenFilter =>
+        Loc.Tr("透明贴纸 / PNG（推荐）") + "\0*.png\0"
+      + Loc.Tr("图片（PNG / JPG / BMP / GIF / TIFF）") + "\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff\0\0";
 
     /// <summary>最长边上限。再大对课堂投影没有意义，只会让收藏读盘变慢。</summary>
     private const int MaxSide = 2048;

@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Text.RegularExpressions;
+using InkLocalization;
 using Vortice.Mathematics;
 
 namespace InkEngine;
@@ -1711,7 +1712,7 @@ public partial class InkEngine
                       && done.Spec.Kind is "functions" or "conic";
         if (!done.Ok || (!vector && done.Image == null))
         {
-            ShowToast("AI 作图失败：" + ClipAiPlot(done.Error, 40), 3500);
+            ShowToast(Loc.T("AI 作图失败：{0}", ClipAiPlot(done.Error, 40)), 3500);
             return;
         }
 
@@ -1742,8 +1743,8 @@ public partial class InkEngine
         s.Transform = Matrix3x2.CreateScale(scale) * Matrix3x2.CreateTranslation(x, y);
         Doc.AddStroke(s);
         Doc.SelectOnly(new[] { s });
-        SetInkStatus($"AI 作图完成：{done.Spec?.Title ?? ""}");
-        ShowToast($"AI 作图完成（{done.Seconds:F1}s）");
+        SetInkStatus(Loc.T("AI 作图完成：{0}", done.Spec?.Title ?? ""));
+        ShowToast(Loc.T("AI 作图完成（{0}s）", done.Seconds));
         _dirty = true;
         NotifyUiStateChanged();
     }
@@ -1820,7 +1821,7 @@ public partial class InkEngine
         }
 
         _imgCardBusy = true;
-        ShowToast($"识别中…（{vcfg.Model}）", 4000);
+        ShowToast(Loc.T("识别中…（{0}）", vcfg.Model), 4000);
         _dirty = true;
 
         var done = new ImageCardDone
@@ -1896,8 +1897,8 @@ public partial class InkEngine
 
         if (!done.Ok)
         {
-            ShowToast("识别失败：" + ClipAiPlot(done.Error, 46), 4500);
-            SetInkStatus("图片识别失败：" + ClipAiPlot(done.Error, 60));
+            ShowToast(Loc.T("识别失败：{0}", ClipAiPlot(done.Error, 46)), 4500);
+            SetInkStatus(Loc.T("图片识别失败：{0}", ClipAiPlot(done.Error, 60)));
             _dirty = true;
             NotifyUiStateChanged();
             return;
@@ -1919,7 +1920,7 @@ public partial class InkEngine
         if (done.FallbackOnly)
         {
             cardStroke = BuildRichTextBox(done, u, maxW);
-            status = $"已放入识别原文（结构化失败：{ClipAiPlot(done.FallbackReason, 24)}）";
+            status = Loc.T("已放入识别原文（结构化失败：{0}）", ClipAiPlot(done.FallbackReason, 24));
         }
         else if (done.Auto && done.Items.Count == 0)
         {
@@ -1930,7 +1931,7 @@ public partial class InkEngine
         else
         {
             cardStroke = BuildQuestionCard(done, u, maxW);
-            status = $"已识别 {done.Items.Count} 道题，请核对；答案需要时点「生成答案」";
+            status = Loc.T("已识别 {0} 道题，请核对；答案需要时点「生成答案」", done.Items.Count);
         }
         if (cardStroke == null)
         {
@@ -2247,7 +2248,7 @@ public partial class InkEngine
         }
         if (!done.Ok || done.Items.Count == 0)
         {
-            ShowToast("生成答案失败：" + ClipAiPlot(done.Error, 40), 4500);
+            ShowToast(Loc.T("生成答案失败：{0}", ClipAiPlot(done.Error, 40)), 4500);
             return;
         }
 
@@ -2259,7 +2260,7 @@ public partial class InkEngine
         if (missing.Count == 0) { card.ShowAnswers = true; RelayoutCard(s); return; }
         if (done.Items.Count != missing.Count)
         {
-            ShowToast($"答案数量对不上（{done.Items.Count}/{missing.Count}），请重试", 4500);
+            ShowToast(Loc.T("答案数量对不上（{0}/{1}），请重试", done.Items.Count, missing.Count), 4500);
             return;
         }
 
@@ -2285,8 +2286,8 @@ public partial class InkEngine
             beforeBounds, afterBounds);
         action.Redo(Doc);                  // 先按“已生成”重排一次（顺手把脏区标出来）
         Doc.CommitInteractive(action);     // 再进撤销栈
-        SetInkStatus($"已生成 {missing.Count} 道题的答案（{done.Seconds:F0}s），请核对");
-        ShowToast($"答案已生成（{done.Seconds:F1}s）· 请核对");
+        SetInkStatus(Loc.T("已生成 {0} 道题的答案（{1}s），请核对", missing.Count, done.Seconds));
+        ShowToast(Loc.T("答案已生成（{0}s）· 请核对", done.Seconds));
         _dirty = true;
         NotifyUiStateChanged();
     }

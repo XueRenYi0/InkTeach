@@ -55,6 +55,10 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppUrl}
 AppSupportURL={#AppUrl}
 AppUpdatesURL={#AppUrl}
+; 语言：默认按系统 UI 语言自动匹配；显式打开选择页，让用户能改。
+; 多语言文案见 [Languages]；App 自己的语言在设置里另选（安装语言只做首次默认值）。
+ShowLanguageDialog=yes
+UsePreviousLanguage=no
 DefaultDirName={localappdata}\Programs\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
@@ -82,21 +86,29 @@ RestartApplications=no
 AllowNoIcons=yes
 VersionInfoVersion={#AppVersion}
 VersionInfoCompany={#AppPublisher}
-VersionInfoDescription={#AppName} 安装程序
+VersionInfoDescription={#AppName}
 VersionInfoProductName={#AppName}
 VersionInfoProductVersion={#AppVersion}
 
 [Languages]
-Name: "chinese"; MessagesFile: "ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "chinese"; MessagesFile: "ChineseSimplified.isl"
+Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"
+Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
+Name: "german"; MessagesFile: "compiler:Languages\German.isl"
+Name: "french"; MessagesFile: "compiler:Languages\French.isl"
+Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
+Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
+Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
+Name: "italian"; MessagesFile: "compiler:Languages\Italian.isl"
 
 [Files]
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Comment: "屏幕批注 / 白板工具"
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Comment: "{#AppName}"
 ; 桌面图标：**无条件建**（原来挂在 Tasks 上，为了让"零点击安装"成立，任务页整个不要了）
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Comment: "屏幕批注 / 白板工具"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Comment: "{#AppName}"
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
@@ -115,6 +127,20 @@ begin
   { 装 / 升级之前先关掉正在运行的 InkTeach（覆盖层常驻，礼貌关窗口未必管用）。 }
   Exec('taskkill.exe', '/IM {#AppExeName} /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Result := True;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  LangFile: String;
+begin
+  { 把安装时选的语言写给 App 首次启动用。App 的 ui.lang 设置优先；
+    这里只是“没设置过时的默认值”。 }
+  if CurStep = ssPostInstall then
+  begin
+    LangFile := ExpandConstant('{userappdata}\InkTeach\install-language.txt');
+    ForceDirectories(ExtractFileDir(LangFile));
+    SaveStringToFile(LangFile, ActiveLanguage, False);
+  end;
 end;
 
 procedure DeleteOldBackups();

@@ -31,6 +31,25 @@ internal static class InkSettings
     public static bool ExistedAtLoad;
 
     /// <summary>
+    /// 安装器选中的语言（Inno Setup 的 ActiveLanguage 写进 install-language.txt）。
+    /// 只是“首次启动的默认值”：settings.json 里的 ui.lang 优先。
+    /// 读不到/文件坏了都返回 null，不影响启动。
+    /// </summary>
+    public static string LoadInstallLanguage()
+    {
+        try
+        {
+            string path = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "InkTeach", "install-language.txt");
+            if (!File.Exists(path)) return null;
+            string s = File.ReadAllText(path).Trim();
+            return string.IsNullOrEmpty(s) ? null : s;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
     /// 把配置文件里的键位覆盖读进 <paramref name="map"/>。
     /// 返回的每一行都是"用户该知道的问题"（键名不认识、组合非法、文件坏了），
     /// **不是异常**：配置坏了也必须能启动，只是用默认值并提示。

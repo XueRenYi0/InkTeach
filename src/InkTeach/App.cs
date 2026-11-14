@@ -921,6 +921,24 @@ internal sealed partial class App : InkEngine.InkEngine
             TextColorShow(args.Length > 1 ? args[1] : "reports/textcolor.bmp");
             _quit = true;
         }
+        else if (mode == "--fontlistshow")
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            FontListShow(args.Length > 1 ? args[1] : "reports/fontlist.bmp");
+            _quit = true;
+        }
+        else if (mode == "--tipsweep")
+        {
+            // 语言审计：把所有悬停提示过一遍 Loc.Tr（配合 INKTEACH_LOC_AUDIT=1）。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            SetUiFactory(() => new InkUi.FullUi());
+            SettleFrames(200);
+            (Ui as InkUi.FullUi)?.AuditTipsForTest();
+            AuditEngineTips();
+            _quit = true;
+        }
         else if (mode == "--settingsaudit")
         {
             // 无窗口自检：不建覆盖层、不注入鼠标、不抢前台；用户在用电脑时也能跑。
@@ -2149,7 +2167,7 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --lasertest         激光笔自检（拖尾一直写不缩 / 松手停 2 秒再整体淡出 / 多条并存 /");
         Console.WriteLine("                      粗细真的管用 / 不是笔迹）；顺带出图 reports/laser-trail.png");
         Console.WriteLine("  --pageshow <图>     整屏翻页摆样（相机停在两屏之间 / 正好对齐，各出一张）");
-        Console.WriteLine("  --panelshow <图> [--band] [--mini] [--more [--page N]] [--cell N] [--shape 名字] [--zoom N] [--update]   界面出图（离屏；--more --page 0=启动器 1=设置；--update 摆出新版本红点）");
+        Console.WriteLine("  --panelshow <图> [--band] [--mini] [--more [--page N] [--clickrow N] [--langpick N]] [--cell N] [--shape 名字] [--zoom N] [--update]   界面出图（离屏；--more --page 0=启动器 1=设置；--clickrow 点设置第 N 行，--update 摆出新版本红点）");
         Console.WriteLine("  --demogif <目录>    演示连拍（写字→停顿变图形→选中拖动→截图取景，存 NNNN.bmp 帧）");
         Console.WriteLine("  --makeicon <图.ico>      用界面自己的渲染生成程序图标（线条笔＋白砖＋带笔锋的红笔迹）");
         Console.WriteLine("  --captureshow <图>  截图取景框 + 尺寸读数出图（离屏）");
@@ -2178,6 +2196,9 @@ internal sealed partial class App : InkEngine.InkEngine
         Console.WriteLine("  --tiletest          分块缓存自检（边界无缝 / 回程复用 / 内存上界）");
         Console.WriteLine("  --prefetchtest      分块空闲预取自检（预取命中则再滚一格不重画；含关预取对照）");
         Console.WriteLine("  --noprefetch        关掉分块空闲预取（对照；默认开）");
+        Console.WriteLine("  --lang <code>       界面语言：system|en|zh-CN|ja|ko|de|fr|es|pt-BR|ru|it（本次运行覆盖设置）");
+        Console.WriteLine("  --langaudit         语言覆盖率审计（不建窗口，逐语言报缺失 key / 占位符）");
+        Console.WriteLine("  --tipsweep          语言审计：把所有悬停提示过一遍 Loc.Tr（配 INKTEACH_LOC_AUDIT=1）");
         Console.WriteLine("  --warp              强制 WARP 软件渲染（无显卡兜底；诊断/性能地板用）");
         Console.WriteLine("  --pdflowmem         强制 PDF 省内存档（4GB 档：渲染宽 1600 / 1 页缓存 / 1s 翻页）");
         Console.WriteLine("  --pdfhighmem        强制 PDF 高清档（尽量按主屏物理宽；单页最多 12MP）");
@@ -5899,6 +5920,18 @@ internal sealed partial class App : InkEngine.InkEngine
             }
             // --dark：出图前直接切深色主题（**不落盘**；和点「深色主题」那一行同一条路）
             if (Environment.GetCommandLineArgs().Contains("--dark")) ui.SetDarkForTest(true);
+            // --uisize N：出图前切界面缩放档（0.8 / 1.0 / 1.3…；和设置里同一命令）。
+            {
+                var argvUi = Environment.GetCommandLineArgs();
+                int uiAt = Array.IndexOf(argvUi, "--uisize");
+                if (uiAt >= 0 && uiAt + 1 < argvUi.Length
+                    && float.TryParse(argvUi[uiAt + 1], System.Globalization.NumberStyles.Float,
+                                      System.Globalization.CultureInfo.InvariantCulture, out float uiArg))
+                {
+                    ui.SetUiScaleForTest(uiArg);
+                    Console.WriteLine($"  [panelshow] uisize={uiArg}");
+                }
+            }
             // --more [--page N]：出**中央「更多」面板**（0 课堂 / 1 墨迹 / 2 设置）。
             // 面板打开时 QueryBounds 是整块屏幕，截图范围在下面单独裁（见 shot 那一段）。
             if (_panelShowMore)
@@ -5908,6 +5941,37 @@ internal sealed partial class App : InkEngine.InkEngine
                 int pi2 = Array.IndexOf(argvMore, "--page");
                 if (pi2 >= 0 && pi2 + 1 < argvMore.Length && int.TryParse(argvMore[pi2 + 1], out int pageArg))
                     ui.SetMorePageForTest(pageArg);
+                // --settingscat N：先把设置页滚到第 N 个分类（0 工具条 / 1 常规 / 2 书写 …）。
+                int si2 = Array.IndexOf(argvMore, "--settingscat");
+                if (si2 >= 0 && si2 + 1 < argvMore.Length && int.TryParse(argvMore[si2 + 1], out int catArg))
+                {
+                    ui.SettingsScrollToCategoryForTest(catArg);
+                    Console.WriteLine($"  [panelshow] settingscat={catArg}");
+                }
+                // --clickrow N：出图前点一下设置页第 N 行（语言下拉这类“点开才出现”的层）。
+                int ri2 = Array.IndexOf(argvMore, "--clickrow");
+                if (ri2 >= 0 && ri2 + 1 < argvMore.Length && int.TryParse(argvMore[ri2 + 1], out int rowArg))
+                {
+                    ui.ClickSettingsRowForTest(rowArg);
+                    Console.WriteLine($"  [panelshow] clickrow={rowArg} langMenu={ui.LangMenuOpenForTest}");
+                }
+                int lp2 = Array.IndexOf(argvMore, "--langpick");
+                if (lp2 >= 0 && lp2 + 1 < argvMore.Length && int.TryParse(argvMore[lp2 + 1], out int pickArg))
+                {
+                    ui.PickLangForTest(pickArg);
+                    Console.WriteLine($"  [panelshow] langpick={pickArg}");
+                }
+            }
+            // --tip N：把第 N 个悬停提示直接摆出来（橡皮提示等；不用真悬停等 500ms）。
+            // 它不依赖 --more：主条工具、色片、设置行都能单独出图。
+            {
+                var argvTip = Environment.GetCommandLineArgs();
+                int ti2 = Array.IndexOf(argvTip, "--tip");
+                if (ti2 >= 0 && ti2 + 1 < argvTip.Length && int.TryParse(argvTip[ti2 + 1], out int tipArg))
+                {
+                    ui.ShowTipForTest(tipArg);
+                    Console.WriteLine($"  [panelshow] tip={tipArg}");
+                }
             }
             if (showHelp)
             {
@@ -6064,6 +6128,18 @@ internal sealed partial class App : InkEngine.InkEngine
             // 这一条的边上留白只有 24 **物理**像素，200% 缩放下就是 12 逻辑像素，
             // 而投影最远胀出去 16+8 逻辑像素——不给就会被切掉一半，图看着像"没有投影"。
             var b = ui.QueryBounds();
+            // 悬停提示画在面板外：无论开不开「更多」，出图都要把它框进来。
+            {
+                var tr0 = ui.TipRectForTest;
+                if (!tr0.IsEmpty)
+                    b = new RectF
+                    {
+                        MinX = MathF.Min(b.MinX, tr0.MinX - 12f),
+                        MinY = MathF.Min(b.MinY, tr0.MinY - 12f),
+                        MaxX = MathF.Max(b.MaxX, tr0.MaxX + 12f),
+                        MaxY = MathF.Max(b.MaxY, tr0.MaxY + 12f),
+                    };
+            }
             // --more：面板打开时占用 = 整块屏幕，照它出图会得到一整屏（20MB 级）。
             // 设计验收要的是那块卡片 ＋ 周围一圈遮罩，所以裁到"面板 ＋ 64"。
             if (_panelShowMore || showHelp)
@@ -6074,6 +6150,30 @@ internal sealed partial class App : InkEngine.InkEngine
                     MinX = mr.MinX - 64f, MinY = mr.MinY - 64f,
                     MaxX = mr.MaxX + 64f, MaxY = mr.MaxY + 64f,
                 };
+                // 语言下拉会伸出设置面板，出图范围要连它一起框进来。
+                if (ui.LangMenuOpenForTest)
+                {
+                    var lr = ui.LangMenuRectForTest;
+                    b = new RectF
+                    {
+                        MinX = MathF.Min(b.MinX, lr.MinX - 16f),
+                        MinY = MathF.Min(b.MinY, lr.MinY - 16f),
+                        MaxX = MathF.Max(b.MaxX, lr.MaxX + 16f),
+                        MaxY = MathF.Max(b.MaxY, lr.MaxY + 16f),
+                    };
+                }
+                // 悬停提示画在面板外，出图也要框进来。
+                var tipRect = ui.TipRectForTest;
+                if (!tipRect.IsEmpty)
+                {
+                    b = new RectF
+                    {
+                        MinX = MathF.Min(b.MinX, tipRect.MinX - 12f),
+                        MinY = MathF.Min(b.MinY, tipRect.MinY - 12f),
+                        MaxX = MathF.Max(b.MaxX, tipRect.MaxX + 12f),
+                        MaxY = MathF.Max(b.MaxY, tipRect.MaxY + 12f),
+                    };
+                }
             }
             var shot = new RectF
             {

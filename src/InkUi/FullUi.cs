@@ -1,7 +1,9 @@
 using System.IO;
 using System.Numerics;
 using System.Runtime.InteropServices;
-using InkEngine;using Vortice.DCommon;
+using InkEngine;
+using InkLocalization;
+using Vortice.DCommon;
 using Vortice.Direct2D1;
 using Vortice.DXGI;
 using Vortice.Mathematics;
@@ -354,7 +356,7 @@ public sealed partial class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。外观 / 书写 / 墨迹三列并排；
     /// `AutoStart` 排在表尾，但由 <see cref="MoreRowRect"/> 画在外观列最后一格。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, DwellShape, Pressure, Predict, TouchMode, ClearOnArrow, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart, AiApi }
+    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, Language, DwellShape, Pressure, Predict, TouchMode, ClearOnArrow, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart, AiApi }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -376,6 +378,7 @@ public sealed partial class FullUi : IOverlayUi
         // 点一下换一档、到顶回头。**缩的是界面自己**（工具带 / 色带 / 抽屉 / 设置页 / 图库面板）；
         // 笔宽、画布内容这些"纸上的尺"不跟着动。
         (Row.UiSize, "界面大小", false, false, "工具带和面板的大小；点一下换一档（0.8～1.3，五档）"),
+        (Row.Language, "语言", false, false, "界面语言；切换后重启软件生效"),
         // 停顿成型（2026-09-23 第二十批，见 计划-图形工具.md §四十二）：
         // 手写一笔停住 400ms → 把它变成规整图形。**默认开**（用户定的：
         // "因为是停顿变，所以默认开"），所以这一行的开关初始就是「开」。
@@ -3931,6 +3934,7 @@ public sealed partial class FullUi : IOverlayUi
         Row.AutoHide => "settings.general.autoHide",
         Row.RailPin => "settings.general.railPin",
         Row.UiSize => "settings.general.uiSize",
+        Row.Language => "settings.general.language",
         Row.AutoStart => "settings.general.autoStart",
         Row.DwellShape => "settings.writing.dwellShape",
         Row.Pressure => "settings.writing.pressure",
@@ -3948,7 +3952,7 @@ public sealed partial class FullUi : IOverlayUi
 
     private static UiActionKind RowActionKind(Row kind) => kind switch
     {
-        Row.UiSize or Row.HistoryDays => UiActionKind.Choice,
+        Row.UiSize or Row.HistoryDays or Row.Language => UiActionKind.Choice,
         Row.AiApi => UiActionKind.Navigate,
         _ when IsToggleRow(kind) => UiActionKind.Toggle,
         _ => UiActionKind.Command,
@@ -3995,6 +3999,13 @@ public sealed partial class FullUi : IOverlayUi
                 _host.Commands.SetUiScale(next);
                 break;
             }
+
+            // 语言（2026-11-13）：**不再点一下就直接重启**，改成常规下拉。
+            // 选中只落盘 `ui.lang`；底部“重启以应用”才重启。不在当前进程里热切换：
+            // 文字格式/布局缓存、帮助页、系统对话框都按启动时语言建，重启换取确定性。
+            case Row.Language:
+                OpenLangMenu();
+                break;
 
             // 停顿成型：翻转开关 → 推给引擎 → 落盘（**只写"关过的"那一份**：
             // 配置里没有这一项就是默认开，以后默认值改了老配置不会把新默认顶掉）。
@@ -4136,7 +4147,7 @@ public sealed partial class FullUi : IOverlayUi
         { "工具栏", "常规", "书写", "墨迹", "AI 服务", "备份", "关于" };
 
     private static readonly Row[] SettingsGeneralRows =
-        { Row.DarkTheme, Row.AutoHide, Row.RailPin, Row.UiSize, Row.AutoStart };
+        { Row.DarkTheme, Row.AutoHide, Row.RailPin, Row.UiSize, Row.Language, Row.AutoStart };
     private static readonly Row[] SettingsWritingRows =
         { Row.DwellShape, Row.Pressure, Row.Predict, Row.TouchMode, Row.ClearOnArrow };
     private static readonly Row[] SettingsInkRows =
@@ -4158,6 +4169,17 @@ public sealed partial class FullUi : IOverlayUi
     private int _moreHover = MoreHitNone;
     private int _morePress = -1;
     private string _hubHint = "";         // 启动器状态行的临时提示（点置灰格/预留格时写）
+
+    // ---- 语言下拉（2026-11-13）-----------------------------------------------
+    // 参考 WinUI 3 ComboBox 的 flyout：点行展开、当前项打勾、点外面只收起、
+    // 选中只改偏好，底部“重启以应用”才真正重启。不再点一下直接重启。
+    private bool _langMenuOpen;
+    private int _langMenuHover = -1;      // 绝对项下标 / MoreHitLangApply
+    private int _langMenuPress = -1;      // 按下时的命中码（抬起比对同一个）
+    private int _langMenuScroll;          // 第一项可见下标（可见行数不够时滚动）
+    private Vector2 _langMenuPressPos;
+    private int _langMenuScrollAtPress;
+    private bool _langMenuDragged;
 
     /// <summary>面板两页：启动器（主页）/ 设置子页。**没有页签**——底栏与返回箭头导航。</summary>
     private enum MorePage { Home = 0, Settings = 1, Help = 2, Log = 3, Api = 4 }
@@ -4206,6 +4228,40 @@ public sealed partial class FullUi : IOverlayUi
     private const int MoreHitLogQr = 306;       // 整屏显示群二维码（2026-11-03）
     private const int MoreHitSettingsNav = 320; // 320+设置页左侧分类
     private const int MoreHitSettingsScroll = 340; // 设置页右侧滚动条（拖动）
+    // 语言下拉：500+项下标、520 底部“重启以应用”。段位避开 Api 页的 400..459。
+    private const int MoreHitLangItem = 500;
+    private const int MoreHitLangApply = 520;
+
+    // 语言下拉的尺度（逻辑像素）：行高固定，可见行数按屏幕高度算（见 LangMenuRows）。
+    private const float LangMenuW = 248f;
+    private const float LangMenuPad = 6f;
+    private const float LangMenuHeadH = 30f;
+    private const float LangMenuItemH = 32f;
+    private const float LangMenuFootH = 42f;
+    private static int LangMenuCount => Loc.PrefCodes.Count;
+
+    /// <summary>
+    /// 可见行数按屏幕高度算（1.3 倍界面 / 小屏时自动少露几行，改成滚动），
+    /// 不再写死 8 行——否则 1366×768 + 1.3 倍下拉会盖住触发它的那一行。
+    /// </summary>
+    private int LangMenuRows
+    {
+        get
+        {
+            var row = MoreRowRect(RowIndex(Row.Language));
+            float overhead = LangMenuPad * 2 + LangMenuHeadH + LangMenuFootH;
+            float below = _screen.MaxY - 8f - (row.MaxY + 6f);
+            float above = row.MinY - 6f - (_screen.MinY + 8f);
+            float avail = MathF.Max(below, above);
+            int n = (int)MathF.Floor((avail - overhead) / LangMenuItemH);
+            return Math.Clamp(n, 4, Math.Min(LangMenuCount, 11));
+        }
+    }
+
+    private int LangMenuScrollMax => Math.Max(0, LangMenuCount - LangMenuRows);
+    private int LangMenuScrollTop => Math.Clamp(_langMenuScroll, 0, LangMenuScrollMax);
+    private float LangMenuH
+        => LangMenuPad * 2 + LangMenuHeadH + LangMenuRows * LangMenuItemH + LangMenuFootH;
 
     /// <summary>
     /// 面板宽：**所有 More 页共用**工作区的 55%，夹在 560～980 逻辑像素。
@@ -4267,6 +4323,7 @@ public sealed partial class FullUi : IOverlayUi
     /// </summary>
     private void SetMorePage(MorePage page, bool push)
     {
+        CloseLangMenu();          // 换页/返回一律收起下拉（它属于“语言”行）
         EnsurePageHost();
         if (_pageHost == null) return;
 
@@ -4302,6 +4359,7 @@ public sealed partial class FullUi : IOverlayUi
 
     private void GoBackMorePage()
     {
+        CloseLangMenu();
         EnsurePageHost();
         _host?.TextInput?.Commit();       // 返回前先把正在编辑的字段提交
         if (_pageHost != null && _pageHost.Count > 1)
@@ -4546,6 +4604,7 @@ public sealed partial class FullUi : IOverlayUi
 
     private void ScrollSettingsTo(float scroll)
     {
+        CloseLangMenu();                    // 设置页一滚，下拉就离开它那一行
         _settingsFocusVisible = false;      // 滚动后焦点环位置会变；下次键盘再显示
         _settingsScroll = Math.Clamp(scroll, 0f, SettingsScrollMax());
         UpdateSettingsActiveFromScroll();
@@ -4556,6 +4615,7 @@ public sealed partial class FullUi : IOverlayUi
     /// 最后一段很短时，滚到它也只能滚到 max，按"视口顶部"算会跳回上一段（用户点了"关于"却亮"书写"）。</summary>
     private void ScrollSettingsToCategory(SettingsCategory cat)
     {
+        CloseLangMenu();
         StopSettingsFling();
         _settingsCat = cat;
         _settingsScroll = Math.Clamp(SettingsSectionTop(cat), 0f, SettingsScrollMax());
@@ -4969,6 +5029,151 @@ public sealed partial class FullUi : IOverlayUi
         MaxY = (MoreRowRect(i).MinY + MoreRowRect(i).MaxY) * 0.5f + MoreSwitchH * 0.5f,
     };
 
+    // ---- 语言下拉（几何 / 命中 / 开合）--------------------------------------
+
+    /// <summary>设置页“语言”行当前显示 / 下拉里打勾的那一项（未显式选过就按启动时的选择）。</summary>
+    private string PendingLangPref => _host?.GetPref("lang") ?? Loc.PrefCode;
+
+    /// <summary>选中项和启动语言不同才允许“重启以应用”，避免点一下做无意义的重启。</summary>
+    private bool LangMenuApplyEnabled
+        => !string.Equals(Loc.DisplayName(PendingLangPref), Loc.DisplayName(Loc.PrefCode),
+                          StringComparison.Ordinal);
+
+    /// <summary>
+    /// 下拉卡片：右边缘对齐“语言”行，优先开在行下方；下面放不下就翻到上方。
+    /// 卡片可以伸出设置面板（QueryBounds 在“更多”打开时就是整屏），只夹在屏幕内。
+    /// </summary>
+    private RectF LangMenuRect()
+    {
+        var row = MoreRowRect(RowIndex(Row.Language));
+        float w = MathF.Min(LangMenuW, _screen.MaxX - _screen.MinX - 16f);
+        float h = LangMenuH;
+        // 右边缘让开设置页滚动条 10px：否则下拉自己的细滚动条和蓝色页面滚动条挨在一起。
+        float x = row.MaxX - 10f - w;
+        float y = row.MaxY + 6f;
+        const float m = 8f;
+        if (y + h > _screen.MaxY - m) y = row.MinY - 6f - h;
+        y = Math.Clamp(y, _screen.MinY + m, MathF.Max(_screen.MinY + m, _screen.MaxY - m - h));
+        // 翻到上方时会压住标题栏右侧的 ✕：整体左移一点，把关闭按钮让出来。
+        if (y < MoreHeaderRect().MaxY)
+        {
+            float safeRight = MoreCloseRect().MinX - 8f;
+            if (x + w > safeRight) x = safeRight - w;
+        }
+        x = Math.Clamp(x, _screen.MinX + m, MathF.Max(_screen.MinX + m, _screen.MaxX - m - w));
+        return new RectF { MinX = x, MinY = y, MaxX = x + w, MaxY = y + h };
+    }
+
+    private RectF LangMenuHeaderRect()
+    {
+        var r = LangMenuRect();
+        return new RectF
+        {
+            MinX = r.MinX + LangMenuPad, MinY = r.MinY + LangMenuPad,
+            MaxX = r.MaxX - LangMenuPad, MaxY = r.MinY + LangMenuPad + LangMenuHeadH,
+        };
+    }
+
+    private RectF LangMenuItemsRect()
+    {
+        var head = LangMenuHeaderRect();
+        return new RectF
+        {
+            MinX = head.MinX, MinY = head.MaxY + 2f,
+            MaxX = head.MaxX, MaxY = head.MaxY + 2f + LangMenuRows * LangMenuItemH,
+        };
+    }
+
+    private RectF LangMenuItemRect(int slot)
+    {
+        var list = LangMenuItemsRect();
+        float y = list.MinY + slot * LangMenuItemH;
+        return new RectF { MinX = list.MinX, MinY = y, MaxX = list.MaxX, MaxY = y + LangMenuItemH };
+    }
+
+    private RectF LangMenuFooterRect()
+    {
+        var r = LangMenuRect();
+        return new RectF
+        {
+            MinX = r.MinX + LangMenuPad, MinY = r.MaxY - LangMenuPad - LangMenuFootH,
+            MaxX = r.MaxX - LangMenuPad, MaxY = r.MaxY - LangMenuPad,
+        };
+    }
+
+    /// <summary>命中：MoreHitLangItem+绝对下标 / MoreHitLangApply / MoreHitInside（菜单内空白）/ None。</summary>
+    private int LangMenuHit(float x, float y)
+    {
+        if (!_langMenuOpen) return MoreHitNone;
+        if (!LangMenuRect().Contains(x, y)) return MoreHitNone;
+        if (LangMenuApplyEnabled && LangMenuFooterRect().Contains(x, y)) return MoreHitLangApply;
+        var list = LangMenuItemsRect();
+        if (list.Contains(x, y))
+        {
+            int slot = (int)((y - list.MinY) / LangMenuItemH);
+            int i = LangMenuScrollTop + slot;
+            if (slot >= 0 && slot < LangMenuRows && i >= 0 && i < LangMenuCount)
+                return MoreHitLangItem + i;
+        }
+        return MoreHitInside;
+    }
+
+    private void OpenLangMenu()
+    {
+        var codes = Loc.PrefCodes;
+        string pending = PendingLangPref;
+        int sel = -1;
+        for (int i = 0; i < codes.Count; i++)
+            if (string.Equals(Loc.DisplayName(codes[i]), Loc.DisplayName(pending), StringComparison.Ordinal))
+            { sel = i; break; }
+        _langMenuScroll = sel >= 0
+            ? Math.Clamp(sel - LangMenuRows + 1, 0, LangMenuScrollMax)
+            : 0;
+        _langMenuOpen = true;
+        _langMenuHover = -1;
+        _langMenuPress = -1;
+        _langMenuDragged = false;
+        _moreHover = MoreHitNone;
+        _morePress = -1;
+        HideTip();
+        CancelTipHold();
+        Invalidate();
+    }
+
+    private void CloseLangMenu()
+    {
+        if (!_langMenuOpen) return;
+        _langMenuOpen = false;
+        _langMenuHover = -1;
+        _langMenuPress = -1;
+        _langMenuDragged = false;
+        Invalidate();
+    }
+
+    private void SelectLangMenu(int index)
+    {
+        var codes = Loc.PrefCodes;
+        if (index < 0 || index >= codes.Count) return;
+        // **system 也显式写下来**：否则“跟随系统”会被安装器语言顶掉（见 Engine 的优先级）。
+        _host?.SetPref("lang", codes[index]);
+        Invalidate();
+    }
+
+    private void ScrollLangMenu(int deltaRows)
+    {
+        int next = Math.Clamp(_langMenuScroll + deltaRows, 0, LangMenuScrollMax);
+        if (next == _langMenuScroll) return;
+        _langMenuScroll = next;
+        Invalidate();
+    }
+
+    private void ApplyLangMenu()
+    {
+        if (!LangMenuApplyEnabled) return;
+        CloseLangMenu();
+        _host?.Commands.RestartForLanguage();
+    }
+
     /// <summary>历史清理那一行右侧的值。</summary>
     private string HistoryDaysName(string pref) => pref switch
     {
@@ -4980,6 +5185,12 @@ public sealed partial class FullUi : IOverlayUi
     private int MoreHitAt(float x, float y)
     {
         if (!_moreOpen) return MoreHitNone;
+        // 下拉可以伸出设置面板，必须先于“面板外 = 空白”判断。
+        if (_langMenuOpen)
+        {
+            int lang = LangMenuHit(x, y);
+            if (lang != MoreHitNone) return lang;
+        }
         if (!MoreRect().Contains(x, y)) return MoreHitNone;
         if (MoreCloseRect().Contains(x, y)) return MoreHitClose;
         if (_morePage != MorePage.Home && MoreBackRect().Contains(x, y)) return MoreHitBack;
@@ -5050,6 +5261,14 @@ public sealed partial class FullUi : IOverlayUi
 
         if (hit == MoreHitSettingsScroll)
             return new HitTarget(HitKind.SettingsScroll, "more.settings.scroll");
+
+        if (hit >= MoreHitLangItem && hit < MoreHitLangItem + LangMenuCount)
+        {
+            int i = hit - MoreHitLangItem;
+            return new HitTarget(HitKind.PopupItem, $"settings.general.language.item{i}", i);
+        }
+        if (hit == MoreHitLangApply)
+            return new HitTarget(HitKind.PopupItem, "settings.general.language.apply");
 
         if (hit >= ApiHitProvider && hit <= ApiHitKeyLink)
         {
@@ -5165,6 +5384,7 @@ public sealed partial class FullUi : IOverlayUi
     private void CloseMore()
     {
         if (!_moreOpen) return;
+        CloseLangMenu();
         _host?.TextInput?.Commit();
         if (_host?.State.LogNoteEditing == true) _host.Commands.EndLogNoteEdit(true);
         _moreOpen = false;
@@ -5248,6 +5468,101 @@ public sealed partial class FullUi : IOverlayUi
 
         if (_pageHost?.Current != null)
             _pageHost.Render(ctx);
+
+        // 下拉必须压在页面内容之上（它可能伸出设置面板）。
+        if (_langMenuOpen) DrawLangMenu(ctx);
+    }
+
+    /// <summary>
+    /// 语言下拉（参考 WinUI 3 ComboBox flyout）：表头 + 11 项（8 行可见，可滚）+ 底部重启按钮。
+    /// 当前项用强调色 + 左侧竖条 + 对勾，别只靠颜色区分。
+    /// </summary>
+    private void DrawLangMenu(ID2D1DeviceContext ctx)
+    {
+        var r = LangMenuRect();
+        var shadow = new RoundedRectangle(
+            new Vortice.RawRectF(r.MinX + 1f, r.MinY + 5f, r.MaxX + 1f, r.MaxY + 5f), 12f, 12f);
+        ctx.FillRoundedRectangle(shadow, Brush(ctx, new Color4(0f, 0f, 0f, _dark ? 0.34f : 0.14f)));
+
+        var card = new RoundedRectangle(
+            new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 12f, 12f);
+        // 下拉是浮在设置页上的，必须**完全不透明**：PopoverPanel 的 0.98 alpha 会让
+        // 底下的蓝色档位按钮透出来，看着像菜单里多了一块高亮。
+        var panelCol = _dark ? Tokens.PopoverPanelDark : Tokens.PopoverPanelLight;
+        ctx.FillRoundedRectangle(card, Brush(ctx, new Color4(panelCol.R, panelCol.G, panelCol.B, 1f)));
+        ctx.DrawRoundedRectangle(card, Brush(ctx, BorderCol), 1f);
+
+        var sep = new Color4(InkCol.R, InkCol.G, InkCol.B, 0.10f);
+        var head = LangMenuHeaderRect();
+        _widgets.TextLeftMiddle(ctx, "语言",
+            new RectF { MinX = head.MinX + 10f, MinY = head.MinY, MaxX = head.MaxX - 10f, MaxY = head.MaxY },
+            12f, Brush(ctx, MutedCol));
+        ctx.DrawLine(new Vector2(r.MinX + LangMenuPad, head.MaxY + 1f),
+                     new Vector2(r.MaxX - LangMenuPad, head.MaxY + 1f), Brush(ctx, sep), 1f);
+
+        var codes = Loc.PrefCodes;
+        string pending = PendingLangPref;
+        for (int slot = 0; slot < LangMenuRows; slot++)
+        {
+            int i = LangMenuScrollTop + slot;
+            if (i < 0 || i >= codes.Count) break;
+            var ir = LangMenuItemRect(slot);
+            bool selected = string.Equals(Loc.DisplayName(codes[i]), Loc.DisplayName(pending),
+                                          StringComparison.Ordinal);
+            if (_langMenuHover == i)
+                ctx.FillRoundedRectangle(
+                    new RoundedRectangle(new Vortice.RawRectF(ir.MinX + 2f, ir.MinY + 1f,
+                                                             ir.MaxX - 2f, ir.MaxY - 1f), 6f, 6f),
+                    Brush(ctx, HoverCol));
+            if (selected)
+                ctx.FillRoundedRectangle(
+                    new RoundedRectangle(new Vortice.RawRectF(ir.MinX + 2f, ir.MinY + 9f,
+                                                             ir.MinX + 4f, ir.MaxY - 9f), 1f, 1f),
+                    Brush(ctx, Tokens.Accent));
+
+            string name = codes[i] == Loc.SystemCode ? "跟随系统" : Loc.DisplayName(codes[i]);
+            _widgets.TextLeftMiddle(ctx, name,
+                new RectF { MinX = ir.MinX + 12f, MinY = ir.MinY, MaxX = ir.MaxX - 34f, MaxY = ir.MaxY },
+                12.5f, Brush(ctx, selected ? Tokens.Accent : InkCol));
+
+            if (selected)
+            {
+                // 对勾用两笔画：不依赖字体里有没有 ✓（和 ✕ 一样走线条更稳）。
+                float cx = ir.MaxX - 16f, cy = (ir.MinY + ir.MaxY) * 0.5f;
+                var pen = Brush(ctx, Tokens.Accent);
+                ctx.DrawLine(new Vector2(cx - 5f, cy), new Vector2(cx - 1.5f, cy + 3.5f), pen, 1.6f);
+                ctx.DrawLine(new Vector2(cx - 1.5f, cy + 3.5f), new Vector2(cx + 5f, cy - 4f), pen, 1.6f);
+            }
+        }
+
+        // 11 项只露 8 行：右侧细滚动条（滚轮 / 按住上下拖都能滚）。
+        if (LangMenuScrollMax > 0)
+        {
+            var list = LangMenuItemsRect();
+            float trackX = r.MaxX - 5f;
+            float top = list.MinY + 2f, bottom = list.MinY + LangMenuRows * LangMenuItemH - 2f;
+            ctx.FillRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(trackX, top, trackX + 2f, bottom), 1f, 1f),
+                Brush(ctx, new Color4(InkCol.R, InkCol.G, InkCol.B, 0.10f)));
+            float thumbH = MathF.Max(18f, (bottom - top) * LangMenuRows / LangMenuCount);
+            float t = (float)LangMenuScrollTop / LangMenuScrollMax;
+            float y0 = top + (bottom - top - thumbH) * t;
+            ctx.FillRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(trackX - 0.5f, y0, trackX + 2.5f, y0 + thumbH), 1.5f, 1.5f),
+                Brush(ctx, new Color4(InkCol.R, InkCol.G, InkCol.B, 0.28f)));
+        }
+
+        var foot = LangMenuFooterRect();
+        ctx.DrawLine(new Vector2(r.MinX + LangMenuPad, foot.MinY - 1f),
+                     new Vector2(r.MaxX - LangMenuPad, foot.MinY - 1f), Brush(ctx, sep), 1f);
+        bool on = LangMenuApplyEnabled;
+        if (on && _langMenuHover == MoreHitLangApply)
+            ctx.FillRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(foot.MinX + 2f, foot.MinY + 1f,
+                                                         foot.MaxX - 2f, foot.MaxY - 1f), 6f, 6f),
+                Brush(ctx, HoverCol));
+        _widgets.Text(ctx, "重启以应用", foot, 12.5f,
+                      Brush(ctx, on ? Tokens.Accent : MutedCol), center: true);
     }
 
     // ---- 启动器绘制 ----------------------------------------------------------
@@ -5306,7 +5621,7 @@ public sealed partial class FullUi : IOverlayUi
     {
         ("设置", "外观 / 书写 / 墨迹 / 工具条，都在里面", false),
         ("日志", "上传运行日志给开发；加群反馈也在这里", false),
-        ("检查更新", $"当前 v{ProductInfo.Version}；有新版本会提示，也可以直接应用更新", false),
+        ("检查更新", "当前 v{0}；有新版本会提示，也可以直接应用更新", false),
         ("重启软件", "像电脑重启：不恢复本次板书（自动存档还在）", false),
         ("退出", "关掉批注（会先把键位落盘）", true),
     };
@@ -5467,17 +5782,20 @@ public sealed partial class FullUi : IOverlayUi
         {
             Row.HistoryDays => HistoryDaysName(_host.GetPref("historyDays")),
             Row.UiSize => UiScalePresets.Name(_host.UiScale),
+            Row.Language => Loc.DisplayName(PendingLangPref),
             Row.TouchMode => _host.State.TouchGesturesOn ? "手势" : "单指",
             Row.AiApi => "管理…",
             _ => null,
         };
+        // 语言这一行做成“下拉框”的样子：值右边带 ▾，和常见设置页一致。
+        float chevronW = Rows[i].Kind == Row.Language ? 14f : 0f;
         float valueW = value != null ? _widgets.Measure(value, 12.5f) : 0f;
 
         var label = new RectF
         {
             MinX = r.MinX + 4f, MinY = r.MinY,
             MaxX = r.MaxX - (IsToggleRow(i) ? MoreSwitchW + 10f
-                             : value != null ? valueW + 10f : 4f),
+                             : value != null ? valueW + 10f + chevronW : 4f),
             MaxY = r.MaxY,
         };
         // 2026-10-02 第二批：行下那行 11px 小灰字（Hint）**不再画**——搬进悬停/长按提示；
@@ -5487,9 +5805,16 @@ public sealed partial class FullUi : IOverlayUi
         _widgets.TextLeftMiddle(ctx, Rows[i].Label, label, 13f, Brush(ctx, ink));
         if (IsToggleRow(i)) DrawSwitch(ctx, MoreSwitchRect(i), IsOn(i));
         else if (value != null)
+        {
+            float right = r.MaxX - 4f - chevronW;
             _widgets.TextLeftMiddle(ctx, value,
-                          new RectF { MinX = r.MaxX - 4f - valueW, MinY = r.MinY, MaxX = r.MaxX - 4f, MaxY = r.MaxY },
+                          new RectF { MinX = right - valueW, MinY = r.MinY, MaxX = right, MaxY = r.MaxY },
                           12.5f, Brush(ctx, InkCol));
+            if (chevronW > 0f)
+                _widgets.Text(ctx, "▾",
+                              new RectF { MinX = right, MinY = r.MinY, MaxX = r.MaxX - 2f, MaxY = r.MaxY },
+                              10f, Brush(ctx, MutedCol), center: true);
+        }
     }
 
     private void ActivateHub(int code)
@@ -5856,6 +6181,25 @@ public sealed partial class FullUi : IOverlayUi
         // 点面板外 = 关闭，而且这一下**不落墨**（消费掉；这也是自检要钉的一条）。
         if (_moreOpen)
         {
+            // 语言下拉先吃：选项按下只记候选，抬起还在同一项才选中；
+            // 点下拉外面 = 只收起（不顺手执行下面那一行）。
+            if (_langMenuOpen)
+            {
+                int lh = LangMenuHit(p.X, p.Y);
+                if ((lh >= MoreHitLangItem && lh < MoreHitLangItem + LangMenuCount)
+                    || lh == MoreHitLangApply)
+                {
+                    _langMenuPress = lh;
+                    _langMenuPressPos = p;
+                    _langMenuScrollAtPress = _langMenuScroll;
+                    _langMenuDragged = false;
+                    Invalidate();
+                    return true;
+                }
+                if (lh == MoreHitInside) return true;
+                CloseLangMenu();
+                return true;
+            }
             if (SettingsTouchDown(e, p)) return true;
             int hit = MoreHitAt(p.X, p.Y);
             if (hit == MoreHitNone || hit == MoreHitClose) { CloseMore(); return true; }
@@ -6083,6 +6427,32 @@ public sealed partial class FullUi : IOverlayUi
         // 「更多」面板开着时，指针只喂给面板：更新悬停、别再碰主条的悬停/拖动状态
         if (_moreOpen)
         {
+            if (_langMenuOpen)
+            {
+                if (_langMenuPress >= MoreHitLangItem
+                    && _langMenuPress < MoreHitLangItem + LangMenuCount)
+                {
+                    // 手指/鼠标按住上下拖 = 滚列表（11 项里常显示 8 项）。
+                    if (!_langMenuDragged
+                        && MathF.Abs(p.Y - _langMenuPressPos.Y) > 6f)
+                        _langMenuDragged = true;
+                    if (_langMenuDragged)
+                    {
+                        float rows = (_langMenuPressPos.Y - p.Y) / LangMenuItemH;
+                        int s = Math.Clamp(_langMenuScrollAtPress + (int)MathF.Round(rows),
+                                           0, LangMenuScrollMax);
+                        if (s != _langMenuScroll) { _langMenuScroll = s; Invalidate(); }
+                    }
+                    return true;
+                }
+                int lh = LangMenuHit(p.X, p.Y);
+                int langHover = lh >= MoreHitLangItem && lh < MoreHitLangItem + LangMenuCount
+                    ? lh - MoreHitLangItem
+                    : lh == MoreHitLangApply ? MoreHitLangApply : -1;
+                if (langHover != _langMenuHover) { _langMenuHover = langHover; Invalidate(); }
+                HideTip();
+                return true;
+            }
             if (SettingsTouchMove(e, p)) return true;
             if (_morePage == MorePage.Api)
             {
@@ -6186,6 +6556,16 @@ public sealed partial class FullUi : IOverlayUi
     {
         if (_aiOpen) return true;
         if (!_moreOpen) return false;
+        if (_langMenuOpen)
+        {
+            if (LangMenuRect().Contains(x, y))
+            {
+                ScrollLangMenu(delta > 0 ? -1 : 1);
+                return true;
+            }
+            CloseLangMenu();
+            return true;          // 滚轮在下拉外面 = 只收起，别把设置页一起滚走
+        }
         if (_morePage == MorePage.Api && _apiModelMenuOpen && ApiModelMenuRect().Contains(x, y))
         {
             int max = Math.Max(0, _apiModels.Count - ApiModelVisibleCount);
@@ -6227,6 +6607,9 @@ public sealed partial class FullUi : IOverlayUi
         {
             _moreHover = MoreHitNone;
             _morePress = -1;
+            _langMenuHover = -1;
+            _langMenuPress = -1;
+            _langMenuDragged = false;
             _settingsScrollDrag = false;
             Invalidate();
         }
@@ -6303,6 +6686,23 @@ public sealed partial class FullUi : IOverlayUi
         // 「更多」面板：按下和抬起落在**同一行**才算一次执行（和抽屉同一套手感）
         if (_moreOpen)
         {
+            if (_langMenuOpen || _langMenuPress >= 0)
+            {
+                int langPressed = _langMenuPress;
+                _langMenuPress = -1;
+                if (_langMenuOpen && !_langMenuDragged && langPressed >= 0)
+                {
+                    int lh = LangMenuHit(e.X, e.Y);
+                    if (lh == langPressed)
+                    {
+                        if (langPressed == MoreHitLangApply) ApplyLangMenu();
+                        else if (langPressed >= MoreHitLangItem) SelectLangMenu(langPressed - MoreHitLangItem);
+                    }
+                }
+                _langMenuDragged = false;
+                Invalidate();
+                return true;
+            }
             if (SettingsTouchUp(e)) return true;
             if (_morePage == MorePage.Api) { _morePress = -1; return true; }
             if (_settingsScrollDrag)
@@ -6427,6 +6827,7 @@ public sealed partial class FullUi : IOverlayUi
         {
             // 面板理论上打不开（它要主条展开才有入口），但状态机收口时一并清掉，
             // 免得以后哪天加了别的入口，缩球时面板还挂在那儿。
+            CloseLangMenu();
             _moreOpen = false;
             _more.Jump(0f);
             _moreHover = MoreHitNone;
@@ -8209,7 +8610,8 @@ public sealed partial class FullUi : IOverlayUi
             if (hit >= MoreHitBottom && hit < MoreHitBottom + MoreBottomTiles.Length)
             {
                 var t = MoreBottomTiles[hit - MoreHitBottom];
-                return (t.Label, "", t.Hint);
+                // 版本号是运行时拼进去的；模板留在表里，提示出口再格式化。
+                return (t.Label, "", Loc.T(t.Hint, ProductInfo.Version));
             }
             if (hit >= MoreHitRow && hit < MoreHitRow + Rows.Length)
             {
@@ -8240,7 +8642,8 @@ public sealed partial class FullUi : IOverlayUi
                       _host != null && _host.State.ClearOnArrowActive
                           ? "清空桌面批注（Ctrl+Z 撤销）"
                           : "打开后点击落到底下的程序；再点回来是画笔"),
-                2 => (c.Tip, Key(KeyAction.ToggleBoard), $"{Key(KeyAction.FlipPageUp)} / {Key(KeyAction.FlipPageDown)} 翻屏"),
+                2 => (c.Tip, Key(KeyAction.ToggleBoard),
+                      Loc.T("{0} / {1} 翻屏", Key(KeyAction.FlipPageUp), Key(KeyAction.FlipPageDown))),
                 3 => (c.Tip, Key(KeyAction.ToolPen), "已经是笔 → 再按换颜色"),
                 4 => (c.Tip, Key(KeyAction.ToolHighlighter), ""),
                 5 => (c.Tip, Key(KeyAction.ToolLaser), ""),
@@ -8637,8 +9040,29 @@ public sealed partial class FullUi : IOverlayUi
     internal float MoreTargetHForTest => MoreTargetH();
     internal void BackMorePageForTest() => GoBackMorePage();
 
+    /// <summary>出图用：切界面缩放档（走产品同一条 SetUiScale 命令，重排后出图）。</summary>
+    internal void SetUiScaleForTest(float scale) => _host?.Commands.SetUiScale(scale);
+
     /// <summary>自检/出图用：打开「更多」面板（产品里只能点主条「…」那一格）。</summary>
     internal void OpenMoreForTest() { OpenMore(); _more.Jump(1f); _moreH.Jump(MoreTargetH()); }
+
+    /// <summary>自检/出图用：按真实指针路径点设置页第 i 行（按下/抬起同一行才执行）。</summary>
+    internal void ClickSettingsRowForTest(int i)
+    {
+        var r = SettingsRowRectForTest(i);
+        if (r.IsEmpty) return;
+        var e = new UiPointerEvent((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f,
+                                   1f, false, false);
+        PointerDown(e);
+        PointerUp(e);
+    }
+
+    /// <summary>自检/出图用：语言下拉是否打开、卡片矩形（都是绘制/命中同一份）。</summary>
+    internal bool LangMenuOpenForTest => _langMenuOpen;
+    internal RectF LangMenuRectForTest => LangMenuRect();
+
+    /// <summary>自检/出图用：等价于在下拉里点了第 i 项（只落偏好，不重启）。</summary>
+    internal void PickLangForTest(int i) => SelectLangMenu(i);
 
     /// <summary>自检用：关掉「更多」面板（产品里是点面板外 / 点 ✕）。</summary>
     internal void CloseMoreForTest() { CloseMore(); _more.Jump(0f); }
@@ -8867,6 +9291,35 @@ public sealed partial class FullUi : IOverlayUi
     internal bool TipVisibleForTest => _tipShown && _tipFade.Value > 0.01f;
     /// <summary>任意目标的提示文案（名称 / 键位 / 说明；Title 为 null = 不出提示）。</summary>
     internal (string Title, string Key, string Note) TipContentForTest(int id) => TipContent(id);
+
+    /// <summary>
+    /// 语言审计用：把所有悬停提示过一遍 `Loc.Tr`，把没翻译的源文记下来。
+    /// 只读当前状态，不改界面；`--tipsweep` 调用。
+    /// </summary>
+    internal void AuditTipsForTest()
+    {
+        void Probe(int id)
+        {
+            var (title, key, note) = TipContent(id);
+            if (!string.IsNullOrEmpty(title)) Loc.Tr(title);
+            if (!string.IsNullOrEmpty(key)) Loc.Tr(key);
+            if (!string.IsNullOrEmpty(note)) Loc.Tr(note);
+        }
+
+        for (int id = 0; id < Cells.Length; id++) Probe(id);
+        for (int id = 100; id < 100 + SwatchCount; id++) Probe(id);
+        for (int id = 400; id < 400 + ActionCount; id++) Probe(id);
+        Probe(500); Probe(501); Probe(610); Probe(611);
+        for (int id = 1000; id < 1000 + 560; id++) Probe(id);
+
+        // 分段提示跟当前上带有关：图形 22 段、白板翻页两段各扫一遍。
+        int oldBand = _bandCell;
+        _bandCell = 10;
+        for (int i = 0; i < BandSegmentCount; i++) Probe(200 + i);
+        _bandCell = 2;
+        for (int i = 0; i < BandSegmentCount; i++) Probe(200 + i);
+        _bandCell = oldBand;
+    }
     /// <summary>自检用：触摸/笔长按已经弹过提示没有（弹过 = 这一次松手不执行）。</summary>
     internal bool TipHoldFiredForTest => _tipHoldFired;
     /// <summary>自检用：触摸/笔长按正在计时（还没到点）。</summary>

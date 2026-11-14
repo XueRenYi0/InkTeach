@@ -1,4 +1,5 @@
 using System.Numerics;
+using InkLocalization;
 
 namespace InkEngine;
 
@@ -2464,7 +2465,7 @@ internal static class SelectionHandles
     };
 
     /// <summary>`⋯` 菜单行的文案（绘制和自检共用）。</summary>
-    public static string BarButtonLabel(SelBarButton button) => button switch
+    public static string BarButtonLabel(SelBarButton button) => Loc.Tr(button switch
     {
         SelBarButton.Top => "置顶",
         SelBarButton.Bottom => "置底",
@@ -2483,7 +2484,7 @@ internal static class SelectionHandles
         SelBarButton.Beautify => "美化",
         SelBarButton.More => "更多",
         _ => "",
-    };
+    });
 
     /// <summary>
     /// 操作条的高度 / 每格宽度 / 格间距（逻辑像素）。
@@ -2615,7 +2616,7 @@ internal static class SelectionHandles
     public const int FontPanelSizeCount = 6;
     public const int FontSpacingCount = 5;
     public const int StyleColumns = 6;
-    public const float StyleLabelWidthLogical = 40f;
+    public static float StyleLabelWidthLogical => TextBoxFaces.IsCjkUi ? 40f : 84f;
     public const float StyleCellWidthLogical = 52f;
     public const float StyleRowHeightLogical = 38f;
 

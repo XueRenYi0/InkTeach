@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using InkLocalization;
 
 namespace InkEngine;
 
@@ -52,20 +53,70 @@ internal static class TextBoxFaces
     /// （2026-11-11 用户定）。包内手写字体只在“AI 手写替换”里用——DirectWrite
     /// 的系统集合看不到进程内注册的字体，放进题卡会静默退回默认字体，所以不摆。
     /// </summary>
+    public static bool IsChineseUi => Loc.CurrentCode == "zh-CN";
+    public static bool IsCjkUi => Loc.CurrentCode is "zh-CN" or "ja" or "ko";
+
     public static Info[] Visible
     {
         get
         {
             if (_visible != null) return _visible;
-            var list = new List<Info>(All.Length);
-            foreach (var info in All)
-                if (info.Face is TextBoxFace.YaHei or TextBoxFace.KaiTi
-                    or TextBoxFace.SimSun or TextBoxFace.SimHei)
-                    list.Add(info);
+            var list = new List<Info>(4);
+            if (IsChineseUi)
+            {
+                foreach (var info in All)
+                    if (info.Face is TextBoxFace.YaHei or TextBoxFace.KaiTi
+                        or TextBoxFace.SimSun or TextBoxFace.SimHei)
+                        list.Add(info);
+            }
+            else if (Loc.CurrentCode == "ja")
+            {
+                // 日文名比中文长，快捷格只放三个短名；其余进「その他…」。
+                AddPresetAny(list, "ゴシック", "Yu Gothic UI", "Yu Gothic");
+                AddPresetAny(list, "MS", "MS PGothic", "MS Gothic");
+                AddPresetAny(list, "メイリオ", "Meiryo UI", "Meiryo");
+                AddPresetAny(list, "明朝", "Yu Mincho");
+            }
+            else if (Loc.CurrentCode == "ko")
+            {
+                AddPreset(list, "고딕", "Malgun Gothic");
+                AddPreset(list, "바탕", "Batang");
+                AddPreset(list, "돋움", "Dotum");
+            }
+            else
+            {
+                AddPreset(list, "Segoe", "Segoe UI");
+                AddPreset(list, "Arial", "Arial");
+                AddPreset(list, "Times", "Times New Roman");
+                AddPreset(list, "Georgia", "Georgia");
+            }
+            if (list.Count == 0)
+                list.Add(new Info(TextBoxFace.Custom, "Segoe UI", "Segoe UI"));
             _visible = list.ToArray();
             return _visible;
         }
     }
+
+    private static void AddPreset(List<Info> list, string name, string family)
+        => AddPresetAny(list, name, family);
+
+    private static void AddPresetAny(List<Info> list, string name, params string[] families)
+    {
+        var available = FamiliesForCurrentLanguage;
+        foreach (string family in families)
+            foreach (var f in available)
+                if (string.Equals(f, family, StringComparison.OrdinalIgnoreCase))
+                {
+                    list.Add(new Info(TextBoxFace.Custom, name, family));
+                    return;
+                }
+    }
+
+    /// <summary>快捷字体格当前是否选中（内置档看枚举，语言预设看家族名）。</summary>
+    public static bool IsVisibleFace(TextBoxData box, Info info)
+        => info.Face == TextBoxFace.Custom
+            ? IsFamily(box, info.DirectWrite)
+            : IsFace(box, info.Face);
 
     private static bool HasSystemFamily(string name)
     {
@@ -100,6 +151,80 @@ internal static class TextBoxFaces
     }
 
     private static readonly List<string> _cjkFamilyList = new();
+    private static readonly Dictionary<char, string[]> _scriptFamilyCache = new();
+    private static readonly Dictionary<char, string[]> _latinFamilyCache = new();
+
+    // 日/韩不做"含假名/谚文"全量过滤：中文字体也常含假名，会把「微软雅黑」混进日文列表。
+    // 只列系统里实际存在的常见日/韩字体；不够就少几项，不硬凑。
+    private static readonly string[] JaCandidates =
+    {
+        "Yu Gothic UI", "Meiryo UI", "Meiryo", "MS Gothic", "MS PGothic",
+        "Yu Mincho", "MS Mincho", "MS PMincho", "BIZ UDGothic", "BIZ UDMincho",
+    };
+
+    private static readonly string[] KoCandidates =
+    {
+        "Malgun Gothic", "Batang", "Dotum", "Gulim",
+        "BatangChe", "DotumChe", "GulimChe", "Gungsuh",
+    };
+
+    private static string[] Existing(string[] candidates)
+    {
+        var list = new List<string>(candidates.Length);
+        foreach (string f in candidates)
+            if (HasSystemFamily(f)) list.Add(f);
+        return list.ToArray();
+    }
+
+    /// <summary>当前界面语言该列哪些字体（中文=含汉字，日/韩=常见系统字体，俄/其他=拉丁）。</summary>
+    public static string[] FamiliesForCurrentLanguage
+    {
+        get
+        {
+            if (Loc.CurrentCode == "zh-CN") return CjkFamilies;
+            if (Loc.CurrentCode == "ja") return Existing(JaCandidates);
+            if (Loc.CurrentCode == "ko") return Existing(KoCandidates);
+            // 拉丁/俄文界面不把中文字体混进来（它们也含 A，但不是老师想要的“西文字体”）。
+            char probe = Loc.CurrentCode == "ru" ? 'Я' : 'A';
+            return FamiliesSupporting(probe, excludeCjk: true);
+        }
+    }
+
+    /// <summary>系统字体里真的含有这个字符的家族（DirectWrite HasCharacter）。</summary>
+    private static string[] FamiliesSupporting(char probe, bool excludeCjk = false)
+    {
+        var cache = excludeCjk ? _latinFamilyCache : _scriptFamilyCache;
+        if (cache.TryGetValue(probe, out var cached)) return cached;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<string>();
+        try
+        {
+            using var coll = Gfx.WriteFactory.GetSystemFontCollection(false);
+            uint n = coll.FontFamilyCount;
+            for (uint i = 0; i < n; i++)
+            {
+                string name = null;
+                bool has = false;
+                try
+                {
+                    using var fam = coll.GetFontFamily(i);
+                    has = FamilyHasCharacter(fam, probe);
+                    if (!has) continue;
+                    if (excludeCjk && FamilyHasCharacter(fam, '\u4E2D')) continue;
+                    name = DisplayName(fam);
+                }
+                catch { }
+                if (!string.IsNullOrWhiteSpace(name) && seen.Add(name)) result.Add(name);
+            }
+        }
+        catch { }
+        if (result.Count == 0)
+            return SystemFamilies;
+        result.Sort(StringComparer.OrdinalIgnoreCase);
+        var arr = result.ToArray();
+        cache[probe] = arr;
+        return arr;
+    }
 
     /// <summary>
     /// 系统已安装的字体家族（去重、中文名优先）。第一次访问时枚举一次，之后走缓存。
@@ -126,20 +251,8 @@ internal static class TextBoxFaces
                     try
                     {
                         using var fam = coll.GetFontFamily(i);
-                        try
-                        {
-                            using var font = fam.GetFont(0);
-                            hasCjk = font.HasCharacter(0x4E2D);      // “中”
-                        }
-                        catch { }
-                        using var names = fam.FamilyNames;
-                        uint idx = 0;
-                        bool ok = names.FindLocaleName("zh-CN", out idx);
-                        if (!ok) ok = names.FindLocaleName("zh-Hans", out idx);
-                        if (!ok) ok = names.FindLocaleName("en-us", out idx);
-                        if (!ok && names.Count > 0) { idx = 0; ok = true; }
-                        if (!ok) continue;
-                        name = names.GetString(idx);
+                        hasCjk = FamilyHasCharacter(fam, '\u4E2D');      // “中”
+                        name = DisplayName(fam);
                     }
                     catch { }
                     if (string.IsNullOrWhiteSpace(name) || !seen.Add(name)) continue;
@@ -172,6 +285,36 @@ internal static class TextBoxFaces
             _systemFamilies = all.ToArray();
             return _systemFamilies;
         }
+    }
+
+    /// <summary>家族里任意一个字面含有这个字符（只查 font 0 会漏掉日文字体）。</summary>
+    private static bool FamilyHasCharacter(Vortice.DirectWrite.IDWriteFontFamily fam, char ch)
+    {
+        try
+        {
+            uint count = fam.FontCount;
+            for (uint i = 0; i < count && i < 12; i++)
+            {
+                using var font = fam.GetFont(i);
+                if (font.HasCharacter(ch)) return true;
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    /// <summary>字体家族显示名：先当前界面语言，再 en，再 zh；非中文界面不再冒出“微软雅黑”。</summary>
+    private static string DisplayName(Vortice.DirectWrite.IDWriteFontFamily fam)
+    {
+        using var names = fam.FamilyNames;
+        uint idx;
+        string loc = Loc.LocaleName;
+        if (names.FindLocaleName(loc, out idx)) return names.GetString(idx);
+        string lang = loc.Split('-')[0];
+        if (names.FindLocaleName(lang, out idx)) return names.GetString(idx);
+        if (names.FindLocaleName("en-us", out idx)) return names.GetString(idx);
+        if (names.FindLocaleName("zh-CN", out idx)) return names.GetString(idx);
+        return names.Count > 0 ? names.GetString(0) : null;
     }
 
     private static bool IsCjkName(string s)

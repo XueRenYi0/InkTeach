@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using InkLocalization;
 using Vortice.Direct2D1;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
@@ -2689,7 +2690,7 @@ internal sealed partial class OverlayWindow : IDisposable
                 foreach (var k in keys)
                     parts.Add(k + " = " + Fmt((float)spec.Params[k]));
                 var paramFmt = AiTextFormat(18f, false, false);
-                _ctx.DrawText("参数：" + string.Join("，", parts), paramFmt,
+                _ctx.DrawText(Loc.T("参数：{0}", string.Join("，", parts)), paramFmt,
                     new Rect(ox + left, oy + 46f, pw, 26f),
                     Brush(new Color4(0.36f, 0.38f, 0.42f, 1f)));
             }
@@ -3040,13 +3041,13 @@ internal sealed partial class OverlayWindow : IDisposable
                                            string family = null)
     {
         int px = Math.Max(8, (int)MathF.Round(size));
-        family = string.IsNullOrWhiteSpace(family) ? "Microsoft YaHei UI" : family;
+        family = string.IsNullOrWhiteSpace(family) ? Loc.FontFamily : family;
         var key = (px, bold, center, italic, family);
         if (_aiFormats.TryGetValue(key, out var f)) return f;
         f = Gfx.WriteFactory.CreateTextFormat(family, null,
             bold ? FontWeight.SemiBold : FontWeight.Normal,
             italic ? FontStyle.Italic : FontStyle.Normal,
-            FontStretch.Normal, px, "zh-CN");
+            FontStretch.Normal, px, Loc.LocaleName);
         f.WordWrapping = WordWrapping.NoWrap;
         if (center)
         {
@@ -3618,7 +3619,7 @@ internal sealed partial class OverlayWindow : IDisposable
             _ctx.DrawBitmap(bmp, new Vortice.RawRectF(x0, y0, x0 + dw, y0 + dh),
                             1f, Vortice.Direct2D1.InterpolationMode.HighQualityCubic, null, null);
 
-        _ctx.DrawText($"扫一扫，加 QQ 群 {ProductInfo.FeedbackQQGroup}",
+        _ctx.DrawText(Loc.T("扫一扫，加 QQ 群 {0}", ProductInfo.FeedbackQQGroup),
                       AiTextFormat(18f * u, bold: false, center: true),
                       new Vortice.Mathematics.Rect(card.MinX + 8f * u, y0 + dh + 4f * u,
                                                    card.MaxX - card.MinX - 16f * u, capH - 4f * u),
@@ -5117,8 +5118,8 @@ internal sealed partial class OverlayWindow : IDisposable
         if (_readoutFormat == null || _readoutFormatPx != px)
         {
             _readoutFormat?.Dispose();
-            _readoutFormat = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _readoutFormat = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
             _readoutFormat.TextAlignment = TextAlignment.Center;
             _readoutFormat.ParagraphAlignment = ParagraphAlignment.Center;
             _readoutFormatPx = px;
@@ -5133,8 +5134,8 @@ internal sealed partial class OverlayWindow : IDisposable
         if (_readoutTabFormat == null || _readoutTabFormatPx != px)
         {
             _readoutTabFormat?.Dispose();
-            _readoutTabFormat = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _readoutTabFormat = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
             _readoutTabFormat.TextAlignment = TextAlignment.Center;
             _readoutTabFormat.ParagraphAlignment = ParagraphAlignment.Center;
             _readoutTabFormatPx = px;
@@ -5154,8 +5155,8 @@ internal sealed partial class OverlayWindow : IDisposable
         if (_readoutFormatSmall == null || _readoutFormatSmallPx != px)
         {
             _readoutFormatSmall?.Dispose();
-            _readoutFormatSmall = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _readoutFormatSmall = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
             _readoutFormatSmall.TextAlignment = TextAlignment.Center;
             _readoutFormatSmall.ParagraphAlignment = ParagraphAlignment.Center;
             _readoutFormatSmall.WordWrapping = WordWrapping.NoWrap;
@@ -5176,8 +5177,8 @@ internal sealed partial class OverlayWindow : IDisposable
         if (_readoutLeft == null || _readoutLeftPx != px)
         {
             _readoutLeft?.Dispose();
-            _readoutLeft = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _readoutLeft = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
             _readoutLeft.TextAlignment = TextAlignment.Leading;
             _readoutLeft.ParagraphAlignment = ParagraphAlignment.Center;
             _readoutLeft.WordWrapping = WordWrapping.NoWrap;
@@ -5193,11 +5194,12 @@ internal sealed partial class OverlayWindow : IDisposable
         if (_panelLabel == null || _panelLabelPx != px)
         {
             _panelLabel?.Dispose();
-            _panelLabel = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _panelLabel = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
             _panelLabel.TextAlignment = TextAlignment.Leading;
             _panelLabel.ParagraphAlignment = ParagraphAlignment.Center;
-            _panelLabel.WordWrapping = WordWrapping.NoWrap;
+            // 德语/俄语的“行距/背景”比中文长，固定单行会压到第一格；允许在标签列内折两行。
+            _panelLabel.WordWrapping = WordWrapping.Wrap;
             _panelLabelPx = px;
         }
         return _panelLabel;
@@ -5297,7 +5299,7 @@ internal sealed partial class OverlayWindow : IDisposable
             // 整理：顶栏整条变成操作条（全选 / 移动 / 删除 / 完成）。
             var (all, move, del, done) = LibraryLayout.ManageRects(m);
             _scratch.Color = theme.Text;
-            _ctx.DrawText($"已选 {app.LibrarySelectionCount}", ReadoutFormatSmall(dpi),
+            _ctx.DrawText(Loc.T("已选 {0}", app.LibrarySelectionCount), ReadoutFormatSmall(dpi),
                           new Rect(head.MinX, head.MinY, MathF.Max(10f, all.MinX - head.MinX),
                                    head.MaxY - head.MinY), _scratch);
             DrawLibPill(all, "全选", false, dpi, theme);
@@ -5309,7 +5311,7 @@ internal sealed partial class OverlayWindow : IDisposable
         {
             // 使用态：卡片已经“拿起”，顶上只留一个状态字；放置/取消都用手势。
             _scratch.Color = theme.Text;
-            _ctx.DrawText("已选 1 项", ReadoutFormatLeft(dpi),
+            _ctx.DrawText(Loc.Tr("已选 1 项"), ReadoutFormatLeft(dpi),
                           new Rect(head.MinX + 8f * dpi, head.MinY,
                                    MathF.Max(10f, m.Close.MinX - head.MinX - 12f * dpi),
                                    head.MaxY - head.MinY), _scratch);
@@ -5322,7 +5324,7 @@ internal sealed partial class OverlayWindow : IDisposable
             if (trashView)
             {
                 _scratch.Color = theme.Text;
-                _ctx.DrawText($"‹ 返回收藏 · 回收站 {n}", ReadoutFormatLeft(dpi),
+                _ctx.DrawText(Loc.T("‹ 返回收藏 · 回收站 {0}", n), ReadoutFormatLeft(dpi),
                               new Rect(m.Menu.MaxX + 8f * dpi, head.MinY,
                                        MathF.Max(20f, m.Close.MinX - m.Menu.MaxX - 16f * dpi),
                                        head.MaxY - head.MinY), _scratch);
@@ -5333,7 +5335,8 @@ internal sealed partial class OverlayWindow : IDisposable
             }
             else
             {
-                DrawLibPill(m.CurrentCategory, $"{catName} · {catCount} ▾", false, dpi, theme);
+                DrawLibPill(m.CurrentCategory, Loc.T("{0} · {1} ▾", Loc.Tr(catName), catCount),
+                            false, dpi, theme);
             }
             DrawLibGlyph(m.Close, "✕", theme.TextMuted, dpi);
         }
@@ -5344,15 +5347,15 @@ internal sealed partial class OverlayWindow : IDisposable
             var g = m.Grid;
             _scratch.Color = theme.TextMuted;
             bool scopedEmpty = !trashView && app.LibraryCategoryId != "all";
-            _ctx.DrawText(trashView ? "回收站是空的"
-                          : scopedEmpty ? "这个分类还是空的" : "收藏还是空的",
+            _ctx.DrawText(trashView ? Loc.Tr("回收站是空的")
+                          : scopedEmpty ? Loc.Tr("这个分类还是空的") : Loc.Tr("收藏还是空的"),
                           ReadoutFormat(dpi),
                           new Rect(g.MinX, g.MinY + 8f * dpi, g.MaxX - g.MinX, 24f * dpi), _scratch);
             _ctx.DrawText(trashView
-                              ? "收藏里删掉的东西会先来这里；点卡片恢复"
+                              ? Loc.Tr("收藏里删掉的东西会先来这里；点卡片恢复")
                               : scopedEmpty
-                                  ? "把卡片拖到页签，或点 ☰ → 导入图片"
-                                  : "选中对象 → 收藏；透明贴纸点 ☰ → 导入图片",
+                                  ? Loc.Tr("把卡片拖到页签，或点 ☰ → 导入图片")
+                                  : Loc.Tr("选中对象 → 收藏；透明贴纸点 ☰ → 导入图片"),
                           ReadoutFormatSmall(dpi),
                           new Rect(g.MinX, g.MinY + 34f * dpi, g.MaxX - g.MinX, 20f * dpi), _scratch);
         }
@@ -5562,12 +5565,12 @@ internal sealed partial class OverlayWindow : IDisposable
             _ctx.FillRoundedRectangle(fill, _scratch);
 
             _scratch.Color = app.ShapeRepeatContinuous ? theme.TextMuted : theme.ActiveText;
-            _ctx.DrawText("单次", ReadoutFormatSmall(dpi),
+            _ctx.DrawText(Loc.Tr("单次"), ReadoutFormatSmall(dpi),
                           new Rect(m.RepeatSingle.MinX, m.RepeatSingle.MinY,
                                    m.RepeatSingle.MaxX - m.RepeatSingle.MinX,
                                    m.RepeatSingle.MaxY - m.RepeatSingle.MinY), _scratch);
             _scratch.Color = app.ShapeRepeatContinuous ? theme.ActiveText : theme.TextMuted;
-            _ctx.DrawText("∞ 连续", ReadoutFormatSmall(dpi),
+            _ctx.DrawText(Loc.Tr("∞ 连续"), ReadoutFormatSmall(dpi),
                           new Rect(m.RepeatContinuous.MinX, m.RepeatContinuous.MinY,
                                    m.RepeatContinuous.MaxX - m.RepeatContinuous.MinX,
                                    m.RepeatContinuous.MaxY - m.RepeatContinuous.MinY), _scratch);
@@ -5585,7 +5588,7 @@ internal sealed partial class OverlayWindow : IDisposable
                 _ctx.FillRoundedRectangle(fill, _scratch);
             }
             _scratch.Color = app.ShapeRepeatContinuous ? theme.ActiveText : theme.Text;
-            _ctx.DrawText(app.ShapeRepeatContinuous ? "∞ 连续" : "单次",
+            _ctx.DrawText(app.ShapeRepeatContinuous ? Loc.Tr("∞ 连续") : Loc.Tr("单次"),
                           ReadoutFormatSmall(dpi),
                           new Rect(m.Repeat.MinX, m.Repeat.MinY,
                                    m.Repeat.MaxX - m.Repeat.MinX,
@@ -5606,7 +5609,7 @@ internal sealed partial class OverlayWindow : IDisposable
             _ctx.FillRoundedRectangle(rr, _scratch);
         }
         _scratch.Color = active ? theme.ActiveText : theme.TextMuted;
-        _ctx.DrawText(label, ReadoutFormatSmall(dpi),
+        _ctx.DrawText(Loc.Tr(label), ReadoutFormatSmall(dpi),
                       new Rect(r.MinX, r.MinY, r.MaxX - r.MinX, r.MaxY - r.MinY), _scratch);
     }
 
@@ -5624,7 +5627,7 @@ internal sealed partial class OverlayWindow : IDisposable
         else
         {
             DrawLibPill(m.CurrentCategory,
-                        $"{ShapeCatalog.NameFor(app.ShapeCategoryId)} · {cards.Length} ▾",
+                        Loc.T("{0} · {1} ▾", Loc.Tr(ShapeCatalog.NameFor(app.ShapeCategoryId)), cards.Length),
                         false, dpi, theme);
         }
         DrawLibGlyph(m.Close, "✕", theme.TextMuted, dpi);
@@ -6068,7 +6071,7 @@ internal sealed partial class OverlayWindow : IDisposable
         var favCats = shapes ? null : app.LibraryTabCategories();
         var widths = new float[cats.Length];
         for (int i = 0; i < cats.Length; i++)
-            widths[i] = LibraryLayout.TabWidthLogical(cats[i].Name) * dpi;
+            widths[i] = LibraryLayout.TabWidthLogical(Loc.Tr(cats[i].Name)) * dpi;
         var clip = m.Tabs;
         _ctx.PushAxisAlignedClip(
             new Vortice.RawRectF(clip.MinX, clip.MinY, clip.MaxX, clip.MaxY),
@@ -6100,7 +6103,7 @@ internal sealed partial class OverlayWindow : IDisposable
                 DrawLibStar(starBox, true, new Color4(0.95f, 0.68f, 0.12f, 1f), dpi);
             }
             _scratch.Color = on ? theme.ActiveText : theme.TextMuted;
-            _ctx.DrawText(cats[i].Name, ReadoutFormatTab(dpi),
+            _ctx.DrawText(Loc.Tr(cats[i].Name), ReadoutFormatTab(dpi),
                           new Rect(tr.MinX + starW + 4f * dpi, tr.MinY,
                                    tr.MaxX - tr.MinX - starW - 8f * dpi,
                                    tr.MaxY - tr.MinY - 2f * dpi), _scratch);
@@ -6154,7 +6157,7 @@ internal sealed partial class OverlayWindow : IDisposable
                     6f * dpi, 6f * dpi), _scratch);
             }
             _scratch.Color = on ? theme.ActiveBg : theme.Text;
-            _ctx.DrawText(cats[i].Name, ReadoutFormatSmall(dpi),
+            _ctx.DrawText(Loc.Tr(cats[i].Name), ReadoutFormatSmall(dpi),
                           new Rect(item.MinX + 10f * dpi, item.MinY,
                                    item.MaxX - item.MinX - 30f * dpi, item.MaxY - item.MinY), _scratch);
             if (on)
@@ -6190,7 +6193,7 @@ internal sealed partial class OverlayWindow : IDisposable
         _scratch.Color = danger ? new Color4(0.85f, 0.22f, 0.22f, 0.14f) : theme.Hover;
         _ctx.FillRoundedRectangle(rr, _scratch);
         _scratch.Color = danger ? new Color4(0.85f, 0.22f, 0.22f, 1f) : theme.Text;
-        _ctx.DrawText(label, ReadoutFormatSmall(dpi),
+        _ctx.DrawText(Loc.Tr(label), ReadoutFormatSmall(dpi),
                       new Rect(r.MinX + 2f * dpi, r.MinY,
                                r.MaxX - r.MinX - 4f * dpi, r.MaxY - r.MinY), _scratch);
     }
@@ -6241,18 +6244,18 @@ internal sealed partial class OverlayWindow : IDisposable
             if (confirm)
             {
                 _scratch.Color = new Color4(0.85f, 0.22f, 0.22f, 1f);
-                _ctx.DrawText($"再点一次删除「{info.Name}」", ReadoutFormatSmall(dpi),
+                _ctx.DrawText(Loc.T("再点一次删除「{0}」", Loc.Tr(info.Name)), ReadoutFormatSmall(dpi),
                               new Rect(r.MinX + 12f * dpi, r.MinY + 1f * dpi,
                                        textRight - r.MinX - 16f * dpi, 13f * dpi), _scratch);
                 _scratch.Color = theme.TextMuted;
-                _ctx.DrawText($"{info.Count} 个内容会移到「未分类」", ReadoutFormatSmall(dpi),
+                _ctx.DrawText(Loc.T("{0} 个内容会移到「未分类」", info.Count), ReadoutFormatSmall(dpi),
                               new Rect(r.MinX + 12f * dpi, r.MinY + 14f * dpi,
                                        textRight - r.MinX - 16f * dpi, 13f * dpi), _scratch);
             }
             else if (!renaming)
             {
                 _scratch.Color = active || target ? theme.ActiveText : theme.Text;
-                _ctx.DrawText($"{info.Name} · {info.Count}", ReadoutFormatLeft(dpi),
+                _ctx.DrawText(Loc.T("{0} · {1}", Loc.Tr(info.Name), info.Count), ReadoutFormatLeft(dpi),
                               new Rect(r.MinX + 12f * dpi, r.MinY,
                                        MathF.Max(10f, textRight - r.MinX - 12f * dpi),
                                        r.MaxY - r.MinY), _scratch);
@@ -6285,7 +6288,7 @@ internal sealed partial class OverlayWindow : IDisposable
         }
         var add = LibraryLayout.CategoryDrawerRowRect(drawer, dpi, shown);
         _scratch.Color = theme.TextMuted;
-        _ctx.DrawText("＋ 新建分类", ReadoutFormatLeft(dpi),
+        _ctx.DrawText(Loc.Tr("＋ 新建分类"), ReadoutFormatLeft(dpi),
                       new Rect(add.MinX + 12f * dpi, add.MinY, add.MaxX - add.MinX - 24f * dpi,
                                add.MaxY - add.MinY), _scratch);
     }
@@ -6589,7 +6592,7 @@ internal sealed partial class OverlayWindow : IDisposable
                     _ctx.FillRoundedRectangle(new RoundedRectangle(
                         new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 7f * dpi, 7f * dpi), _scratch);
                 }
-                _ctx.DrawText(labels[i], MenuTextFormat(dpi, center: true),
+                _ctx.DrawText(Loc.Tr(labels[i]), MenuTextFormat(dpi, center: true),
                     new Rect(r.MinX + 8f * dpi, r.MinY,
                              r.MaxX - r.MinX - 16f * dpi, r.MaxY - r.MinY),
                     Brush(theme.Text));
@@ -7180,7 +7183,7 @@ internal sealed partial class OverlayWindow : IDisposable
 
         float pad = SelectionHandles.FloatPadLogical * dpi;
         var labelFmt = PanelLabelFormat(dpi);
-        string[] rowLabels = { "字体", "字号", "行距", "背景" };
+        string[] rowLabels = { Loc.Tr("字体"), Loc.Tr("字号"), Loc.Tr("行距"), Loc.Tr("背景") };
         for (int row = 0; row < 4; row++)
         {
             var first = row switch
@@ -7202,24 +7205,26 @@ internal sealed partial class OverlayWindow : IDisposable
             _scratch.Color = active ? th.ActiveBg : th.Hover;
             _ctx.FillRoundedRectangle(new RoundedRectangle(
                 new Vortice.RawRectF(cell.MinX, cell.MinY, cell.MaxX, cell.MaxY), cr, cr), _scratch);
-            _ctx.DrawText(label, fmt,
+            _ctx.DrawText(Loc.Tr(label), fmt,
                 new Rect(cell.MinX, cell.MinY, cell.MaxX - cell.MinX, cell.MaxY - cell.MinY),
                 Brush(active ? th.ActiveText : th.Text));
         }
 
+        float faceChipSize = TextBoxFaces.IsCjkUi && !TextBoxFaces.IsChineseUi ? 11.5f : 13f;
         for (int i = 0; i < TextBoxFaces.Visible.Length; i++)
         {
             var info = TextBoxFaces.Visible[i];
             TextBoxFaces.EnsureBundled(info.Face);      // 格子用字体本身预览，先注册
             var cell = SelectionHandles.FontPanelFaceRect(i, sel, dpi, app.FurnitureViewport);
-            Chip(cell, info.Name, TextBoxFaces.IsFace(box, info.Face),
-                 AiTextFormat(13f * dpi, true, true, false, info.DirectWrite));
+            Chip(cell, info.Name, TextBoxFaces.IsVisibleFace(box, info),
+                 AiTextFormat(faceChipSize * dpi, true, true, false, info.DirectWrite));
         }
-        // 第 6 格：全部系统字体（2026-11-11 用户定）。
+        // 最后一格：全部系统字体（2026-11-11 用户定）。
         {
             var cell = SelectionHandles.FontPanelFaceRect(TextBoxFaces.Visible.Length,
                                                           sel, dpi, app.FurnitureViewport);
-            Chip(cell, "更多…", app.FontListOpen, AiTextFormat(12.5f * dpi, false, true, false));
+            float moreSize = TextBoxFaces.IsCjkUi && !TextBoxFaces.IsChineseUi ? 11f : 12.5f;
+            Chip(cell, "更多…", app.FontListOpen, AiTextFormat(moreSize * dpi, false, true, false));
         }
 
         for (int i = 0; i < SelectionHandles.FontPanelSizeCount
@@ -7285,7 +7290,7 @@ internal sealed partial class OverlayWindow : IDisposable
                     ? new Color4(0.12f, 0.14f, 0.18f, 1f)
                     : new Color4(0.98f, 0.98f, 0.98f, 1f))
                 : th.Text;
-            _ctx.DrawText(TextBoxBackground.Names[i], bgFmt,
+            _ctx.DrawText(Loc.Tr(TextBoxBackground.Names[i]), bgFmt,
                 new Rect(cell.MinX, cell.MinY, cell.MaxX - cell.MinX, cell.MaxY - cell.MinY),
                 Brush(label));
         }
@@ -7374,16 +7379,20 @@ internal sealed partial class OverlayWindow : IDisposable
                                                 foot.MaxX + 2f * dpi, foot.MaxY + 3f * dpi),
                            _scratch);
         var footFmt = AiTextFormat(11.5f * dpi, false, false);
-        string countText = $"共 {entries.Length} 个字体";
+        string countText = Loc.T("共 {0} 个字体", entries.Length);
         float cw = MeasureTextWidth(countText, footFmt);
         _ctx.DrawText(countText, footFmt,
             new Rect(foot.MinX, foot.MinY, cw + 4f * dpi, foot.MaxY - foot.MinY),
             Brush(th.TextMuted));
-        string toggle = app.FontListShowLatin ? "显示西文字体 ✓" : "显示西文字体";
-        _ctx.DrawText(toggle, footFmt,
-            new Rect(foot.MinX + cw + 14f * dpi, foot.MinY,
-                     MeasureTextWidth(toggle, footFmt) + 8f * dpi, foot.MaxY - foot.MinY),
-            Brush(app.FontListShowLatin ? th.ActiveText : th.TextMuted));
+        // 非中文/日/韩界面本来就列本语言字体，不再给「显示西文字体」开关。
+        if (TextBoxFaces.IsCjkUi)
+        {
+            string toggle = Loc.Tr("显示西文字体") + (app.FontListShowLatin ? " ✓" : "");
+            _ctx.DrawText(toggle, footFmt,
+                new Rect(foot.MinX + cw + 14f * dpi, foot.MinY,
+                         MeasureTextWidth(toggle, footFmt) + 8f * dpi, foot.MaxY - foot.MinY),
+                Brush(app.FontListShowLatin ? th.ActiveText : th.TextMuted));
+        }
     }
 
     /// <summary>按宽度截断，超出加省略号（字体名太长时不硬裁）。</summary>
@@ -7826,8 +7835,8 @@ internal sealed partial class OverlayWindow : IDisposable
         if (_rollResultFormat == null || _rollResultFormatPx != px)
         {
             _rollResultFormat?.Dispose();
-            _rollResultFormat = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _rollResultFormat = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
             _rollResultFormat.TextAlignment = TextAlignment.Center;
             _rollResultFormat.ParagraphAlignment = ParagraphAlignment.Center;
             _rollResultFormatPx = px;
@@ -7842,8 +7851,8 @@ internal sealed partial class OverlayWindow : IDisposable
         if (_timerValueFormat == null || _timerValueFormatPx != px)
         {
             _timerValueFormat?.Dispose();
-            _timerValueFormat = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _timerValueFormat = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
             _timerValueFormat.TextAlignment = TextAlignment.Center;
             _timerValueFormat.ParagraphAlignment = ParagraphAlignment.Center;
             _timerValueFormatPx = px;
@@ -7857,8 +7866,8 @@ internal sealed partial class OverlayWindow : IDisposable
         if (_timerBigFormat == null || _timerBigFormatPx != px)
         {
             _timerBigFormat?.Dispose();
-            _timerBigFormat = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                FontWeight.Bold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _timerBigFormat = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.Bold, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
             _timerBigFormat.TextAlignment = TextAlignment.Center;
             _timerBigFormat.ParagraphAlignment = ParagraphAlignment.Center;
             _timerBigFormatPx = px;
@@ -7906,8 +7915,8 @@ internal sealed partial class OverlayWindow : IDisposable
         if (_pptPageFmt == null || _pptPageFmtPx != px)
         {
             _pptPageFmt?.Dispose();
-            _pptPageFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _pptPageFmt = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
             _pptPageFmt.TextAlignment = TextAlignment.Center;
             _pptPageFmt.ParagraphAlignment = ParagraphAlignment.Center;
             _pptPageFmt.WordWrapping = WordWrapping.NoWrap;
@@ -8049,7 +8058,7 @@ internal sealed partial class OverlayWindow : IDisposable
         _scratch.Color = theme.Text;
         // 文案（2026-10-02 第五轮）：入口从"长按"改成"点一下"之后，这句话只说
         // "点它出来的是页码跳转菜单"——用户拍板的短句，指点性质靠"点页码："三个字。
-        _ctx.DrawText("点页码：页码跳转菜单", ReadoutFormatSmall(dpi),
+        _ctx.DrawText(Loc.Tr("点页码：页码跳转菜单"), ReadoutFormatSmall(dpi),
                       new Rect(hint.MinX, hint.MinY, hint.MaxX - hint.MinX, hint.MaxY - hint.MinY),
                       _scratch);
     }
@@ -8061,8 +8070,8 @@ internal sealed partial class OverlayWindow : IDisposable
     private RectF ToastRect(InkEngine app)
     {
         float dpi = app.UiUnit;
-        string text = app.ToastText ?? "";
-        float textW = text.Length * 13f * dpi;       // 中文约 13 逻辑像素/字，提示都很短
+        string text = Loc.Tr(app.ToastText ?? "");
+        float textW = MeasureTextWidth(text, ToastFormat(dpi));
         float maxW = MathF.Max(120f * dpi, Width - 24f * dpi);
         float w = MathF.Min(maxW, MathF.Max(180f * dpi, 28f * dpi + textW));
         float h = 36f * dpi;
@@ -8077,8 +8086,8 @@ internal sealed partial class OverlayWindow : IDisposable
         if (_toastFmt == null || _toastFmtPx != px)
         {
             _toastFmt?.Dispose();
-            _toastFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _toastFmt = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
             _toastFmt.TextAlignment = TextAlignment.Center;
             _toastFmt.ParagraphAlignment = ParagraphAlignment.Center;
             _toastFmtPx = px;
@@ -8098,8 +8107,8 @@ internal sealed partial class OverlayWindow : IDisposable
             if (_menuCenterFmt == null || _menuCenterPx != px)
             {
                 _menuCenterFmt?.Dispose();
-                _menuCenterFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                    FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+                _menuCenterFmt = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                    FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
                 _menuCenterFmt.TextAlignment = TextAlignment.Center;
                 _menuCenterFmt.ParagraphAlignment = ParagraphAlignment.Center;
                 _menuCenterPx = px;
@@ -8109,8 +8118,8 @@ internal sealed partial class OverlayWindow : IDisposable
         if (_menuLeftFmt == null || _menuLeftPx != px)
         {
             _menuLeftFmt?.Dispose();
-            _menuLeftFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _menuLeftFmt = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
             _menuLeftFmt.TextAlignment = TextAlignment.Leading;
             _menuLeftFmt.ParagraphAlignment = ParagraphAlignment.Center;
             _menuLeftPx = px;
@@ -8137,7 +8146,7 @@ internal sealed partial class OverlayWindow : IDisposable
         _ctx.DrawRoundedRectangle(new RoundedRectangle(box, radius, radius), _scratch, 1f * dpi);
 
         _scratch.Color = theme.Text;
-        _ctx.DrawText(app.ToastText, ToastFormat(dpi),
+        _ctx.DrawText(Loc.Tr(app.ToastText), ToastFormat(dpi),
             new Rect(r.MinX + 10f * dpi, r.MinY, r.MaxX - r.MinX - 20f * dpi, r.MaxY - r.MinY),
             _scratch);
     }
@@ -8155,8 +8164,8 @@ internal sealed partial class OverlayWindow : IDisposable
         if (_tipTitleFmt == null || _tipTitleFmtPx != px)
         {
             _tipTitleFmt?.Dispose();
-            _tipTitleFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _tipTitleFmt = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
             _tipTitleFmt.TextAlignment = TextAlignment.Leading;
             _tipTitleFmt.ParagraphAlignment = ParagraphAlignment.Center;
             _tipTitleFmtPx = px;
@@ -8170,8 +8179,8 @@ internal sealed partial class OverlayWindow : IDisposable
         if (_tipNoteFmt == null || _tipNoteFmtPx != px)
         {
             _tipNoteFmt?.Dispose();
-            _tipNoteFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _tipNoteFmt = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
             _tipNoteFmt.TextAlignment = TextAlignment.Leading;
             _tipNoteFmt.ParagraphAlignment = ParagraphAlignment.Center;
             _tipNoteFmtPx = px;
@@ -8191,11 +8200,11 @@ internal sealed partial class OverlayWindow : IDisposable
         var titleFmt = TipTitleFormat(dpi);
         var noteFmt = TipNoteFormat(dpi);
 
-        float titleW = MeasureTextWidth(app.TooltipTitle, titleFmt);
+        float titleW = MeasureTextWidth(Loc.Tr(app.TooltipTitle), titleFmt);
         float keyW = string.IsNullOrEmpty(app.TooltipKey)
             ? 0f : 12f * dpi + MeasureTextWidth(app.TooltipKey, titleFmt);
         float noteW = string.IsNullOrEmpty(app.TooltipNote)
-            ? 0f : MeasureTextWidth(app.TooltipNote, noteFmt);
+            ? 0f : MeasureTextWidth(Loc.Tr(app.TooltipNote), noteFmt);
         float padX = 12f * dpi, padY = 8f * dpi;
         float w = MathF.Max(titleW + keyW, noteW) + padX * 2f;
         float h = (string.IsNullOrEmpty(app.TooltipNote) ? 20f : 36f) * dpi + padY * 2f;
@@ -8229,11 +8238,13 @@ internal sealed partial class OverlayWindow : IDisposable
         var noteFmt = TipNoteFormat(dpi);
         float padX = 12f * dpi, padY = 8f * dpi, lineH = 20f * dpi;
         bool hasNote = !string.IsNullOrEmpty(app.TooltipNote);
+        string title = Loc.Tr(app.TooltipTitle);
+        string note = Loc.Tr(app.TooltipNote);
 
-        float titleW = MeasureTextWidth(app.TooltipTitle, titleFmt);
+        float titleW = MeasureTextWidth(title, titleFmt);
         float titleY = hasNote ? box.MinY + padY : (box.MinY + box.MaxY) * 0.5f - lineH * 0.5f;
         _scratch.Color = theme.Text;
-        _ctx.DrawText(app.TooltipTitle, titleFmt,
+        _ctx.DrawText(title, titleFmt,
                       new Rect(box.MinX + padX, titleY, MathF.Max(1f, titleW + 4f), lineH), _scratch);
         if (!string.IsNullOrEmpty(app.TooltipKey))
         {
@@ -8245,7 +8256,7 @@ internal sealed partial class OverlayWindow : IDisposable
         if (hasNote)
         {
             _scratch.Color = theme.TextMuted;
-            _ctx.DrawText(app.TooltipNote, noteFmt,
+            _ctx.DrawText(note, noteFmt,
                           new Rect(box.MinX + padX, box.MinY + padY + lineH,
                                    box.MaxX - box.MinX - padX * 2f, lineH),
                           _scratch);
@@ -8750,8 +8761,8 @@ internal sealed partial class OverlayWindow : IDisposable
         if (_radialHintFmt == null || _radialHintPx != px)
         {
             _radialHintFmt?.Dispose();
-            _radialHintFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _radialHintFmt = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
             _radialHintFmt.TextAlignment = TextAlignment.Center;
             _radialHintFmt.ParagraphAlignment = ParagraphAlignment.Center;
             _radialHintPx = px;
@@ -9382,8 +9393,8 @@ internal sealed partial class OverlayWindow : IDisposable
     private IDWriteTextFormat CaptureInfoFormat()
     {
         if (_capInfoFmt != null) return _capInfoFmt;
-        _capInfoFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 14f * (Dpi / 96f), "zh-CN");
+        _capInfoFmt = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 14f * (Dpi / 96f), Loc.LocaleName);
         _capInfoFmt.TextAlignment = TextAlignment.Center;
         _capInfoFmt.ParagraphAlignment = ParagraphAlignment.Center;
         return _capInfoFmt;
@@ -9405,8 +9416,8 @@ internal sealed partial class OverlayWindow : IDisposable
         if (_hudFormat == null || _hudFormatPx != px)
         {
             _hudFormat?.Dispose();
-            _hudFormat = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, "zh-CN");
+            _hudFormat = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
             _hudFormatPx = px;
         }
         return _hudFormat;
@@ -9519,8 +9530,8 @@ internal sealed partial class OverlayWindow : IDisposable
     private IDWriteTextFormat TouchHudFormat()
     {
         if (_touchHudFmt != null) return _touchHudFmt;
-        _touchHudFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 13.5f * (Dpi / 96f), "zh-CN");
+        _touchHudFmt = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 13.5f * (Dpi / 96f), Loc.LocaleName);
         _touchHudFmt.TextAlignment = TextAlignment.Leading;
         _touchHudFmt.ParagraphAlignment = ParagraphAlignment.Near;
         _touchHudFmt.WordWrapping = WordWrapping.NoWrap;
@@ -9571,8 +9582,8 @@ internal sealed partial class OverlayWindow : IDisposable
     private IDWriteTextFormat EraserHudFormat()
     {
         if (_eraserHudFmt != null) return _eraserHudFmt;
-        _eraserHudFmt = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
-            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 13.5f * (Dpi / 96f), "zh-CN");
+        _eraserHudFmt = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+            FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 13.5f * (Dpi / 96f), Loc.LocaleName);
         _eraserHudFmt.TextAlignment = TextAlignment.Leading;
         _eraserHudFmt.ParagraphAlignment = ParagraphAlignment.Near;
         _eraserHudFmt.WordWrapping = WordWrapping.NoWrap;

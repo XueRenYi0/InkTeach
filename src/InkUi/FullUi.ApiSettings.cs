@@ -1,5 +1,6 @@
 using System.Numerics;
 using InkEngine;
+using InkLocalization;
 using Vortice.DCommon;
 using Vortice.Direct2D1;
 using Vortice.Mathematics;
@@ -40,6 +41,8 @@ public sealed partial class FullUi
     private string _apiKey = "";
     private string _apiModel = "";
     private string _apiStatus = "";
+    // 状态行是不是错误（以前靠中文“失败/不能”判红，翻译后必然失灵）。
+    private bool _apiStatusError;
     private bool _apiEditingNew;
     private bool _apiFetching;
     private bool _apiDeleteConfirm;
@@ -149,7 +152,7 @@ public sealed partial class FullUi
     {
         if (_host?.AiApi == null)
         {
-            _apiStatus = "AI 服务组件未接入";
+            _apiStatus = "AI 服务组件未接入"; _apiStatusError = true;
             Invalidate();
             return;
         }
@@ -164,7 +167,7 @@ public sealed partial class FullUi
         _apiModelMenuOpen = false;
         _apiModelScroll = 0;
         _apiDeleteConfirm = false;
-        _apiStatus = "";
+        _apiStatus = ""; _apiStatusError = false;
         _apiModels.Clear();
         _apiFetchTask = null;
         _apiFetching = false;
@@ -328,7 +331,7 @@ public sealed partial class FullUi
             _apiBase = "";
             _apiKey = "";
             _apiModel = "";
-            _apiStatus = "填写服务地址、Key、模型后保存";
+            _apiStatus = "填写服务地址、Key、模型后保存"; _apiStatusError = false;
         }
         else
         {
@@ -339,7 +342,7 @@ public sealed partial class FullUi
             _apiKey = p.Key;
             _apiModel = p.Model;
             _apiDeleteConfirm = false;
-            _apiStatus = "";
+            _apiStatus = ""; _apiStatusError = false;
         }
         Invalidate();
     }
@@ -350,7 +353,7 @@ public sealed partial class FullUi
         _apiModelMenuOpen = false;
         if (index < 0 || index >= _apiModels.Count) return;
         _apiModel = _apiModels[index];
-        _apiStatus = "";
+        _apiStatus = ""; _apiStatusError = false;
         Invalidate();
     }
 
@@ -402,7 +405,7 @@ public sealed partial class FullUi
         var input = _host?.TextInput;
         if (input == null)
         {
-            _apiStatus = "当前版本不支持页内文字输入";
+            _apiStatus = "当前版本不支持页内文字输入"; _apiStatusError = true;
             Invalidate();
             return;
         }
@@ -412,7 +415,7 @@ public sealed partial class FullUi
         _apiProviderMenuOpen = false;
         _apiModelMenuOpen = false;
         _apiDeleteConfirm = false;
-        _apiStatus = "";
+        _apiStatus = ""; _apiStatusError = false;
 
         RectF field = ApiFieldRect(ApiFieldRow(hit));
         var editRect = new RectF
@@ -440,7 +443,7 @@ public sealed partial class FullUi
             OnCommit = text =>
             {
                 SetApiFieldValue(hit, text.Trim());
-                _apiStatus = "";
+                _apiStatus = ""; _apiStatusError = false;
                 Invalidate();
             },
             OnCancel = () => Invalidate(),
@@ -454,14 +457,14 @@ public sealed partial class FullUi
         if (_apiFetching || _host?.AiApi == null) return;
         if (string.IsNullOrWhiteSpace(_apiBase) || string.IsNullOrWhiteSpace(_apiKey))
         {
-            _apiStatus = "先填服务地址和 API Key";
+            _apiStatus = "先填服务地址和 API Key"; _apiStatusError = true;
             Invalidate();
             return;
         }
         _host.TextInput?.Commit();
         _apiFetching = true;
         _apiModelMenuOpen = false;
-        _apiStatus = "正在获取模型…";
+        _apiStatus = "正在获取模型…"; _apiStatusError = false;
         _apiFetchTask = _host.AiApi.FetchModelsAsync(_apiBase, _apiKey);
         Invalidate();
     }
@@ -490,18 +493,18 @@ public sealed partial class FullUi
                         at < 0 ? 0 : at - ApiModelVisibleCount + 1,
                         0, Math.Max(0, _apiModels.Count - ApiModelVisibleCount));
                     _apiModelMenuOpen = true;   // 获取完直接展开，用户能看到全部可选模型
-                    _apiStatus = $"已获取 {_apiModels.Count} 个模型，请在下拉里选择";
+                    _apiStatus = Loc.T("已获取 {0} 个模型，请在下拉里选择", _apiModels.Count); _apiStatusError = false;
                 }
                 else
                 {
-                    _apiStatus = "已获取 0 个模型";
+                    _apiStatus = "已获取 0 个模型"; _apiStatusError = true;
                 }
             }
-            else _apiStatus = "获取失败：" + (r.Error ?? "未知错误");
+            else { _apiStatus = Loc.T("获取失败：{0}", r.Error ?? "未知错误"); _apiStatusError = true; }
         }
         catch (Exception ex)
         {
-            _apiStatus = "获取失败：" + ex.Message;
+            _apiStatus = Loc.T("获取失败：{0}", ex.Message); _apiStatusError = true;
         }
         Invalidate();
     }
@@ -520,7 +523,7 @@ public sealed partial class FullUi
 
     private void SaveApi()
     {
-        if (_host?.AiApi == null) { _apiStatus = "当前版本不支持保存"; Invalidate(); return; }
+        if (_host?.AiApi == null) { _apiStatus = "当前版本不支持保存"; _apiStatusError = true; Invalidate(); return; }
         _host.TextInput?.Commit();
         bool ok = _host.AiApi.Save(new AiApiSaveRequest
         {
@@ -531,11 +534,11 @@ public sealed partial class FullUi
             Model = _apiModel,
         }, out string error, out string activeId);
 
-        if (!ok) { _apiStatus = error; Invalidate(); return; }
+        if (!ok) { _apiStatus = error; _apiStatusError = true; Invalidate(); return; }
         _apiSelectedId = activeId;
         _apiEditingNew = false;
         _apiDeleteConfirm = false;
-        _apiStatus = "已保存，下次识别生效";
+        _apiStatus = "已保存，下次识别生效"; _apiStatusError = false;
         _apiSnapshot = _host.AiApi.Load();
         ApplyApiProvider(_apiSelectedId);
         Invalidate();
@@ -545,21 +548,21 @@ public sealed partial class FullUi
     {
         if (_host?.AiApi == null) return;
         var p = ApiSelectedProvider();
-        if (p == null || p.Builtin) { _apiStatus = "预置服务商不能删除"; Invalidate(); return; }
+        if (p == null || p.Builtin) { _apiStatus = "预置服务商不能删除"; _apiStatusError = true; Invalidate(); return; }
         if (!_apiDeleteConfirm)
         {
             _apiDeleteConfirm = true;
-            _apiStatus = $"再点一次删除「{p.Name}」";
+            _apiStatus = Loc.T("再点一次删除「{0}」", p.Name); _apiStatusError = true;
             Invalidate();
             return;
         }
         _apiDeleteConfirm = false;
         bool ok = _host.AiApi.Delete(p.Id, out string error);
-        if (!ok) { _apiStatus = error; Invalidate(); return; }
+        if (!ok) { _apiStatus = error; _apiStatusError = true; Invalidate(); return; }
         _apiSnapshot = _host.AiApi.Load();
         _apiSelectedId = _apiSnapshot?.ActiveId ?? "";
         ApplyApiProvider(_apiSelectedId);
-        _apiStatus = "已删除";
+        _apiStatus = "已删除"; _apiStatusError = false;
         Invalidate();
     }
 
@@ -583,7 +586,7 @@ public sealed partial class FullUi
         DrawApiButton(ctx, ApiSideRect(3), _apiFetching ? "获取中…" : "获取模型", false, true, ApiHitFetch);
 
         string status = _apiStatus ?? "";
-        Color4 statusCol = status.Contains("失败") || status.Contains("不能") || status.Contains("删除失败")
+        Color4 statusCol = _apiStatusError
             ? new Color4(0.85f, 0.22f, 0.22f, 1f)
             : MutedCol;
         if (!string.IsNullOrEmpty(status))

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
+using InkLocalization;
 using SkiaSharp;
 using Vortice.Mathematics;
 
@@ -316,7 +317,8 @@ internal static class PlotRenderer
                     Color = new SKColor(92, 96, 104), IsAntialias = true,
                     TextSize = 18f, Typeface = Face,
                 };
-                canvas.DrawText("参数：" + string.Join("，", parts), left, 64, paramPaint);
+                string sep = Loc.CurrentCode == Loc.SourceCode ? "，" : ", ";
+            canvas.DrawText(Loc.T("参数：{0}", string.Join(sep, parts)), left, 64, paramPaint);
             }
             canvas.Restore();
         }

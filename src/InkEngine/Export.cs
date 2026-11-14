@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text;
+using InkLocalization;
 
 namespace InkEngine;
 
@@ -24,11 +25,11 @@ internal static class ExportFormats
     public const int Count = 4;
 
     /// <summary>给系统对话框的过滤器串（双 `\0` 结尾，两两一组）。</summary>
-    public const string Filter =
-        "PNG 图片（透明底 · 贴课件首选，无损）\0*.png\0"
-      + "JPEG 图片（白底 · 文件最小，好发微信邮件）\0*.jpg;*.jpeg\0"
-      + "PNG 图片（白底 · 无损，深色模板上不露底）\0*.png\0"
-      + "BMP 图片（白底 · 老软件也能打开，文件最大）\0*.bmp\0\0";
+    public static string Filter =>
+        Loc.Tr("PNG 图片（透明底 · 贴课件首选，无损）") + "\0*.png\0"
+      + Loc.Tr("JPEG 图片（白底 · 文件最小，好发微信邮件）") + "\0*.jpg;*.jpeg\0"
+      + Loc.Tr("PNG 图片（白底 · 无损，深色模板上不露底）") + "\0*.png\0"
+      + Loc.Tr("BMP 图片（白底 · 老软件也能打开，文件最大）") + "\0*.bmp\0\0";
 
     /// <summary>这种选择默认用什么扩展名（写进建议文件名、也交给对话框补后缀）。</summary>
     public static string ExtensionFor(int filterIndex) => filterIndex switch
@@ -901,8 +902,8 @@ internal static class ExportFileDialog
     // 和上面那条走**完全同一套**看门线程 + CBT 居中 + 焦点借用（由调用方包住），
     // 不重新发明；区别只在过滤器、标题、默认扩展名，以及"另存为"换成"打开"。
 
-    private const string InkFilter = "InkTeach 板书 (*.inkb)\0*.inkb\0\0";
-    private const string ZipFilter = "日志压缩包 (*.zip)\0*.zip\0\0";
+    private static string InkFilter => Loc.Tr("InkTeach 板书 (*.inkb)") + "\0*.inkb\0\0";
+    private static string ZipFilter => Loc.Tr("日志压缩包 (*.zip)") + "\0*.zip\0\0";
     private const int OFN_FILEMUSTEXIST = 0x00001000;
 
     /// <summary>"导出日志"：弹另存为（zip）。返回 null = 取消。</summary>
@@ -919,7 +920,7 @@ internal static class ExportFileDialog
             lpstrFile = suggestedName + new string('\0', Math.Max(0, 512 - suggestedName.Length)),
             nMaxFile = 512,
             lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
-            lpstrTitle = "导出日志",
+            lpstrTitle = Loc.Tr("导出日志"),
             lpstrDefExt = "zip",
             Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
         };
@@ -931,7 +932,7 @@ internal static class ExportFileDialog
         return string.IsNullOrEmpty(path) ? null : path;
     }
 
-    private const string BackupFilter = "InkTeach 备份包 (*.zip)\0*.zip\0\0";
+    private static string BackupFilter => Loc.Tr("InkTeach 备份包 (*.zip)") + "\0*.zip\0\0";
 
     /// <summary>「备份全部数据」：弹另存为（.zip）。返回 null = 取消。</summary>
     public static string AskForBackupSave(IntPtr owner, string suggestedName, string initialDir)
@@ -947,7 +948,7 @@ internal static class ExportFileDialog
             lpstrFile = suggestedName + new string('\0', Math.Max(0, 512 - suggestedName.Length)),
             nMaxFile = 512,
             lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
-            lpstrTitle = "备份全部数据",
+            lpstrTitle = Loc.Tr("备份全部数据"),
             lpstrDefExt = "zip",
             Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
         };
@@ -973,7 +974,7 @@ internal static class ExportFileDialog
             lpstrFile = new string('\0', 512),
             nMaxFile = 512,
             lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
-            lpstrTitle = "从备份恢复",
+            lpstrTitle = Loc.Tr("从备份恢复"),
             lpstrDefExt = "zip",
             Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST,
         };
@@ -992,22 +993,22 @@ internal static class ExportFileDialog
     /// 说明：**"分工"不在对话框里做**——对话框只负责把路径拿回来，
     /// 谁负责什么由调用方按扩展名决定（图片/PDF 见 DocPages，PPT 见 PptLaunch）。
     /// </summary>
-    internal const string DocumentFilter =
-        "图片、PDF 与 PPT\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.pdf;" + PptLaunch.FilterSpec + "\0" +
-        "图片 (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff)\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff\0" +
-        "PDF 文档 (*.pdf)\0*.pdf\0" +
-        "PPT 演示文稿 (" + PptLaunch.FilterSpec + ")\0" + PptLaunch.FilterSpec + "\0" +
-        "所有文件 (*.*)\0*.*\0\0";
+    internal static string DocumentFilter =>
+        Loc.Tr("图片、PDF 与 PPT") + "\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.pdf;" + PptLaunch.FilterSpec + "\0" +
+        Loc.Tr("图片") + " (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff)\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff\0" +
+        Loc.Tr("PDF 文档 (*.pdf)") + "\0*.pdf\0" +
+        Loc.Tr("PPT 演示文稿") + " (" + PptLaunch.FilterSpec + ")\0" + PptLaunch.FilterSpec + "\0" +
+        Loc.Tr("所有文件 (*.*)") + "\0*.*\0\0";
 
     /// <summary>
     /// 「打开…」（2026-10-16 合并入口：原「打开墨迹」＋「打开文档」）的过滤器：
     /// 在 <see cref="DocumentFilter"/> 前**再加一条混合项和一条纯板书项（含 *.inkb）**；
     /// "分工"仍不在对话框里做——调用方按扩展名分派。
     /// </summary>
-    internal const string OpenAnyFilter =
-        "板书、图片、PDF 与 PPT\0*.inkb;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.pdf;" +
+    internal static string OpenAnyFilter =>
+        Loc.Tr("板书、图片、PDF 与 PPT") + "\0*.inkb;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.pdf;" +
         PptLaunch.FilterSpec + "\0" +
-        "板书文件 (*.inkb)\0*.inkb\0" +
+        Loc.Tr("板书文件 (*.inkb)") + "\0*.inkb\0" +
         DocumentFilter;
 
     [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -1027,7 +1028,7 @@ internal static class ExportFileDialog
             lpstrFile = suggestedName + new string('\0', Math.Max(0, 512 - suggestedName.Length)),
             nMaxFile = 512,
             lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
-            lpstrTitle = "保存墨迹",
+            lpstrTitle = Loc.Tr("保存墨迹"),
             lpstrDefExt = "inkb",
             Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
         };
@@ -1054,7 +1055,7 @@ internal static class ExportFileDialog
             lpstrFile = new string('\0', 512),
             nMaxFile = 512,
             lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
-            lpstrTitle = "打开墨迹",
+            lpstrTitle = Loc.Tr("打开墨迹"),
             lpstrDefExt = "inkb",
             Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST,
         };
@@ -1071,10 +1072,10 @@ internal static class ExportFileDialog
     /// 类型栏三条——图片 JPG（白底，默认，好发微信）/ 图片 PNG（白底）/ 板书文件 .inkb。
     /// **按最终扩展名分派**（调用方看返回路径的扩展名决定存板书还是出图）。
     /// </summary>
-    private const string BoardSaveFilter =
-        "图片 JPG（白底 · 好发微信）\0*.jpg;*.jpeg\0"
-      + "图片 PNG（白底 · 无损）\0*.png\0"
-      + "板书文件 (*.inkb · 以后可再打开)\0*.inkb\0\0";
+    private static string BoardSaveFilter =>
+        Loc.Tr("图片 JPG（白底 · 好发微信）") + "\0*.jpg;*.jpeg\0"
+      + Loc.Tr("图片 PNG（白底 · 无损）") + "\0*.png\0"
+      + Loc.Tr("板书文件 (*.inkb · 以后可再打开)") + "\0*.inkb\0\0";
 
     /// <summary>"保存…"：弹另存为。返回 null = 取消。</summary>
     public static string AskForBoardSave(IntPtr owner, string suggestedName, string initialDir)
@@ -1090,7 +1091,7 @@ internal static class ExportFileDialog
             lpstrFile = suggestedName + new string('\0', Math.Max(0, 512 - suggestedName.Length)),
             nMaxFile = 512,
             lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
-            lpstrTitle = "保存（板书 / 图片）",
+            lpstrTitle = Loc.Tr("保存（板书 / 图片）"),
             lpstrDefExt = "jpg",
             Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
         };
@@ -1131,7 +1132,7 @@ internal static class ExportFileDialog
             lpstrFile = new string('\0', cap),
             nMaxFile = cap,
             lpstrInitialDir = string.IsNullOrEmpty(initialDir) ? null : initialDir,
-            lpstrTitle = title ?? "打开文档（图片可多选；PPT 直接放映）",
+            lpstrTitle = title ?? Loc.Tr("打开文档（图片可多选；PPT 直接放映）"),
             lpstrDefExt = "pdf",
             Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_ALLOWMULTISELECT,
         };

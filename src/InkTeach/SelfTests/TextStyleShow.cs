@@ -43,7 +43,8 @@ internal sealed partial class App
         box.InvalidateLayout();
         s.SyncTextBoxBounds();
 
-        SetSelectedTextFaceFromUi(1);      // 楷体
+        var firstFace = TextBoxFaces.Visible[0];
+        SetSelectedTextFaceFromUi(0);      // 当前语言第一档（中文=雅黑；英文=Segoe UI）
         SetSelectedTextSpacingFromUi(1.8f);
         Tool = Tool.Marquee;
         SelPanelOpen = SelPanel.FontSize;
@@ -74,7 +75,11 @@ internal sealed partial class App
             {
                 if (st.Kind != StrokeKind.TextBox || st.TextBox == null) continue;
                 var b = st.TextBox;
-                saved = b.Face == TextBoxFace.KaiTi
+                bool faceOk = b.Face == firstFace.Face
+                              && (firstFace.Face != TextBoxFace.Custom
+                                  || string.Equals(b.FaceName, firstFace.DirectWrite,
+                                                   System.StringComparison.OrdinalIgnoreCase));
+                saved = faceOk
                         && MathF.Abs(b.LineSpacing - 1.8f) < 0.01f
                         && b.LineColors.Count == 2
                         && b.Paper;
@@ -87,5 +92,34 @@ internal sealed partial class App
                           $"存盘往返={(saved ? "OK" : "FAIL")}");
         Console.WriteLine($"写出：{outPath}");
         ExitCode = shot && saved && hit ? 0 : 1;
+    }
+
+    /// <summary>出图：选中文本框 → 字体快捷格 +「更多…」字体下拉（按当前语言列字体）。</summary>
+    private void FontListShow(string outPath)
+    {
+        SetUiFactory(() => new InkUi.FullUi());
+        SettleFrames(200);
+        PassThrough = false;
+        BoardOn = true;
+        Doc.Clear();
+        Doc.ClearHistory();
+        ShowHud = false;
+
+        InsertPlainTextBoxForTest("Aa Bb Cc 123");
+        Tool = Tool.Marquee;
+        SelPanelOpen = SelPanel.FontSize;
+        SettleFrames(120);
+        OpenFontList();
+        SettleFrames(300);
+
+        var b = LiveSelectionFrame.CanvasAabb;
+        var bounds = new RectF
+        {
+            MinX = b.MinX - 520f, MinY = b.MinY - 520f,
+            MaxX = b.MaxX + 900f, MaxY = b.MaxY + 520f,
+        };
+        bool shot = OffscreenFloatingShot(outPath, bounds);
+        Console.WriteLine($"字体列表：{FontListEntries.Length} 个；写出={shot} {outPath}");
+        ExitCode = shot ? 0 : 1;
     }
 }

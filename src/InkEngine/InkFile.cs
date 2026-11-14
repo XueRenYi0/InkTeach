@@ -1,3 +1,5 @@
+using InkLocalization;
+
 namespace InkEngine;
 
 /// <summary>
@@ -160,7 +162,7 @@ public partial class InkEngine
         {
             var blob = InkSerializer.Save(Doc);
             InkFileStore.WriteAtomic(path, blob);
-            SetInkStatus($"已保存 {Path.GetFileName(path)}（{Doc.Strokes.Count} 个对象）");
+            SetInkStatus(Loc.T("已保存 {0}（{1} 个对象）", Path.GetFileName(path), Doc.Strokes.Count));
             return true;
         }
         catch (Exception ex) { SetInkStatus("保存失败：" + ex.Message); return false; }
@@ -232,7 +234,7 @@ public partial class InkEngine
         _pageScroll.Clear();
         Doc.InvalidateAll();
         _dirty = true;
-        SetInkStatus($"已打开 {Path.GetFileName(path)}（{loaded.Count} 个对象；{backupNote}）");
+        SetInkStatus(Loc.T("已打开 {0}（{1} 个对象；{2}）", Path.GetFileName(path), loaded.Count, backupNote));
         return true;
     }
 
@@ -263,7 +265,7 @@ public partial class InkEngine
         box = box.Inflate(4f * DpiScale);
         int w = Math.Max(1, (int)MathF.Ceiling(box.MaxX - box.MinX));
         int h = Math.Max(1, (int)MathF.Ceiling(box.MaxY - box.MinY));
-        if ((long)w * h > 32_000_000) { SetInkStatus($"板书太大（{w}×{h}），存不下"); return false; }
+        if ((long)w * h > 32_000_000) { SetInkStatus(Loc.T("板书太大（{0}×{1}），存不下", w, h)); return false; }
         if (_windows.Count == 0) { SetInkStatus("没有可用窗口，存不了"); return false; }
 
         if (path == null)
@@ -293,7 +295,7 @@ public partial class InkEngine
             SetInkStatus("保存图片失败（详见控制台）");
             return false;
         }
-        SetInkStatus($"已保存图片 {Path.GetFileName(path)}（{w}×{h}）");
+        SetInkStatus(Loc.T("已保存图片 {0}（{1}×{2}）", Path.GetFileName(path), w, h));
         return true;
     }
 

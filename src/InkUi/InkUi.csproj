@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\InkEngine\InkEngine.csproj" />
+    <ProjectReference Include="..\InkLocalization\InkLocalization.csproj" />
   </ItemGroup>
 
   <!-- 开发期宿主（InkTeach）的自检要能看到界面的内部状态：格子矩形、展开状态。

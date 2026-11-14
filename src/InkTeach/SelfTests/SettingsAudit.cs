@@ -9,6 +9,7 @@
 using System.Numerics;
 using System.Reflection;
 using InkEngine;
+using InkLocalization;
 using InkUi;
 using Vortice.DCommon;
 using Vortice.Direct2D1;
@@ -317,7 +318,9 @@ internal static class SettingsAudit
             Check("AI 服务保存", ui.ApiStatusForTest.Contains("已保存"), ui.ApiStatusForTest);
             ui.ApiClickForTest(404);            // 获取模型
             ui.PrepareFrame();
-            Check("AI 服务获取模型", ui.ApiStatusForTest.Contains("已获取"), ui.ApiStatusForTest);
+            Check("AI 服务获取模型",
+                  ui.ApiStatusForTest == Loc.T("已获取 {0} 个模型，请在下拉里选择", 2),
+                  ui.ApiStatusForTest);
             Check("获取模型后自动展开下拉",
                   ui.ApiModelMenuOpenForTest && ui.ApiModelCountForTest == 2,
                   $"open={ui.ApiModelMenuOpenForTest} models={ui.ApiModelCountForTest}");

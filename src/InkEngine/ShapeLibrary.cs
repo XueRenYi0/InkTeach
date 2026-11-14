@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using InkLocalization;
 
 namespace InkEngine;
 
@@ -125,7 +126,11 @@ internal static class ShapeLibrary
         var cat = new Category
         {
             Id = "cat_" + Guid.NewGuid().ToString("N")[..8],
-            Name = string.IsNullOrWhiteSpace(name) ? $"第{ChineseNumber(order)}类" : Sanitize(name.Trim()),
+            Name = string.IsNullOrWhiteSpace(name)
+                ? (Loc.CurrentCode == Loc.SourceCode
+                    ? $"第{ChineseNumber(order)}类"
+                    : Loc.T("第{0}类", order))
+                : Sanitize(name.Trim()),
             Order = order,
             Pinned = false,
         };

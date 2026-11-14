@@ -692,6 +692,10 @@ public interface IEngineCommands
 
     void Restart();
 
+    /// <summary>切换语言后重启：**保留当前板书**（先写会话暂存，新进程读回），
+    /// 和“重启软件”那条“不恢复本次板书”的语义不同。</summary>
+    void RestartForLanguage();
+
     void Quit();
 
     /// <summary>

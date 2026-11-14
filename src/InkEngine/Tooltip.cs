@@ -1,4 +1,5 @@
 using System.Numerics;
+using InkLocalization;
 
 namespace InkEngine;
 
@@ -221,5 +222,24 @@ public partial class InkEngine
             SelBarButton.More => ("更多", null, "锁定 / 层级 / 保存 / 翻转 / 收藏"),
             _ => default,
         };
+    }
+
+    /// <summary>语言审计用：把引擎侧提示过一遍 `Loc.Tr`（配合 INKTEACH_LOC_AUDIT）。</summary>
+    internal void AuditEngineTips()
+    {
+        void Probe(string s)
+        {
+            if (!string.IsNullOrEmpty(s)) Loc.Tr(s);
+        }
+        for (int i = 0; i < 5; i++)
+        {
+            var (title, note) = PptMenuTip(i);
+            Probe(title); Probe(note);
+        }
+        foreach (SelBarButton b in Enum.GetValues<SelBarButton>())
+        {
+            var (title, key, note) = BarButtonTip(b);
+            Probe(title); Probe(key); Probe(note);
+        }
     }
 }

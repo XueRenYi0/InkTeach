@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    多语言/本地化层（与 UI 框架、引擎渲染都解耦）。
+
+    为什么单独一个工程，而不是塞进 InkEngine：
+      · 引擎、界面、安装器/宿主都要读同一份语言表；
+      · 语言文件按语言/领域分目录（Locales/<code>/*.json），
+        以后加 help/dialogs/errors 只加 JSON，不改代码；
+      · AI 维护时，找文案只需看 Locales，不用在几万行的 UI 文件里翻。
+
+    AOT 约束：不依赖 satellite assemblies / .resx / 反射；
+    所有 JSON 作为 EmbeddedResource 打进程序集，用 GetManifestResourceStream 读取。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>InkLocalization</AssemblyName>
+    <RootNamespace>InkLocalization</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Locales\**\*.json" />
+  </ItemGroup>
+
+</Project>

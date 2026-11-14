@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using InkLocalization;
 using Vortice;
 using Vortice.Direct2D1;
 using Vortice.DirectWrite;
@@ -569,9 +570,9 @@ internal sealed partial class OverlayWindow
         var key = (Px: kpx, Bold: bold);
         if (!_winFormats.TryGetValue(key, out var f))
         {
-            f = Gfx.WriteFactory.CreateTextFormat("Microsoft YaHei UI", null,
+            f = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
                 bold ? FontWeight.Bold : FontWeight.SemiBold,
-                FontStyle.Normal, FontStretch.Normal, kpx, "zh-CN");
+                FontStyle.Normal, FontStretch.Normal, kpx, Loc.LocaleName);
             f.TextAlignment = TextAlignment.Center;
             f.ParagraphAlignment = ParagraphAlignment.Center;
             _winFormats[key] = f;

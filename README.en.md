@@ -379,6 +379,19 @@ approach fits, we align with it instead of reinventing it:
 > + gen-2 GC, not the tile cache), mean work frame ~5 ms. Full data:
 > `reports/性能数据审计-20261110.md` (Chinese).
 
+### Languages
+
+- Installer/app support a **fixed set of 10**: Simplified Chinese / English / Japanese / Korean /
+  German / French / Spanish / Brazilian Portuguese / Russian / Italian. No new languages are
+  planned; the focus is completing these 10. In the app: **Settings → General → Language**;
+  pick from the dropdown, then click **Restart to apply**. CLI override: `--lang en`,
+  `--lang ja`, etc.
+- The first pass covers the main toolbar, More, Settings, Help and file dialogs.
+  All 10 locales now have the same 523-key table; the next step is native review and
+  real font/layout validation. RTL (Arabic/Hebrew) and complex scripts are not included.
+  Locale files live in `src/InkLocalization/Locales/<code>/` and are split by domain;
+  new UI text should go through `Loc`, not into `FullUi.cs` / `Engine.cs`.
+
 ---
 
 ## Lightweight: Windows 10 / 11, no .NET

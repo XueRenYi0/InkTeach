@@ -133,17 +133,23 @@ public sealed partial class FullUi
             {
                 // 快捷键：宽度够就两列；窄屏改一列，内容在面板里滚动。
                 bool one = w < 620f;
-                int[] n = { 3, 6, 7, 3, 2 };
-                float GroupH(int count) => 26f + count * 28f;
+                var groups = HelpShortcutGroups();
+                float GroupH((string Label, string Key)[] rows)
+                {
+                    float h = 26f;
+                    foreach (var row in rows)
+                        h += HelpShortcutRowH(row.Label, w);
+                    return h;
+                }
                 if (one)
                 {
                     float h = 0f;
-                    for (int i = 0; i < n.Length; i++)
-                        h += GroupH(n[i]) + (i + 1 < n.Length ? 12f : 0f);
+                    for (int i = 0; i < groups.Length; i++)
+                        h += GroupH(groups[i]) + (i + 1 < groups.Length ? 12f : 0f);
                     return h + 24f;
                 }
-                float left = GroupH(n[0]) + 12f + GroupH(n[1]);
-                float right = GroupH(n[2]) + 12f + GroupH(n[3]) + 12f + GroupH(n[4]);
+                float left = GroupH(groups[0]) + 12f + GroupH(groups[1]);
+                float right = GroupH(groups[2]) + 12f + GroupH(groups[3]) + 12f + GroupH(groups[4]);
                 return MathF.Max(left, right) + 24f;
             }
         }
@@ -359,15 +365,16 @@ public sealed partial class FullUi
         return string.IsNullOrEmpty(k) ? "未绑定" : k;
     }
 
-    private void DrawHelpShortcuts(ID2D1DeviceContext ctx, in RectF content)
+    /// <summary>快捷键页的五组行（绘制和算高度共用；长语言折行时高度才准）。</summary>
+    private (string Label, string Key)[][] HelpShortcutGroups() => new[]
     {
-        (string Label, string Key)[] global =
+        new[]
         {
             ("穿透 / 拿回", HelpKey(KeyAction.TogglePassThrough)),
             ("退出软件", HelpKey(KeyAction.Quit)),
             ("呼出轮盘", HelpKey(KeyAction.RadialPalette)),
-        };
-        (string Label, string Key)[] tools =
+        },
+        new[]
         {
             ("笔", HelpKey(KeyAction.ToolPen)),
             ("荧光笔", HelpKey(KeyAction.ToolHighlighter)),
@@ -375,8 +382,8 @@ public sealed partial class FullUi
             ("橡皮", HelpKey(KeyAction.ToolEraser)),
             ("选择", HelpKey(KeyAction.ToolMarquee)),
             ("截图", HelpKey(KeyAction.ToolCapture)),
-        };
-        (string Label, string Key)[] edit =
+        },
+        new[]
         {
             ("撤销 / 重做", $"{HelpKey(KeyAction.Undo)} / {HelpKey(KeyAction.Redo)}"),
             ("全选", HelpKey(KeyAction.SelectAll)),
@@ -385,18 +392,33 @@ public sealed partial class FullUi
             ("取消", HelpKey(KeyAction.CancelSelection)),
             ("放大 / 缩小", $"{HelpKey(KeyAction.ScaleUp)} / {HelpKey(KeyAction.ScaleDown)}"),
             ("清空当前板书", HelpKey(KeyAction.Clear)),
-        };
-        (string Label, string Key)[] board =
+        },
+        new[]
         {
             ("白板开关", HelpKey(KeyAction.ToggleBoard)),
             ("白板 / 文档翻页", $"{HelpKey(KeyAction.FlipPageUp)} / {HelpKey(KeyAction.FlipPageDown)}"),
             ("PPT 翻页", $"{HelpKey(KeyAction.FlipPageUp)} / {HelpKey(KeyAction.FlipPageDown)} / ←→"),
-        };
-        (string Label, string Key)[] help =
+        },
+        new[]
         {
             ("使用说明", "F1"),
             ("关闭说明", "Esc"),
-        };
+        },
+    };
+
+    /// <summary>一行快捷键的高度：标签折成两行时跟着长高（德语/俄语常见）。</summary>
+    private float HelpShortcutRowH(string label, float groupW)
+        => MathF.Max(28f,
+                     _widgets.MeasureWrappedHeight(label, groupW * 0.40f - 4f, HelpBodyFont) + 6f);
+
+    private void DrawHelpShortcuts(ID2D1DeviceContext ctx, in RectF content)
+    {
+        var groups = HelpShortcutGroups();
+        var global = groups[0];
+        var tools = groups[1];
+        var edit = groups[2];
+        var board = groups[3];
+        var help = groups[4];
 
         bool oneCol = (content.MaxX - content.MinX) < 620f;
         float gap = 32f;
@@ -441,13 +463,14 @@ public sealed partial class FullUi
         float rowY = y + 26f;
         foreach (var row in rows)
         {
+            float h = HelpShortcutRowH(row.Label, w);
             _widgets.Text(ctx, row.Label,
-                          new RectF { MinX = x, MinY = rowY, MaxX = x + w * 0.40f, MaxY = rowY + 27f },
+                          new RectF { MinX = x, MinY = rowY, MaxX = x + w * 0.40f, MaxY = rowY + h },
                           HelpBodyFont, Brush(ctx, InkCol), center: false);
             _widgets.Text(ctx, row.Key,
-                          new RectF { MinX = x + w * 0.38f, MinY = rowY, MaxX = x + w, MaxY = rowY + 27f },
+                          new RectF { MinX = x + w * 0.38f, MinY = rowY, MaxX = x + w, MaxY = rowY + h },
                           HelpKeyFont, Brush(ctx, InkCol));
-            rowY += 28f;
+            rowY += h;
         }
         return rowY;
     }
