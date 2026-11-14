@@ -23,6 +23,18 @@
 
 ---
 
+## 如果 Cloudflare 账号找不到了（2026-11-14 实查）
+
+- 域名 `inkteach.com` 的注册商是 **阿里云（万网）**，NS 在 Cloudflare。
+- 当前能登录的 Cloudflare 账号是 `Xuerenyi1993@gmail.com`，但该账号 **名下没有
+  `inkteach.com`**（API 查 zones 返回空）；域名在另一个 Cloudflare 账号里。
+- 因此不必强求找回 Cloudflare 账号：直接在 **阿里云域名控制台** 把 NS 改成
+  阿里云 DNS（`ns1.alidns.com` / `ns2.alidns.com`），再在阿里云 DNS 里加
+  `www` CNAME + 根域 A 记录指到 GitHub Pages 即可。
+- 当前公开 DNS 没有看到 MX / TXT 记录，常见子域也没有 A/CNAME；历史上 2020–2021
+  的 cPanel/mail 证书属于前一个域名持有人，与现在无关。改 NS 前仍建议在阿里云
+  控制台确认没有邮件/其他业务记录。
+
 ## 操作步骤
 
 ### 1. 先释放旧域名
