@@ -48,10 +48,15 @@ try {
                 $last = [datetime]::ParseExact($j.last, "yyyy-MM-dd", $null)
             }
             [pscustomobject]@{
-                Ver   = [string]$j.ver
-                Last  = $last
-                First = [string]$j.first
-                Model = [string]$j.model
+                Ver     = [string]$j.ver
+                Last    = $last
+                First   = [string]$j.first
+                Model   = [string]$j.model
+                Lang    = [string]$j.lang
+                Region  = [string]$j.region
+                Fps     = if ($null -ne $j.fps) { [double]$j.fps } else { 0 }
+                Slow150 = if ($null -ne $j.slow150) { [int]$j.slow150 } else { 0 }
+                WsMb    = if ($null -ne $j.wsMb) { [double]$j.wsMb } else { 0 }
             }
         } catch { }
     })
@@ -77,9 +82,29 @@ try {
         ForEach-Object { Write-Host ("  {0}  {1}" -f $_.Name, $_.Count) }
 
     Write-Host ""
+    Write-Host "国家/地区（Windows 区域，不是 IP）:" -ForegroundColor Cyan
+    $rows | Group-Object { if ($_.Region) { $_.Region } else { "未知" } } |
+        Sort-Object Count -Descending | Select-Object -First 12 |
+        ForEach-Object { Write-Host ("  {0,-8} {1}" -f $_.Name, $_.Count) }
+
+    Write-Host ""
+    Write-Host "语言 Top 8:" -ForegroundColor Cyan
+    $rows | Group-Object { if ($_.Lang) { $_.Lang } else { "未知" } } |
+        Sort-Object Count -Descending | Select-Object -First 8 |
+        ForEach-Object { Write-Host ("  {0,-10} {1}" -f $_.Name, $_.Count) }
+
+    Write-Host ""
     Write-Host "机型 Top 8:" -ForegroundColor Cyan
     $rows | Where-Object { $_.Model } | Group-Object Model | Sort-Object Count -Descending |
         Select-Object -First 8 | ForEach-Object { Write-Host ("  {0}  {1}" -f $_.Name, $_.Count) }
+
+    Write-Host ""
+    Write-Host "慢帧 Top 10（slow150 多 = 卡；fps 仅参考，空闲时可能很低）:" -ForegroundColor Cyan
+    $rows | Sort-Object Slow150 -Descending | Select-Object -First 10 |
+        ForEach-Object {
+            Write-Host ("  slow150={0,4}  fps={1,6:0.0}  ws={2,6:0}MB  {3} / {4} / {5}" -f
+                $_.Slow150, $_.Fps, $_.WsMb, $_.Ver, $(if ($_.Region) { $_.Region } else { "?" }), $_.Model)
+        }
 } finally {
     if (Test-Path $dst) { Remove-Item $dst -Recurse -Force -ErrorAction SilentlyContinue }
 }

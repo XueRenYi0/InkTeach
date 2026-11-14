@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>InkTeach 隐私说明 · 设备与性能统计</title>
-<meta name="description" content="InkTeach 设备与性能统计说明：上传什么、不上传什么、用途、保留期限、如何关闭，以及 9.3.1 与 9.3.2 的差异。">
+<title>InkTeach 隐私说明 · 匿名设备与性能统计</title>
+<meta name="description" content="InkTeach 匿名设备与性能统计说明：默认开启、不弹模态框；不取 IP/省市；上传什么、不上传什么、用途、保留期限、如何关闭。">
 <link rel="canonical" href="https://www.inkteach.com/privacy.html">
 <meta property="og:type" content="website">
 <meta property="og:title" content="InkTeach 隐私说明">
-<meta property="og:description" content="InkTeach 只在明确同意后上传匿名设备与性能信息；不含姓名、账号、课件、作业或屏幕内容。">
+<meta property="og:description" content="InkTeach 匿名设备与性能统计：不含 IP、位置、姓名、账号、课件或屏幕内容；可在设置中关闭并删除。">
 <link rel="icon" type="image/png" href="img/icon.png">
 <link rel="apple-touch-icon" href="img/icon.png">
 <link rel="stylesheet" href="style.css">
@@ -27,44 +27,51 @@
 
 <section class="section">
   <div class="wrap">
-    <p class="pill">隐私说明 · 2026-10-24</p>
-    <h1>设备与性能统计说明</h1>
-    <p class="lead">9.3.2 起，InkTeach 只在用户明确同意后，上传用于统计安装量和改进卡顿/兼容性的设备与性能信息。
-    不含姓名、账号、课件、作业或屏幕内容；拒绝不影响使用，之后可随时关闭。</p>
+    <p class="pill">隐私说明 · 2026-11-14</p>
+    <h1>匿名设备与性能统计说明</h1>
+    <p class="lead"><b>下一版（main）起默认开启</b>，首次启动只给一条非阻塞提示，不弹模态框。
+    只上传统计安装量和改进卡顿/兼容性所需的设备与性能信息；<b>不取 IP、不取省市</b>，
+    不含姓名、账号、课件、作业或屏幕内容；可在设置中随时关闭并删除。</p>
 
-    <p class="note"><b>适用范围：</b>9.3.2 起为“首次明确同意后上传”。9.3.1 及更早版本没有同意步骤，
-    会在启动约 25 秒后自动上传同类匿名设备卡；如不希望上传，请升级到 9.3.2 并在弹窗中选择“暂不”，
-    或在设置中关闭。</p>
+    <p class="note"><b>适用范围：</b>下一版（main）起默认开启（欧盟/英国/瑞士默认关闭，可在设置开启）；
+    9.3.2–9.7.x 为“首次明确同意后上传”；9.3.1 及更早没有同意步骤，启动约 25 秒后自动上传同类设备卡。</p>
 
     <h3>上传什么</h3>
     <ul>
-      <li>随机安装 ID（不含姓名、账号）</li>
-      <li>InkTeach 版本</li>
+      <li>随机安装 ID（首次启动生成，不含姓名、账号；只用于去重计数）</li>
+      <li>InkTeach 版本、界面语言</li>
       <li>首次/最近使用日期</li>
-      <li>系统版本、CPU、内存、显卡、屏幕/DPI</li>
+      <li>Windows 国家/地区代码、时区（只读系统设置）</li>
+      <li>系统版本、CPU、内存、显卡、屏幕/DPI、刷新率</li>
       <li>帧率、慢帧、最大帧、内存占用、软件渲染标记</li>
       <li>触摸点数与接触面积统计</li>
     </ul>
 
     <h3>不上传什么</h3>
     <ul>
+      <li><b>IP 地址、省/市/区位置</b>（应用不读取、不存储，也不写进设备卡）</li>
       <li>姓名、账号、手机号等身份信息</li>
       <li>课件、作业、文档内容、屏幕截图</li>
       <li>文件路径、摄像头或麦克风内容</li>
     </ul>
 
+    <p class="note">设备卡上传请求由 GitCode 接收，网络层可能记录请求 IP；InkTeach 应用本身不读取、
+    不存储 IP，也不会把 IP 写入设备卡。设备卡里只有系统国家/地区代码，没有省市。</p>
+
     <h3>用途</h3>
     <p>仅用于统计安装量、定位卡顿/兼容性问题、决定后续优化方向，不用于广告或出售数据。</p>
 
     <h3>存储与保留</h3>
-    <p>设备卡上传到私有日志仓库；设备卡按天覆盖，保留首次/最近使用日期。日志仅在用户主动点击「日志」上传时发送；
-    日志用于排查问题，可能包含运行环境、窗口标题或文件路径等诊断信息，请在确认后上传。
-    用户拒绝或关闭统计后，不再上传，并会尝试删除该安装 ID 对应的旧设备卡。</p>
+    <p>设备卡上传到私有日志仓库；同一随机 ID 按天覆盖，保留首次/最近使用日期。
+    用户关闭统计后不再上传，并会尝试删除该安装 ID 对应的旧设备卡。</p>
+    <p>运行日志是<b>另一项独立选择</b>：只有用户主动点击「更多 → 日志 → 上传日志」时才会发送；
+    首次上传会单独确认，可能包含运行环境、窗口标题或文件路径等诊断信息，不含文档内容。
+    设备统计默认开启<b>不等于</b>同意上传运行日志。</p>
 
     <h3>用户选择</h3>
-    <p>首次满足上传条件（启动约 25 秒）时弹一次说明；从旧版升级到 9.3.2 也会弹一次。
-    拒绝不影响软件使用。之后可以在「设置 → 书写 → 设备与性能统计」中开启或关闭。
-    重装、清除配置或更换 Windows 用户后，会重新询问一次。</p>
+    <p>下一版（main）起默认开启（欧盟/英国/瑞士默认关闭）；首次启动只在屏幕底部给一条 6 秒提示，不弹模态框。
+    之后可在「设置 → 关于 → 匿名设备统计」中开关。关闭后立即停止上传，并删除本机 ID 对应的设备卡。
+    旧版曾明确拒绝的用户，升级后保持关闭；重装、清除配置或更换 Windows 用户后会生成新的随机 ID。</p>
 
     <h3>联系</h3>
     <p>如需查询或删除数据，请通过 <a href="https://github.com/XueRenYi0/InkTeach/issues" target="_blank" rel="noopener">项目 Issue</a>

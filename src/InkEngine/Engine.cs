@@ -15285,63 +15285,96 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 隐私同意版本。2026-10-24：设备卡从“默认自动上传”改为“首次明确同意后上传”。
-    /// 以后采集范围/用途有实质变化，改这个版本号就会再弹一次。
+    /// 隐私/设备统计版本。2026-11-14：从“首次弹窗同意”改为“默认开启 + 非阻塞提示”，
+    /// 采集范围收窄为设备/性能/语言/系统国家地区；不取 IP、省/市、账号、板书。
+    /// 以后范围有实质变化，改这个版本号会再提示一次（非阻塞，不弹模态框）。
     /// </summary>
-    internal const int PrivacyVersion = 1;
-
-    internal bool PrivacyConsentGranted => GetUiPref("privacy.consent") == "granted";
-    private bool PrivacyDecided => GetUiPref("privacy.ver") == PrivacyVersion.ToString();
+    internal const int PrivacyVersion = 2;
 
     /// <summary>
-    /// 首次/升级后弹一次匿名设备统计说明。只记录同意或拒绝，不反复骚扰。
-    /// 拒绝后不再自动上传设备卡，并且会尝试删除已经上传的旧卡。
+    /// 欧盟/欧洲经济区/英国/瑞士：默认关闭，用户可在设置里主动开启。
+    /// 这些地区 ePrivacy/GDPR 对终端设备非必要遥测更倾向 opt-in；
+    /// 中国等其他地区默认开启，但一样可在设置里关闭。
     /// </summary>
-    private void EnsurePrivacyConsent(bool force = false)
+    private static readonly HashSet<string> EuLikeRegions = new(StringComparer.OrdinalIgnoreCase)
     {
-        if (!ExportDialogEnabled) return;
-        if (!force && PrivacyDecided) return;
+        "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR",
+        "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK",
+        "SI", "ES", "SE", "IS", "LI", "NO", "GB", "CH",
+    };
 
-        string text =
-            "为了统计安装量、定位卡顿和兼容性问题，是否允许上传这台电脑的设备与性能信息？\n\n"
-            + "另外，只有你主动点「更多 → 日志 → 上传日志」时，才会把最近 2 份运行日志（≤4MB）\n"
-            + "和这次的问题描述发给我们；日志不会自动上传。\n\n"
-            + "包含：安装 ID、软件版本、首次/最近使用日期、系统/硬件型号、屏幕、帧率/慢帧/内存、触摸统计；\n"
-            + "以及你主动上传的运行日志（可能含文件名/路径和错误堆栈，但不含文档内容）。\n"
-            + "不会上传：姓名、账号、课件、作业、板书内容或屏幕截图。\n\n"
-            + "拒绝不影响使用；以后可在「设置 → 关于 → 设备与性能统计」中修改。\n"
-            + "详见官网「隐私说明」或安装目录 PRIVACY.md。\n"
-            + "选择“是”= 同意，选择“否”= 暂不。";
-
-        int r = Native.MessageBoxW(OwnerHwnd(), text, "InkTeach 隐私说明",
-            Native.MB_YESNO | Native.MB_ICONINFORMATION
-            | Native.MB_SETFOREGROUND | Native.MB_TOPMOST);
-        bool granted = r == Native.IDYES;
-
-        SetUiPref("privacy.consent", granted ? "granted" : "denied");
-        SetUiPref("privacy.ver", PrivacyVersion.ToString());
-        SetUiPref("privacy.at", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-        PrivacyStore.Save(PrivacyVersion, granted, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-        if (!granted) DiagLog.StartDeviceCardDelete();
-        Console.WriteLine($"[隐私] 设备与性能统计：{(granted ? "同意" : "暂不")}");
-        NotifyUiStateChanged();
+    private static bool IsEuLikeRegion()
+    {
+        try { return EuLikeRegions.Contains(RegionInfo.CurrentRegion.TwoLetterISORegionName); }
+        catch { return false; }
     }
 
-    /// <summary>设置页开关。关闭时停止后续上传并尝试删除旧设备卡；重新打开时再确认一次。</summary>
-    internal void SetPrivacyConsentFromUi(bool on)
+    /// <summary>
+    /// 设备与性能统计开关。2026-11-14 起默认开启；
+    /// 旧版明确拒绝（denied）继续尊重；欧盟/英国/瑞士默认关闭。
+    /// </summary>
+    internal bool PrivacyConsentGranted
     {
-        if (on)
+        get
         {
-            if (!PrivacyConsentGranted) EnsurePrivacyConsent(force: true);
+            string consent = GetUiPref("privacy.consent");
+            if (consent == "granted") return true;
+            if (consent == "denied") return false;
+            return !IsEuLikeRegion();
+        }
+    }
+
+    private bool PrivacyNotified => GetUiPref("privacy.ver") == PrivacyVersion.ToString();
+
+    /// <summary>
+    /// 首次/升级后只提示一次（非阻塞 Toast），不弹模态框。
+    /// 旧版明确拒绝的保持关闭；欧盟/英国/瑞士默认关闭；其余默认开启。
+    /// </summary>
+    private void EnsurePrivacyNotice()
+    {
+        if (!ExportDialogEnabled) return;
+        if (PrivacyNotified) return;
+
+        string consent = GetUiPref("privacy.consent");
+        bool explicitDenied = consent == "denied";
+        bool defaultOn = !IsEuLikeRegion();
+
+        SetUiPref("privacy.ver", PrivacyVersion.ToString());
+        SetUiPref("privacy.at", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+
+        if (explicitDenied)
+        {
+            PrivacyStore.Save(PrivacyVersion, false, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            Console.WriteLine("[隐私] 匿名设备统计：保持关闭（旧版已拒绝）");
             return;
         }
 
-        SetUiPref("privacy.consent", "denied");
+        if (consent != "granted" && !defaultOn)
+        {
+            SetUiPref("privacy.consent", "denied");
+            PrivacyStore.Save(PrivacyVersion, false, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            ShowToast(Loc.T("匿名设备统计默认关闭（欧盟/英国/瑞士）；设置 → 关于可开"), 6000);
+            Console.WriteLine("[隐私] 匿名设备统计：默认关闭（欧盟/英国/瑞士）");
+            NotifyUiStateChanged();
+            return;
+        }
+
+        SetUiPref("privacy.consent", "granted");
+        PrivacyStore.Save(PrivacyVersion, true, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        ShowToast(Loc.T("匿名设备统计已开启；仅设备/性能，不含 IP/位置，设置 → 关于可关"), 6000);
+        Console.WriteLine("[隐私] 匿名设备统计：默认开启（已提示）");
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>设置页开关。关闭时停止后续上传并尝试删除旧设备卡；打开时直接生效，不再弹模态框。</summary>
+    internal void SetPrivacyConsentFromUi(bool on)
+    {
+        SetUiPref("privacy.consent", on ? "granted" : "denied");
         SetUiPref("privacy.ver", PrivacyVersion.ToString());
         SetUiPref("privacy.at", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-        PrivacyStore.Save(PrivacyVersion, false, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-        DiagLog.StartDeviceCardDelete();
-        Console.WriteLine("[隐私] 设备与性能统计：已关闭");
+        PrivacyStore.Save(PrivacyVersion, on, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        if (!on) DiagLog.StartDeviceCardDelete();
+        Console.WriteLine("[隐私] 匿名设备统计：" + (on ? "已开启" : "已关闭"));
         NotifyUiStateChanged();
     }
 

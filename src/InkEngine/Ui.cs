@@ -1346,7 +1346,7 @@ public readonly struct UiState
     /// </summary>
     public bool TouchGesturesOn { get; init; }
 
-    /// <summary>设备与性能统计是否已同意（设置页那一行的开关）。</summary>
+    /// <summary>匿名设备统计是否开启（设置页那一行的开关）。</summary>
     public bool PrivacyConsentOn { get; init; }
 
     // [删除 2026-10-05] `PredictOn`（墨迹预测开关的状态）：随老预测系统移除。

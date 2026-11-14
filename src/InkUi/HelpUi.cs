@@ -232,7 +232,7 @@ public sealed partial class FullUi
             new[] { "把鼠标还给下层", "点「鼠标」格，或按\nCtrl+Alt+Shift+T；再按一次回到画笔。" },
             new[] { "换工具不用找", "按住 Ctrl+Alt+Shift+Q，\n划向扇区，松手；中心取消。" },
             new[] { "写错了", "Ctrl+Z 撤销；橡皮擦局部；\nCtrl+Shift+C 清空当前板书。" },
-            new[] { "设备与性能统计", "首次弹窗选择；设置 → 书写可改。\n不含姓名、账号、课件或屏幕内容。" },
+            new[] { "匿名设备统计", "默认开启；设置 → 关于可关。\n不含 IP、位置、账号、课件或屏幕内容。" },
         };
 
         float gap = 14f;

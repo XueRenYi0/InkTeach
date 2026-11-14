@@ -254,6 +254,11 @@
     "扫一扫，加 QQ 群 {0}": "Escaneie para entrar no grupo QQ {0}",
     "移动": "Mover",
     "再点": "Mais uma vez",
-    "点页码：页码跳转菜单": "Clique no número da página: menu de salto de página"
+    "点页码：页码跳转菜单": "Clique no número da página: menu de salto de página",
+    "匿名设备统计": "Estatísticas anônimas",
+    "只上传版本、语言、国家/地区、机型和性能；不含 IP、位置、账号、课件或屏幕内容；关闭后删除本机统计卡": "Envia apenas versão, idioma, país/região, modelo e desempenho; sem IP, localização, conta, slides ou conteúdo da tela; ao desativar, o cartão de estatísticas deste dispositivo é excluído",
+    "默认开启；设置 → 关于可关。\n不含 IP、位置、账号、课件或屏幕内容。": "Ativadas por padrão; desative em Configurações → Sobre.\nSem IP, localização, conta, slides ou conteúdo da tela.",
+    "匿名设备统计已开启；仅设备/性能，不含 IP/位置，设置 → 关于可关": "Estatísticas anônimas ativadas; só dispositivo/desempenho, sem IP/localização. Configurações → Sobre.",
+    "匿名设备统计默认关闭（欧盟/英国/瑞士）；设置 → 关于可开": "Estatísticas anônimas desativadas por padrão (UE/Reino Unido/Suíça); Configurações → Sobre."
   }
 }

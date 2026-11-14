@@ -399,9 +399,9 @@ public sealed partial class FullUi : IOverlayUi
         // “只写字、完全不要手势”的保险档；默认仍是手势模式。
         (Row.TouchMode, "触摸模式", false, false,
          "手势 = 双指翻页/缩放 + 三指擦 + 长按选择；单指 = 只允许一个触点写字，完全无手势"),
-        // 设备与性能统计（2026-10-24）：首次弹窗同意；设置里可关闭。
-        (Row.Privacy, "设备与性能统计", false, false,
-         "只上传安装量、版本、硬件/性能和触摸统计；不含姓名、账号、课件或屏幕内容；可随时关闭"),
+        // 匿名设备统计（2026-11-14）：默认开启、不弹模态框；设置里可关，关闭即删卡。
+        (Row.Privacy, "匿名设备统计", false, false,
+         "只上传版本、语言、国家/地区、机型和性能；不含 IP、位置、账号、课件或屏幕内容；关闭后删除本机统计卡"),
         // AI 识别（2026-11-07）：设置里唯一的外网服务入口；配置写 %APPDATA%\InkTeach\ai.json。
         (Row.AiApi, "AI 识别 API…", false, false,
          "配置板书识别用的服务地址 / API Key / 模型；可添加多个服务商，选中一个作为当前使用"),
@@ -4034,7 +4034,7 @@ public sealed partial class FullUi : IOverlayUi
                 _host.Commands.SetTouchGestures(!_host.State.TouchGesturesOn);
                 break;
 
-            // 设备与性能统计：引擎负责同意状态、设备卡上传/删除；界面只翻转开关。
+            // 匿名设备统计：引擎负责开关状态、设备卡上传/删除；界面只翻转开关。
             case Row.Privacy:
                 _host.Commands.SetPrivacyConsent(!_host.State.PrivacyConsentOn);
                 break;

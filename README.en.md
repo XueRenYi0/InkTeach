@@ -19,7 +19,7 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 > support **10 languages**: Simplified Chinese / English / Japanese / Korean / German / French /
 > Spanish / Brazilian Portuguese / Russian / Italian. Pick one in **Settings → General → Language**
 > and restart. The source is **GPL-3.0** again. It also includes the 9.7.0 image beautifier and
-> image-to-question-card OCR, 41 shape cards, clear-on-arrow, and one-time privacy consent.
+> image-to-question-card OCR, 41 shape cards, clear-on-arrow; the next release moves device stats to default-on with no modal consent.
 >
 > *This English README is a summary. The Chinese [README.md](README.md) is the authoritative, most
 > current version.*
@@ -427,13 +427,14 @@ manifest; nothing is uploaded). A small red dot appears on the ball / **More** b
 version is available, and you can also check manually under **More → Check for updates**. The
 downloaded package's sha256 is verified before it replaces anything.
 
-**Device & performance telemetry**: to count installs and diagnose stutter/compatibility, InkTeach
-uploads an anonymous device card once a day — install ID, version, first/last-use dates, OS/CPU/RAM/
-GPU/screen/DPI, frame rate/slow frames/memory, and touch-count/area statistics. It does **not**
-include names, accounts, courseware, homework, or screen content. From 9.3.2 it is uploaded **only
-after explicit first-run consent**; declining does not affect use, and you can turn it off under
-**Settings → Writing → Device & performance statistics**. Turning it off stops uploads and attempts
-to delete the old device card for that install ID. See [PRIVACY.md](PRIVACY.md).
+**Anonymous device & performance telemetry**: to count installs and diagnose stutter/compatibility,
+InkTeach uploads an anonymous device card once a day — random install ID, version, UI language,
+Windows country/region, first/last-use dates, OS/CPU/RAM/GPU/screen/DPI, frame rate/slow frames/
+memory, and touch-count/area statistics. It does **not** collect IP, province/city, names, accounts,
+courseware, homework, or screen content. From the next release it is **on by default with a single non-blocking
+notice** (off by default in the EU/UK/Switzerland); turn it off under **Settings → About → Anonymous
+device stats**. Turning it off stops uploads and deletes the old device card for that install ID.
+See [PRIVACY.md](PRIVACY.md).
 
 ## Shortcuts (summary)
 

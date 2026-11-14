@@ -910,6 +910,9 @@ internal static class DiagLog
         string F(double v, string fmt) => v.ToString(fmt, CultureInfo.InvariantCulture);
         return "{\"id\":\"" + DeviceId + "\""
              + ",\"ver\":\"" + J(version) + "\""
+             + ",\"lang\":\"" + J(Loc.CurrentCode) + "\""
+             + ",\"region\":\"" + J(CurrentRegionCode()) + "\""
+             + ",\"tz\":" + F(TimeZoneInfo.Local.BaseUtcOffset.TotalHours, "0.0")
              + ",\"os\":\"" + J(RuntimeInformation.OSDescription) + "\""
              + ",\"build\":" + Environment.OSVersion.Version.Build
              + ",\"model\":\"" + J(MachineModel) + "\""
@@ -934,6 +937,14 @@ internal static class DiagLog
              + ",\"first\":\"" + J(InstallFirstDay) + "\""
              + ",\"last\":\"" + DateTime.Now.ToString("yyyy-MM-dd") + "\""
              + "}";
+    }
+
+    /// <summary>系统国家/地区代码（ISO 3166-1 alpha-2，如 CN/US/JP）；
+    /// 只读 Windows 区域设置，不读 IP、不读省市。</summary>
+    static string CurrentRegionCode()
+    {
+        try { return RegionInfo.CurrentRegion.TwoLetterISORegionName; }
+        catch { return ""; }
     }
 
     static HttpClient NewLogHttp(int seconds)
@@ -1097,8 +1108,9 @@ public partial class InkEngine
             string v = GetUiPref("privacy.logUpload");
             if (v == "granted") return true;
             if (v == "denied") return false;
-            // 没单独表过态：设备/性能统计已同意 = 视为同意，不再多弹一次。
-            return PrivacyConsentGranted;
+            // 2026-11-14：设备统计默认开启，**不等于**同意上传含路径/堆栈的运行日志。
+            // 日志必须第一次手动上传时单独确认。
+            return false;
         }
     }
 
@@ -1114,7 +1126,7 @@ public partial class InkEngine
             + "不会上传：板书内容、课件/作业文件、学生姓名/账号、屏幕截图。\n"
             + "日志里可能包含文件名/路径和错误堆栈，但不会包含文档内容。\n\n"
             + "选择“是”= 同意并上传；选择“否”= 只导出 zip，自己发给我们；选择“取消”= 什么都不做。\n"
-            + "以后可在「设置 → 书写 → 设备与性能统计」附近查看/关闭。";
+            + "日志上传与设备统计是两项独立选择；设备统计可在「设置 → 关于」关闭。";
 
         int r = Native.MessageBoxW(OwnerHwnd(), text, "上传日志前确认",
             Native.MB_YESNOCANCEL | Native.MB_ICONINFORMATION
@@ -1198,9 +1210,9 @@ public partial class InkEngine
         if (_cardTried) return;
         if (NowMs < 25_000) return;                        // 别抢启动那几秒
 
-        // 2026-10-24：先取得隐私同意，再上传设备卡。旧版本没有同意记录，
-        // 升级后在这里弹一次；拒绝则不传，并删除旧卡（见 SetPrivacyConsentFromUi）。
-        if (!PrivacyDecided) EnsurePrivacyConsent();
+        // 2026-11-14：不再弹模态框；首次只给一条非阻塞提示。
+        // 旧版明确拒绝的保持关闭；欧盟/英国/瑞士默认关闭；其余默认开启。
+        EnsurePrivacyNotice();
         if (!PrivacyConsentGranted) return;
 
         if (GetUiPref("log.cardDay") == DateTime.Now.ToString("yyyy-MM-dd")) return;

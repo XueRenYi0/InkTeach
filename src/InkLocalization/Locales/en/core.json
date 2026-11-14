@@ -254,6 +254,11 @@
     "扫一扫，加 QQ 群 {0}": "Scan to join QQ group {0}",
     "移动": "Move",
     "再点": "Again",
-    "点页码：页码跳转菜单": "Click page number: page jump menu"
+    "点页码：页码跳转菜单": "Click page number: page jump menu",
+    "匿名设备统计": "Anonymous device stats",
+    "只上传版本、语言、国家/地区、机型和性能；不含 IP、位置、账号、课件或屏幕内容；关闭后删除本机统计卡": "Uploads only version, language, country/region, model and performance; no IP, location, account, slides or screen content; turning it off deletes this device's stats card",
+    "默认开启；设置 → 关于可关。\n不含 IP、位置、账号、课件或屏幕内容。": "On by default; turn off in Settings → About.\nNo IP, location, account, slides or screen content.",
+    "匿名设备统计已开启；仅设备/性能，不含 IP/位置，设置 → 关于可关": "Anonymous device stats on; device/performance only, no IP/location. Turn off in Settings → About.",
+    "匿名设备统计默认关闭（欧盟/英国/瑞士）；设置 → 关于可开": "Anonymous device stats off by default (EU/UK/Switzerland); enable in Settings → About."
   }
 }
