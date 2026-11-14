@@ -583,12 +583,14 @@ internal sealed partial class App
               $"hover={ShapeHoverIndex}");
         // 五角星 / 扇形各画一个，确认新工具真的能落笔。
         m = LibraryPanelInfoNow();
-        Click(LibraryLayout.CellRect(m, 8, 0f));
+        // 2026-11-14：直线拆成实线/虚线/点线三张卡后，常用组整体后移 3 格——
+        // 五角星 8→10、扇形 9→11（和上面 A 段保持同一套下标）。
+        Click(LibraryLayout.CellRect(m, 10, 0f));
         ShapeDragForTest(300f, 260f, 470f, 390f);
         Check("五角星能画出来", Doc.Strokes.Count > 0 && Doc.Strokes[^1].Kind == StrokeKind.Star,
               $"kind={(Doc.Strokes.Count > 0 ? Doc.Strokes[^1].Kind.ToString() : "无")}");
         m = LibraryPanelInfoNow();
-        Click(LibraryLayout.CellRect(m, 9, 0f));
+        Click(LibraryLayout.CellRect(m, 11, 0f));
         ShapeDragForTest(600f, 260f, 760f, 390f);
         Check("扇形能画出来", Doc.Strokes.Count > 0 && Doc.Strokes[^1].Kind == StrokeKind.Sector,
               $"kind={(Doc.Strokes.Count > 0 ? Doc.Strokes[^1].Kind.ToString() : "无")}");
