@@ -23,6 +23,21 @@
 
 ---
 
+## 实际执行记录（2026-11-14）
+
+- 域名注册商是阿里云（万网），NS 原本在 Cloudflare；登录到的 Cloudflare 账号
+  `Xuerenyi1993@gmail.com` **不持有该 zone**，因此改用阿里云 DNS 绕过。
+- 已在阿里云云解析添加 5 条记录：
+  - `www` CNAME `xuerenyi0.github.io`
+  - `@` A `185.199.108.153` / `.109.153` / `.110.153` / `.111.153`
+- 已通过阿里云 API `SaveBatchTaskForModifyingDomainDns` 把 NS 改为
+  `dns27.hichina.com` / `dns28.hichina.com`（任务 `EXECUTE_SUCCESS`）。
+- 已重新设置 GitHub Pages 自定义域名 `www.inkteach.com`，`docs/CNAME` 已生成。
+- 阿里云权威 NS 实测返回正确；GitHub Pages 直连 IP 已返回 9.8.0。等待公共 DNS
+  缓存过期 + GitHub 证书签发后，`https://www.inkteach.com/` 即生效。
+- **安全**：本次使用了一个阿里云 AccessKey（`Downloads\AccessKey.csv`）。用完请
+  在阿里云 RAM 控制台**禁用/删除该 AccessKey**，或至少轮换；不要长期保留在下载目录。
+
 ## 如果 Cloudflare 账号找不到了（2026-11-14 实查）
 
 - 域名 `inkteach.com` 的注册商是 **阿里云（万网）**，NS 在 Cloudflare。
