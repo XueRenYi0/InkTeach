@@ -1,5 +1,19 @@
 # Cloudflare Pages · Git 集成与官网域名迁移（2026-11-14）
 
+> **2026-11-14 决策更新：先不迁 Cloudflare Pages，优先把 `www.inkteach.com` 指到 GitHub Pages。**
+>
+> 原因：
+> - Cloudflare **Pages 不在 China Network 产品范围内**（官方 FAQ：Pages 因 `pages.dev`
+>   证书不在大陆而不可用），付费 Enterprise + China Network 也解决不了 Pages 的国内访问；
+> - Pro / Business 仍是海外节点，不会让国内“全部能访问”；
+> - 本机实测：`pages.dev` 多次 30s 超时，`www.inkteach.com` 不稳定（1–20s），
+>   GitHub Pages 反而稳定在 0.7–1.0s；
+> - 对一个免费开源项目，最省事的是：**GitHub Pages 主站 + GitCode 下载镜像**，
+>   域名指到 GitHub Pages，Cloudflare 只做 DNS。
+>
+> 本文下面的 Cloudflare 步骤保留作备选；如果以后 GitHub Pages 在目标学校网络不可用，
+> 再考虑国内云 + ICP（不是 Cloudflare 付费）。
+
 > 目标：把 `www.inkteach.com` / `inkteach.com` 从旧的 Direct Upload 项目
 > `inkteach`（还停在 9.4.4）迁到新的 **Git 集成** Pages 项目；
 > 以后每次 push `main` 自动部署，不再手动上传。
