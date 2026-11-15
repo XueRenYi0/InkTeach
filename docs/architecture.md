@@ -512,3 +512,31 @@ ADR-002 写"单类 partial ≤20"，`Engine` 已 24 个。本 ADR 明确：
 | 回滚 | P0 一个 commit；P1 一个 commit；均可单独 `git revert` |
 
 未做：P2（新功能组合化、state-map 触发的 seam、纯逻辑补 L1）。触发条件未满足前不动存量。
+
+### AOT 冒烟（2026-11-15，P1 后）
+
+命令：`publish.ps1 -Label AOTsmoke -NoZip -NoSetup -NoManifest`。结果：**成功**；
+`dist/InkTeach-AOTsmoke-win-x64/`，exe 18.19 MB，整包 34.37 MB / 6 文件，GUI 子系统、pdfium 已带。
+
+| 命令 | 结果 |
+| --- | --- |
+| `--unittest` | **5/5 PASS**（0 ms） |
+| `--keytest` | PASS（键位表 / 冲突 / 落盘 / 真机注册 / 批注内按键） |
+| `--startupcheck` | **5/5 PASS** |
+| `--shapepaneltest` | **37/37 PASS** |
+| `--help` | 284 行；与 JIT 仅差 session id / 设备 id |
+| `--list-modes` | 193 条（191 个模式 + `--list-modes` + `--unittest`） |
+| `--paneltest` | **SKIP**：锁屏下合成输入不可用（不是失败） |
+
+视觉取证（机器锁屏，拿不到真屏录像）：
+
+- AOT 与 JIT 同参数出图逐像素对比：`--panelshow` 1618×260 **0/1,682,720**、
+  `--libraryshow` 1584×644 **0/4,080,384**、`--captureshow` 1048×1128 **0/4,728,576**、
+  `--ballprobe` 184×184 **0/135,424**，max-delta 全 0。
+- `--board` 的 PrintWindow 只能拿到白板层（flag=0 全黑、flag=2 白底 + 1/1），
+  UI 层抓不到是 DirectComposition 的限制；`--ballprobe` 证明小球层正常渲染。
+- 结论：**AOT 渲染与 JIT 一致，判定 PASS**。遗留一条产品 backlog（非 AOT 回归）：
+  收藏面板 8 列，超出 AGENTS §2 的 3–6 列上限；JIT 旧图同样 8 列。
+
+AOT 分析告警（IL2026/IL3050/IL2072、`Microsoft.DotNet.ILCompiler 10.0.12` 的 NU1903）
+均为存量，不是本次注册表改造引入；注册表是显式数组，未新增反射。

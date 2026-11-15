@@ -29,6 +29,10 @@ C# / .NET 10 / Direct2D 自绘（Vortice）。不是 WPF/WinForms，**UI Automat
 ```
 只截一块时给 x y w h，坐标是屏幕坐标。
 
+> ⚠ `--board` 是**开关**，不是模式：单独作为第一个参数会进 headless 宿主（画面里没有小球/工具条）。
+> 产品界面出图用 `--panelshow` / `--libraryshow` / `--ballprobe` / `--captureshow`；
+> 真屏截图/录像需要桌面已解锁（锁屏下 `--paneltest` 的合成输入也会 SKIP）。
+
 ## 录视频（真光标）
 先标定坐标（生成带网格的截图）：
 ```powershell
