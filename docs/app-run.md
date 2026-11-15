@@ -15,6 +15,7 @@ C# / .NET 10 / Direct2D 自绘（Vortice）。不是 WPF/WinForms，**UI Automat
 ## 内置自检（优先用这些，不要另造）
 | 命令 | 用途 |
 |---|---|
+| `.\run.ps1 --unittest` | 纯逻辑快检（不建窗口，毫秒级；`--unittest 过滤词` 只跑一条） |
 | `.\run.ps1 --paneltest` | 产品界面自检，球 → 按钮带最小闭环（报告 100 项） |
 | `.\run.ps1 --shapepaneltest` | 图形面板专项（入口 / 页签 / 选图形 / 蓝色互斥） |
 | `.\run.ps1 --recoverytest` | 恢复 / 崩溃专项 |
