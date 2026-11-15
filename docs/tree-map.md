@@ -22,8 +22,8 @@
     **InkEngine/Core/**
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 156 行
-      - `Engine.cs` 2,839 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
-      - `Engine.Host.cs` 2,223 行 — 启动、消息循环、窗口过程（WndProc）。
+      - `Engine.cs` 2,841 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
+      - `Engine.Host.cs` 2,225 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
       - `Engine.Selection.Gesture.cs` 1,466 行 — 框选/套索/拖动/对齐吸附/美化入口。
@@ -49,10 +49,13 @@
 
     **InkEngine/Doc/**
       - `DocImageSource.cs` 292 行
-      - `DocImport.cs` 655 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
-      - `DocImport.Pan.cs` 164 行 — 文档「手掌」拖页：文档模式下按下拖动平移相机（不落墨、不选中）。
+      - `DocImport.cs` 661 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
+      - `DocImport.Pan.cs` 167 行 — 文档「手掌」拖页：文档模式下按下拖动平移相机（不落墨、不选中）。
       - `DocMemory.cs` 84 行
       - `DocPages.cs` 662 行 — 文档页底层：页配方、惰性生成、视口窗口回收、文档缩放的页位图倍率。
+      - `DocResume.cs` 320 行 — 文档「上次看到第 N 页」恢复提示：读写位置、卡片命中、继续/从头、落盘节流。
+      - `DocResumeLayout.cs` 97 行 — 文档恢复提示卡的几何：卡片 / 两行字 / 两个按钮的矩形（画与命中同一份）。
+      - `DocResumeStore.cs` 135 行 — 文档「上次看到第几页」的落盘：一文档一目录一小文本文件（跨会话恢复用）。
       - `DocStore.cs` 246 行
       - `Pdfium.cs` 314 行
 
@@ -71,7 +74,7 @@
       - `DwellAssist.cs` 122 行
       - `Engine.Capture.cs` 374 行 — 截图状态、确认/取消、手柄与读数。
       - `Engine.Clipboard.cs` 506 行
-      - `Engine.Input.cs` 1,986 行 — 指针输入、停顿成型、动态橡皮。
+      - `Engine.Input.cs` 2,028 行 — 指针输入、停顿成型、动态橡皮。
       - `Engine.TouchGestures.cs` 751 行 — 触摸手势：单指/双指/三指/长按/惯性。
       - `GoogleInkSlidingWindow.cs` 670 行 — Google Ink 滑动窗口输入。
       - `InkModel.cs` 285 行
@@ -94,9 +97,9 @@
       - `AutoStart.cs` 196 行
       - `Backup.cs` 457 行
       - `DiagLog.cs` 1,270 行 — 运行日志、设备卡、日志上传同意。
-      - `Engine.Hotkey.cs` 619 行 — 热键处理：WM_HOTKEY → 动作。
+      - `Engine.Hotkey.cs` 625 行 — 热键处理：WM_HOTKEY → 动作。
       - `Engine.Keyboard.cs` 628 行 — 键盘模式与键盘手势：工具键、色带键、滚轮/↑↓ 视野平移。
-      - `Engine.Radial.cs` 668 行 — 呼出盘：按住/划向扇区/松手。
+      - `Engine.Radial.cs` 674 行 — 呼出盘：按住/划向扇区/松手。
       - `Engine.Update.cs` 1,124 行 — 自动更新：检查/下载/换壳。
       - `EraserTelemetry.cs` 329 行
       - `GcLatency.cs` 109 行
@@ -126,25 +129,25 @@
     **InkEngine/Rendering/**
       - `CanvasTiles.cs` 474 行
       - `Cursors.cs` 505 行
-      - `Engine.Cursor.cs` 799 行 — 光标形状与滚动条交互。
-      - `Engine.UiBridge.cs` 993 行 — 引擎 ↔ 界面边界：IOverlayUi 命令转发。
+      - `Engine.Cursor.cs` 800 行 — 光标形状与滚动条交互。
+      - `Engine.UiBridge.cs` 994 行 — 引擎 ↔ 界面边界：IOverlayUi 命令转发。
       - `GlyphFill.cs` 341 行
       - `Icons.Paths.cs` 142 行
       - `LegacyOverlayLayer.cs` 74 行
       - `Overlay.Capture.cs` 789 行 — 截图取景框绘制：遮罩/准线/读数/手柄。
       - `Overlay.Content.cs` 685 行 — 内容层合成：分块光栅、相机变换、缩放合成、滚动条。
-      - `Overlay.cs` 1,384 行 — 覆盖层主文件：窗口/初始化/生命周期。
-      - `Overlay.Frame.cs` 1,641 行 — 覆盖层帧渲染：内容/界面/装饰合成。
+      - `Overlay.cs` 1,386 行 — 覆盖层主文件：窗口/初始化/生命周期。
+      - `Overlay.Frame.cs` 1,661 行 — 覆盖层帧渲染：内容/界面/装饰合成。
       - `Overlay.PptBar.cs` 769 行 — PPT 条/回放条/滚动条绘制。
       - `Overlay.Radial.cs` 657 行 — 呼出盘绘制。
-      - `Overlay.Readout.cs` 1,460 行 — 读数、收藏面板、滚动条、回放/PPT 条绘制。
+      - `Overlay.Readout.cs` 1,572 行 — 读数、收藏面板、滚动条、回放/PPT 条绘制。
       - `Overlay.SelectionBar.cs` 1,065 行 — 选中操作条/色板/字体/图层/菜单的绘制。
       - `Overlay.Toast.cs` 339 行
       - `Overlay.Ui.cs` 1,445 行 — 界面层合成与界面位图上传。
       - `OverlayLayerManager.cs` 192 行
       - `OverlayLayerRegistration.cs` 215 行
       - `SvgPath.cs` 271 行
-      - `Ui.cs` 1,670 行 — 界面接入契约：IOverlayUi / IEngineCommands / UiState。
+      - `Ui.cs` 1,675 行 — 界面接入契约：IOverlayUi / IEngineCommands / UiState。
       - `UiHost.cs` 262 行
       - `UiImageBytes.cs` 40 行
 
@@ -200,7 +203,7 @@
       - `App.Dev.Geometry.cs` 470 行
       - `App.Dev.Input.cs` 76 行
       - `App.Dev.Metrics.cs` 590 行
-      - `App.Dev.PageShow.cs` 612 行 — 界面出图 / 状态探针：--panelshow 离屏截图、--pageshow 画布截图。
+      - `App.Dev.PageShow.cs` 689 行 — 界面出图 / 状态探针：--panelshow 离屏截图、--pageshow 画布截图。
       - `App.Dev.Render.cs` 484 行
       - `App.Dev.Sheets.cs` 382 行
       - `App.Dev.Showcase.cs` 438 行
@@ -221,7 +224,7 @@
       - `UiProbe.cs` 120 行
 
     **InkTeach/Host/**
-      - `App.cs` 345 行 — 宿主启动、参数分发、模式路由、用法帮助。
+      - `App.cs` 355 行 — 宿主启动、参数分发、模式路由、用法帮助。
       - `App.Dev.Cursor.cs` 538 行
       - `App.Dev.Ppt.cs` 248 行
       - `App.Dev.Scroll.cs` 147 行
@@ -246,7 +249,8 @@
         - `BandAction.cs` 84 行
         - `BoardAndLaser.cs` 1,377 行 — 白板底纹/激光/光标 E2E。
         - `Diagnostics.cs` 3,295 行 — 诊断/环境/性能 E2E。
-        - `Documents.cs` 1,428 行 — 文档导入 E2E。
+        - `DocResume.cs` 190 行 — 文档「上次看到第 N 页」恢复提示 E2E（挂在 --doctest 末尾的 F 组）。
+        - `Documents.cs` 1,431 行 — 文档导入 E2E。
         - `Erasers.cs` 1,003 行 — 橡皮擦 E2E（整笔/像素/动态）。
         - `FacesProbe.cs` 186 行
         - `GlyphEraseTest.cs` 59 行

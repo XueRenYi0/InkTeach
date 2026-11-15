@@ -256,6 +256,9 @@ public partial class InkEngine
     /// </summary>
     private void SwitchTool(Tool t)
     {
+        // 用户换工具 = 已经决定自己动手：恢复提示关掉（打开文档顺手切回笔那一次除外）。
+        if (DocResumeVisible && t != Tool && !_docResumeJustOpened)
+            DismissDocResume("换工具");
         // 离开文本工具 = 先把正在编辑的文字收掉（光标/白底不能跟着换工具跑）。
         if (_textBoxEditing && t != Tool.Text) EndTextBoxEditFromUi(true);
         if (t != Tool.Text)
@@ -564,6 +567,9 @@ public partial class InkEngine
         // 退出前补一次自动存档（**白板槽**；下一次打开接上）。自检模式不动用户的存档。
         if (BoardFingerprint(Doc.StrokesOf(InkDocument.BoardPageKey)) != _autoSavedBoardFp)
             AutoSaveNow();
+
+        // 文档还开着就退出：阅读位置也补一次（下一会话才能问"上次看到第几页"）。
+        if (DocView.IsOpen) SaveDocResumeNow();
 
         // 在途的周期写盘（板书历史 / 自动存档 / PPT 批注）先全部等落完——**顺序不能反**：
         // 反了的话，"后到的旧内容"会把下面这份退出快照盖掉。

@@ -498,6 +498,12 @@ public partial class InkEngine
                 isRepeat)) return true;
         // 界面最上面那层（AI 面板 / 更多 / 色板）：Esc 先关它。
         if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && Ui != null && Ui.HandleEscape()) return true;
+        // 文档恢复提示：Esc = 只关卡（不跳）。排在界面层之后——界面开着时先关界面。
+        if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && DocResumeVisible)
+        {
+            DismissDocResume("Esc");
+            return true;
+        }
         // 收藏面板点了一张卡、还没落笔：Esc = 取消这次插入（别让老师找不到怎么退）。
         if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && _libraryPending != null)
         {

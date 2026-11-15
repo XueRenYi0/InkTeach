@@ -1287,6 +1287,9 @@ internal sealed partial class App
               && ExportFileDialog.DocumentFilter.Contains("*.pdf"),
               "混合过滤器里有 pptx;ppt;ppsx 和 pdf");
 
+        // ------------------------------------------------------------------
+        DocResumeTestGroup(Check);          // F 组（方法内部自己打组标题）
+
         Console.WriteLine();
         Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：文档页底层 {pass} 项通过 / {fail} 项失败");
         Console.WriteLine($"合计：通过 {pass} 项，失败 {fail} 项");

@@ -204,6 +204,16 @@ public partial class InkEngine
             return;
         }
 
+        // 文档恢复提示卡：只有卡片矩形吃这一下（其余画布照常落墨 / 擦除）。
+        // 排在界面之后（界面盖着的地方界面优先），排在穿透之前（文档模式下不会穿透）。
+        if (TryDocResumePointerDown(hWnd, screenX, screenY))
+        {
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
         // 文本工具：点已有文字 = 选中/再点编辑；点空白 = 在点击处新建并输入。
         if (Tool == Tool.Text && !inverted)
         {
@@ -403,6 +413,9 @@ public partial class InkEngine
         }
 
         var tool = inverted ? Tool.Eraser : Tool;
+        // 第一笔内容（写字 / 荧光 / 擦除）= 用户选了自己动手：提示卡收掉，这一下照常落墨。
+        if (tool is Tool.Pen or Tool.Highlighter or Tool.Eraser or Tool.PixelEraser)
+            DismissDocResume("落笔");
         switch (tool)
         {
             case Tool.Eraser:
@@ -1232,6 +1245,15 @@ public partial class InkEngine
         // 文档手掌拖动：这一串移动只归平移（不落墨、不转发界面悬停、不喂工具）。
         if (DocPanMoveFromPointer(id, screenX, screenY)) return;
 
+        // 恢复提示卡按住了按钮：这一串移动只更新悬停，不喂画布。
+        if (DocResumePressed != 0)
+        {
+            UpdateDocResumeHover(screenX, screenY);
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
         // 字体下拉：拖动滚动（含惯性）。
         if (FontListPointerMove(x, y, id)) { _dirty = true; return; }
 
@@ -1349,6 +1371,13 @@ public partial class InkEngine
             return;
         }
         if (_uiHover) { _uiHover = false; ApplyCursor(); }
+
+        // 文档恢复提示卡：悬停只亮按钮；指针在卡上就吃掉这一下（不画工具环）。
+        if (!_drawing && UpdateDocResumeHover(screenX, screenY))
+        {
+            ApplyCursor();
+            return;
+        }
 
         // A4.6：计时/点名/PPT 一旦被管理器捕获，移动也先走管理器；
         // 未消费时仍落到下面的旧 hover/drag 逻辑。
@@ -1516,6 +1545,19 @@ public partial class InkEngine
         // 字体下拉：拖动结束 = 起惯性；没拖动 = 点行。
         if (FontListPointerUp(PointerX, PointerY, id))
         {
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+        // 恢复提示卡按着按钮抬手：还在同一颗按钮上就执行「继续 / 从头」。
+        if (DocResumePressed != 0)
+        {
+            if (ReadPointer(id, out float crx, out float cry, out _, out _, out _))
+                DocResumePointerUp(crx, cry);
+            else
+                DocResumePointerUp(float.NaN, float.NaN);
+            Native.ReleaseCapture();
+            _drawing = false;
             _dirty = true;
             ApplyCursor();
             return;

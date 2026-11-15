@@ -195,6 +195,10 @@ internal sealed partial class OverlayWindow
         // 课堂点名卡片：同一层，默认屏幕中央偏上。
         DrawRollCard(app);
 
+        // 文档恢复提示卡（"上次看到第 N 页 · 55%" / 继续 / 从头）：屏幕坐标、
+        // 顶部居中，压在页和页码条之上（只有卡片矩形吃点击）。
+        DrawDocResumeCard(app);
+
         // 引擎侧悬停提示（选中操作条 / PPT 条与长按菜单）：画在所有浮层之上、
         // 截图整层之下——截图时 TooltipShown 本来就是假的（进入截图会清掉）。
         DrawEngineTooltip(app);
@@ -590,6 +594,22 @@ internal sealed partial class OverlayWindow
             }
             if (!_rollRectPrev.IsEmpty) r.Add(_rollRectPrev);
             _rollRectPrev = cur;
+        }
+
+        // 文档恢复提示卡：显示 / 隐藏 / 悬停 / 按下都在变；旧位置也要擦（同图库 / PPT 条）。
+        {
+            var cur = RectF.Empty;
+            if (app.DocResumeVisible && app.DocView.IsOpen)
+            {
+                cur = app.DocResumeCardRect();
+                if (!cur.IsEmpty)
+                {
+                    float pad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
+                    r.Add(cur.Inflate(pad));
+                }
+            }
+            if (!_docResumeRectPrev.IsEmpty) r.Add(_docResumeRectPrev);
+            _docResumeRectPrev = cur;
         }
 
         // 引擎侧悬停提示（选中操作条 / PPT 条与长按菜单）：显示、换块、收起都在变，

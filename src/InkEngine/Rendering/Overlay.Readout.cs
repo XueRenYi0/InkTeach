@@ -1457,4 +1457,116 @@ internal sealed partial class OverlayWindow
         }
     }
 
+    // ======================================================================
+    //  文档恢复提示卡（"上次看到第 N 页 · 55%" / 继续 / 从头）
+    //
+    //  参考 Acrobat / Edge 的"继续阅读"浮条：只在文档模式、跨会话打开时出现，
+    //  顶部居中、不挡画布（只有卡片矩形吃点击）。画法与其它浮层同一套：
+    //  `DrawPanelCard` + `FloatingTheme`；两个按钮沿用操作条的"悬停 / 按下"反馈。
+    // ======================================================================
+
+    private IDWriteTextFormat _docResumeTitleFmt, _docResumeSubFmt, _docResumeBtnFmt;
+    private float _docResumeTitlePx, _docResumeSubPx, _docResumeBtnPx;
+
+    /// <summary>恢复卡的两行字：第一行 14 SemiBold，第二行 11 常规（弱化），按钮 14 SemiBold。</summary>
+    private void EnsureDocResumeFormats(float dpi)
+    {
+        float titlePx = MathF.Max(11f, MathF.Round(14f * dpi));
+        if (_docResumeTitleFmt == null || MathF.Abs(_docResumeTitlePx - titlePx) > 0.01f)
+        {
+            _docResumeTitleFmt?.Dispose();
+            _docResumeTitleFmt = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, titlePx, Loc.LocaleName);
+            _docResumeTitleFmt.TextAlignment = TextAlignment.Leading;
+            _docResumeTitleFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _docResumeTitleFmt.WordWrapping = WordWrapping.NoWrap;
+            _docResumeTitlePx = titlePx;
+        }
+        float subPx = MathF.Max(9f, MathF.Round(11f * dpi));
+        if (_docResumeSubFmt == null || MathF.Abs(_docResumeSubPx - subPx) > 0.01f)
+        {
+            _docResumeSubFmt?.Dispose();
+            _docResumeSubFmt = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, subPx, Loc.LocaleName);
+            _docResumeSubFmt.TextAlignment = TextAlignment.Leading;
+            _docResumeSubFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _docResumeSubFmt.WordWrapping = WordWrapping.NoWrap;
+            _docResumeSubPx = subPx;
+        }
+        if (_docResumeBtnFmt == null || MathF.Abs(_docResumeBtnPx - titlePx) > 0.01f)
+        {
+            _docResumeBtnFmt?.Dispose();
+            _docResumeBtnFmt = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, titlePx, Loc.LocaleName);
+            _docResumeBtnFmt.TextAlignment = TextAlignment.Center;
+            _docResumeBtnFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _docResumeBtnFmt.WordWrapping = WordWrapping.NoWrap;
+            _docResumeBtnPx = titlePx;
+        }
+    }
+
+    private void DrawDocResumeCard(InkEngine app)
+    {
+        if (!app.DocResumeVisible || !app.DocView.IsOpen) return;
+        float dpi = app.UiUnit;
+        var th = app.FloatingTheme;
+        var r = app.DocResumeRectsNow();
+        DrawPanelCard(app, r.Card, th.CornerRadius * dpi, dpi);
+
+        EnsureDocResumeFormats(dpi);
+        _scratch.Color = th.Text;
+        _ctx.DrawText(app.DocResumePageText(), _docResumeTitleFmt,
+                      new Rect(r.Line1.MinX, r.Line1.MinY, r.Line1.MaxX - r.Line1.MinX,
+                               r.Line1.MaxY - r.Line1.MinY), _scratch);
+
+        string time = app.DocResumeTimeText();
+        if (time.Length > 0)
+        {
+            _scratch.Color = th.TextMuted;
+            _ctx.DrawText(time, _docResumeSubFmt,
+                          new Rect(r.Line2.MinX, r.Line2.MinY, r.Line2.MaxX - r.Line2.MinX,
+                                   r.Line2.MaxY - r.Line2.MinY), _scratch);
+        }
+
+        DrawDocResumeButton(r.Continue, "继续", true, app.DocResumeHover == 1,
+                            app.DocResumePressed == 1, th, dpi);
+        DrawDocResumeButton(r.StartOver, "从头", false, app.DocResumeHover == 2,
+                            app.DocResumePressed == 2, th, dpi);
+    }
+
+    /// <summary>
+    /// 卡片按钮：继续 = 强调色实心；从头 = 幽灵（透明底 + 描边）。
+    /// 悬停浅底 / 按下更深，和操作条同一套反馈（按下只到抬手才执行）。
+    /// </summary>
+    private void DrawDocResumeButton(in RectF box, string label, bool accent,
+                                     bool hot, bool pressed, UiTheme th, float dpi)
+    {
+        var bg = new Vortice.RawRectF(box.MinX, box.MinY, box.MaxX, box.MaxY);
+        float radius = 8f * dpi;
+        if (accent)
+        {
+            var c = th.ActiveBg;
+            float k = pressed ? 0.86f : hot ? 1.08f : 1f;
+            _scratch.Color = new Color4(MathF.Min(1f, c.R * k), MathF.Min(1f, c.G * k),
+                                        MathF.Min(1f, c.B * k), c.A);
+            _ctx.FillRoundedRectangle(new RoundedRectangle(bg, radius, radius), _scratch);
+        }
+        else
+        {
+            if (hot || pressed)
+            {
+                _scratch.Color = pressed
+                    ? new Color4(th.Text.R, th.Text.G, th.Text.B, 0.12f)
+                    : th.Hover;
+                _ctx.FillRoundedRectangle(new RoundedRectangle(bg, radius, radius), _scratch);
+            }
+            _scratch.Color = new Color4(th.PanelBorder.R, th.PanelBorder.G, th.PanelBorder.B,
+                                        pressed ? 0.95f : 0.70f);
+            _ctx.DrawRoundedRectangle(new RoundedRectangle(bg, radius, radius), _scratch, 1f * dpi);
+        }
+        _scratch.Color = accent ? th.ActiveText : th.Text;
+        _ctx.DrawText(label, _docResumeBtnFmt,
+                      new Rect(box.MinX, box.MinY, box.MaxX - box.MinX, box.MaxY - box.MinY), _scratch);
+    }
+
 }

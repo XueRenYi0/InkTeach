@@ -164,6 +164,7 @@ internal sealed partial class App : InkEngine.InkEngine
             DocStore.RootOverride = Path.Combine(Path.GetTempPath(), "inkteach-selfcheck-doc");
             try { if (Directory.Exists(DocStore.RootOverride)) Directory.Delete(DocStore.RootOverride, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         }
+        if (_selfCheckMode) ApplyDocResumeSelfCheckRoot();   // 阅读位置也走临时根目录
         // 板书历史（0 号页快照）同理：自检绝不写用户的历史目录。
         if (_selfCheckMode && BoardHistory.DirOverride == null)
         {
@@ -241,7 +242,7 @@ internal sealed partial class App : InkEngine.InkEngine
             InkSettings.PathOverride = null;
             Recovery.AutoSavePathOverride = null;
             PptStore.RootOverride = null;
-            DocStore.RootOverride = null;
+            DocStore.RootOverride = null; DocResumeStore.RootOverride = null;
             ExportDialogEnabled = true;
 
             // `--doc <文件>`：到这儿窗口/视口都就绪了，真正打开它
@@ -260,6 +261,15 @@ internal sealed partial class App : InkEngine.InkEngine
         Loop();
         Shutdown();
         return 0;
+    }
+
+    /// <summary>自检/出图：阅读位置改用临时根目录（不碰用户真实数据）。</summary>
+    private static void ApplyDocResumeSelfCheckRoot()
+    {
+        if (DocResumeStore.RootOverride != null) return;
+        DocResumeStore.RootOverride = Path.Combine(Path.GetTempPath(), "inkteach-selfcheck-docresume");
+        try { if (Directory.Exists(DocResumeStore.RootOverride)) Directory.Delete(DocResumeStore.RootOverride, true); }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
     }
 
     /// <summary>退出前把工具条的配置落盘，保证老师拖动的位置不会丢。</summary>

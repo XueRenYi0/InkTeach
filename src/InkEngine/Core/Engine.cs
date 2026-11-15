@@ -1770,6 +1770,7 @@ public partial class InkEngine
         if (float.IsNaN(zoom) || float.IsInfinity(zoom)) return;
         zoom = Math.Clamp(zoom, minZoom, DocZoomMax);
         if (MathF.Abs(zoom - ViewScale) < 0.0005f) { DocZoom = zoom; return; }
+        DismissDocResume("缩放");              // 缩放 = 换观察位置，提示先收（不跳）
 
         float cx = ScreenToCanvasX(anchorScreenX);
         float cy = ScreenToCanvasY(anchorScreenY);
@@ -1785,6 +1786,7 @@ public partial class InkEngine
         _dirty = true;
         Console.WriteLine($"[文档] 缩放 {MathF.Round(zoom * 100f):F0}%"
             + $"（页位图 {DocView.PageRenderScale:F2}x / 相机 {ViewScale:F2}x）");
+        NoteDocResumeChange();
         NotifyUiStateChanged();
     }
 

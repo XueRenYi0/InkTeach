@@ -112,6 +112,7 @@ public partial class InkEngine
         }
         if (!PptMode && DocView.IsOpen)
         {
+            DismissDocResume("跳页");
             int idx = Math.Clamp(page - 1, 0, Math.Max(0, DocView.Count - 1));
             float want = ClampOffset(_virtualY - DocView.TopOf(idx) * ViewScaleSafe);
             if (Math.Abs(want - ViewOffsetY) >= 1f)
@@ -123,6 +124,7 @@ public partial class InkEngine
                     _camAnimating = false;
                     DocView.UnpinPage();
                     _dirty = true;
+                    NoteDocResumeChange();
                 }
                 else
                 {
@@ -130,6 +132,7 @@ public partial class InkEngine
                     _camAnimMs = DocMemory.FlipMs;
                     _camAnimating = true;
                     _dirty = true;
+                    NoteDocResumeChange();
                 }
             }
             Console.WriteLine($"[文档] 跳到第 {idx + 1} 页");
@@ -586,6 +589,7 @@ public partial class InkEngine
         DocView.SetViewScale(1f);
         LoadDocInk(storeKey);
         ClampViewOffset();
+        LoadDocResumePrompt(storeKey);   // 只在跨会话、且位置不是"第 1 页页顶"时弹卡（不自动跳）
         _docSavedVersion = Doc.Version;
         SetInkStatus($"文档：{title}（{DocView.Count} 页）");
         Console.WriteLine($"[文档] 已打开 {title}：{DocView.Count} 页（页图惰性生成）");
@@ -626,6 +630,8 @@ public partial class InkEngine
         if (BoardOn) SetBoardFromUi(false);
 
         SaveDocInk();                       // 关闭时兜底存一次（节流之外的那一下）
+        SaveDocResumeNow();                 // 阅读位置也兜底存一次（下一会话才能问"继续"）
+        DismissDocResume("关文档");         // 卡不能跟到桌面上去
         ClearBoardFreeze();                 // 文档都关了，白板下面没有页可冻结
 
         DocView.Close();

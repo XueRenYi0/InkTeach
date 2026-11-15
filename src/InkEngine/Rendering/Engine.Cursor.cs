@@ -544,6 +544,7 @@ public partial class InkEngine
         // 不这么做的话，编辑宿主还挂在上/下一页的文本框上，翻过去以后继续输入会
         // 写到一个“文档里已经不在眼前”的框里，看起来就是 PDF 翻页出问题。
         if (_textBoxEditing) EndTextBoxEditFromUi(true);
+        if (!BoardOn && DocView.IsOpen) DismissDocResume("翻页");
         float want;
         int docTarget = -1;
         if (BoardOn)
@@ -604,11 +605,11 @@ public partial class InkEngine
             _camAnimating = false;
             _camAnimMs = CamAnimMs;
             if (!BoardOn) DocView.UnpinPage();   // 白板的冻结页不能被翻页动画解钉
-            _dirty = true;
+            _dirty = true; if (DocView.IsOpen) NoteDocResumeChange();
             return true;
         }
         _camFrom = ViewOffsetY; _camTo = want; _camStartMs = NowMs; _camAnimating = true;
-        _dirty = true;
+        _dirty = true; if (DocView.IsOpen) NoteDocResumeChange();
         return true;
     }
 
@@ -635,7 +636,7 @@ public partial class InkEngine
             float k = 1f - MathF.Pow(1f - (float)t, 3f);
             ViewOffsetY = (float)(_camFrom + (_camTo - _camFrom) * k);
         }
-        _dirty = true;
+        _dirty = true; if (!BoardOn && DocView.IsOpen) NoteDocResumeChange();
     }
 
     /// <summary>当前在第几屏（1 起）。相机偏移除以视口高 + 1。</summary>

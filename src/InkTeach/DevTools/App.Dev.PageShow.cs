@@ -255,6 +255,14 @@ internal sealed partial class App
                 Host.Commands.ToggleDocPan();
                 SettleFrames(220);
             }
+            // --docresume：出「上次看到第 N 页 · 继续 / 从头」那张卡（文档模式）。
+            // 走真实的打开流程（读位置 → 卡片可见），再截整屏；产品里没有这个入口。
+            if (cli.Contains("--docresume"))
+            {
+                DocResumeShowcase(path);
+                _quit = true;
+                return;
+            }
             // --width N：先把粗细调成 N 再出图（看"真实大小预览"用）
             int wi = Array.IndexOf(cli, "--width");
             if (wi >= 0 && wi + 1 < cli.Length && float.TryParse(cli[wi + 1], out float widthArg))
@@ -608,5 +616,74 @@ internal sealed partial class App
             ExitCode = ok ? 0 : 1;
         }
         _quit = true;
+    }
+
+    /// <summary>
+    /// `--panelshow &lt;out.png&gt; --docresume`：铺一叠假页 + 种一条"上次会话"的阅读位置，
+    /// 走真实打开流程弹出恢复卡，截整屏出图（人工验收：卡片位置 / 文案 / 按钮对齐 /
+    /// 不和页码条打架）。产品里没有这个入口。
+    /// </summary>
+    private void DocResumeShowcase(string path)
+    {
+        if (DocView.IsOpen) CloseDocument();
+        BoardOn = false;
+        Tool = Tool.Pen;
+        Host.Commands.SetTool(Tool.Pen);
+
+        string key = "resume-showcase";
+        DocResumeStore.Delete(key);
+        var shownAt = DateTimeOffset.Now.Date.AddDays(-1).AddHours(21).AddMinutes(30);
+        DocResumeStore.Save(key, new DocResumePosition
+        {
+            Page = 7, FractionY = 0.35f, FractionX = 0.5f, Zoom = 0.75f,
+            SavedAtUnix = new DateTimeOffset(shownAt).ToUnixTimeSeconds(),   // 昨天 = 跨会话
+        });
+
+        var specs = new List<DocPages.Spec>();
+        for (int i = 0; i < 12; i++)
+            specs.Add(new DocPages.Spec
+            {
+                Kind = 0, Source = "示范讲义.png", SourceIndex = i,
+                OutW = 1400, OutH = 1980,
+            });
+        DocPageWorker = false;
+        DocView.UseWorker = false;
+        StartDocViewForTest(specs, "示范讲义.pdf", key);
+        DocView.Generator = sp => FakeDocPageBgra(sp.OutW, sp.OutH, 246, 246, 248);
+        SettleFrames(900);
+
+        var card = DocResumeCardRect();
+        Console.WriteLine($"  [docresume] 卡片逻辑 {card.MaxX - card.MinX:F0}×{card.MaxY - card.MinY:F0}"
+                          + $" @ ({card.MinX:F0},{card.MinY:F0}) 可见={DocResumeVisible}");
+        bool ok = SaveScreenPng(path, (int)_virtualX, (int)_virtualY,
+                                Math.Max(1, (int)_virtualW), Math.Max(1, (int)_virtualH));
+        Console.WriteLine(ok ? $"已出图 {path}（文档恢复卡）" : "出图失败");
+        ExitCode = ok ? 0 : 1;
+        CloseDocument();
+        DocResumeStore.Delete(key);
+    }
+
+    /// <summary>整屏截一张 PNG：先按 BMP 抓（ScreenProbe 现成的路），再交给 GDI+ 转 PNG。</summary>
+    private static bool SaveScreenPng(string path, int x, int y, int w, int h)
+    {
+        string tmp = path + ".tmp.bmp";
+        try
+        {
+            if (!ScreenProbe.SaveBmp(tmp, x, y, w, h)) return false;
+            string dir = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(path));
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            using (var img = System.Drawing.Image.FromFile(tmp))
+                img.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("  出图转换失败：" + ex.Message);
+            return false;
+        }
+        finally
+        {
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { /* 有意忽略：临时文件删不掉不影响出图结果 */ }
+        }
     }
 }

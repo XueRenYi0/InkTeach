@@ -515,6 +515,8 @@ internal sealed partial class OverlayWindow : IDisposable
     private RectF _timerRectPrev = RectF.Empty;
     /// <summary>点名卡片上一帧的矩形。</summary>
     private RectF _rollRectPrev = RectF.Empty;
+    /// <summary>上一帧文档恢复提示卡占的矩形（关掉 / 换工具那一帧要把旧卡擦干净）。</summary>
+    private RectF _docResumeRectPrev = RectF.Empty;
     /// <summary>引擎侧悬停提示上一帧的矩形（换块 / 隐藏那一帧要把旧卡擦干净，同 PPT 条）。</summary>
     private RectF _tipRectPrev = RectF.Empty;
     /// <summary>上一帧轻提示占的矩形：提示到点消失那一帧要把它擦干净。</summary>

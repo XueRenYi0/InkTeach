@@ -1370,6 +1370,7 @@ public partial class InkEngine
             StepPpt();                        // PPT 放映联动（没变化时只读一个 bool，不碰 COM）
             StepDocPageReady();               // 文档页后台渲染完一页：置脏（这一拍会采纳它）
             StepDocAutoSave();                // 文档批注的节流保存（自动保存开着才写）
+            StepDocResume();                  // 文档阅读位置的节流保存（跨会话"继续"用）
             StepPptBar();                     // 底部那条：引导过期 / "再点确认"过期（没有长按了）
             StepToast();                      // 轻提示到点自动消失（2s，不吞输入）
             StepSelectionMenu();              // 选中被清空时弹层跟着关
@@ -1503,6 +1504,7 @@ public partial class InkEngine
         // 两边都是幂等的（TakeDirty 取走就清、SameAs 挡重复）。
         StepPpt();
         StepPptBar();     // 底部那条：引导过期 / "再点确认"过期（理由同上，自检那条路也走它）
+        StepDocResume();  // 阅读位置节流保存（自检用"抽消息＋渲染"驱动，也走它）
         StepToast();      // 轻提示到点消失（2s；自检也用"抽消息＋渲染"驱动）
         StepSelectionMenu(); // 选中被清空时弹层跟着关（自检也走这一条）
         StepTouchFling(); // 双指纵滑松手后的惯性（每帧衰减；自检也走这一条）

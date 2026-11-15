@@ -1201,6 +1201,11 @@ public readonly struct UiState
     /// 界面 / 文档条用它显示当前百分比（条上的 `[−] [100% ▾] [+]`，2026-11-16）。
     /// </summary>
     public float DocZoom { get; init; }
+    /// <summary>
+    /// 「上次看到第 N 页」恢复卡现在可见吗（文档模式、跨会话打开时才有）。
+    /// 界面 / 自检读它；没有文档时恒为 false（`--panel*` 出图不会多出一张卡）。
+    /// </summary>
+    public bool DocResumeVisible { get; init; }
     /// <summary>白板开着（板面模式）。界面用它判断“箭头清屏”这条设置现在生效不生效。</summary>
     public bool BoardOn { get; init; }
     /// <summary>设置项「箭头清屏」开着。</summary>

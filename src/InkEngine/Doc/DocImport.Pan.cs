@@ -67,6 +67,8 @@ public partial class InkEngine
     /// </summary>
     private void BeginDocPan(float screenX, float screenY)
     {
+        // 手掌开始 = 用户要自己拖着看：恢复提示先收（不跳）。
+        DismissDocResume("手掌");
         // 翻页动画还在跑就先停在当前帧：否则"手里在拖、相机自己在飞"，两边打架。
         _camAnimating = false;
         _docPanDragging = true;
@@ -94,6 +96,7 @@ public partial class InkEngine
         if (ViewScale > 1.0005f && MathF.Abs(dx) >= 0.01f)
             ViewOffsetX = ClampOffsetX(ViewOffsetX + dx);
         _dirty = true;
+        NoteDocResumeChange();
 
         // 页码条跟着换页（页号变了才重建界面状态）。
         int page = BarPageNow;

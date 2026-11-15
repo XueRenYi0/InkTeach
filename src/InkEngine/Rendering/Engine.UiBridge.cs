@@ -243,6 +243,7 @@ public partial class InkEngine
         DocOpen = DocView.IsOpen,
         DocPanMode = DocPanMode,                // 文档开着时主条那格画手 / 亮不亮（2026-11-15）
         DocZoom = DocZoom,                      // 文档缩放档（1 = 100%；v1 只缩文档）
+        DocResumeVisible = DocResumeVisible,    // 「上次看到第 N 页」卡（跨会话；没文档恒 false）
         DocInfo = DocView.IsOpen ? $"{DocView.Title} · {DocView.Count} 页" : "",
         BoardOn = BoardOn,
         ClearOnArrow = ClearOnArrow,
