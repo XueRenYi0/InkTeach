@@ -569,7 +569,7 @@ public partial class InkEngine
             AutoSaveNow();
 
         // 文档还开着就退出：阅读位置也补一次（下一会话才能问"上次看到第几页"）。
-        if (DocView.IsOpen) SaveDocResumeNow();
+        if (DocView.IsOpen) SaveDocResumeOnClose();
 
         // 在途的周期写盘（板书历史 / 自动存档 / PPT 批注）先全部等落完——**顺序不能反**：
         // 反了的话，"后到的旧内容"会把下面这份退出快照盖掉。

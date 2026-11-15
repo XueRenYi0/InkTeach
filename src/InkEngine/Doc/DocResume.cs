@@ -117,6 +117,25 @@ public partial class InkEngine
         _docResumeNextSaveAtMs = NowMs + 1000;
     }
 
+    /// <summary>
+    /// 关文档 / 退出时的兜底写：**卡片还开着**（老师没点继续/从头、也没动过页面）时
+    /// 保留原来那条位置，只把时间戳更新成"本次运行"——这样同一次运行里重开不再弹同一张卡，
+    /// 下一次启动仍会问"上次看到第 N 页"。不保留的话，开了看一眼就关会把第 7 页覆盖成第 1 页。
+    /// </summary>
+    internal void SaveDocResumeOnClose()
+    {
+        if (DocStoreKey.Length == 0 || !DocView.IsOpen) return;
+        if (DocResumeVisible && _docResume != null)
+        {
+            _docResume.SavedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            DocResumeStore.Save(DocStoreKey, _docResume);
+            _docResumeDirty = false;
+            _docResumeNextSaveAtMs = NowMs + 1000;
+            return;
+        }
+        SaveDocResumeNow();
+    }
+
     /// <summary>主循环 / 渲染每拍调：把节流窗口内攒下的位置变化补写一次。</summary>
     internal void StepDocResume()
     {

@@ -119,7 +119,11 @@ internal sealed partial class App
             SeedResume(key, 5, 0.3f, 1.25f);
             OpenResumeDoc(specs, key);
             bool first = DocResumeVisible;
-            CloseDocument();                    // 关闭时写入"现在"
+            CloseDocument();                    // 关闭时写入"现在"（但没选 = 保留旧位置）
+            var kept = DocResumeStore.Load(key);
+            check("恢复卡：没选继续/从头就关 → 保留上次页码，不覆盖成第 1 页",
+                  kept != null && kept.Page == 5 && kept.SavedAtUnix >= DocResumeStore.ProcessStartUnix,
+                  kept == null ? "没读到文件" : $"页={kept.Page} 时刻={kept.SavedAtUnix}");
             OpenResumeDoc(specs, key);
             check("恢复卡：同一次运行内重开不弹", first && !DocResumeVisible,
                   $"第一次={first} 重开={DocResumeVisible}");

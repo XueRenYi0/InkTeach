@@ -53,7 +53,7 @@
       - `DocImport.Pan.cs` 167 行 — 文档「手掌」拖页：文档模式下按下拖动平移相机（不落墨、不选中）。
       - `DocMemory.cs` 84 行
       - `DocPages.cs` 662 行 — 文档页底层：页配方、惰性生成、视口窗口回收、文档缩放的页位图倍率。
-      - `DocResume.cs` 320 行 — 文档「上次看到第 N 页」恢复提示：读写位置、卡片命中、继续/从头、落盘节流。
+      - `DocResume.cs` 339 行 — 文档「上次看到第 N 页」恢复提示：读写位置、卡片命中、继续/从头、落盘节流。
       - `DocResumeLayout.cs` 97 行 — 文档恢复提示卡的几何：卡片 / 两行字 / 两个按钮的矩形（画与命中同一份）。
       - `DocResumeStore.cs` 135 行 — 文档「上次看到第几页」的落盘：一文档一目录一小文本文件（跨会话恢复用）。
       - `DocStore.cs` 246 行
@@ -249,7 +249,7 @@
         - `BandAction.cs` 84 行
         - `BoardAndLaser.cs` 1,377 行 — 白板底纹/激光/光标 E2E。
         - `Diagnostics.cs` 3,295 行 — 诊断/环境/性能 E2E。
-        - `DocResume.cs` 190 行 — 文档「上次看到第 N 页」恢复提示 E2E（挂在 --doctest 末尾的 F 组）。
+        - `DocResume.cs` 194 行 — 文档「上次看到第 N 页」恢复提示 E2E（挂在 --doctest 末尾的 F 组）。
         - `Documents.cs` 1,431 行 — 文档导入 E2E。
         - `Erasers.cs` 1,003 行 — 橡皮擦 E2E（整笔/像素/动态）。
         - `FacesProbe.cs` 186 行

@@ -630,7 +630,7 @@ public partial class InkEngine
         if (BoardOn) SetBoardFromUi(false);
 
         SaveDocInk();                       // 关闭时兜底存一次（节流之外的那一下）
-        SaveDocResumeNow();                 // 阅读位置也兜底存一次（下一会话才能问"继续"）
+        SaveDocResumeOnClose();             // 阅读位置也兜底存一次（卡片还开着时保留旧位置）
         DismissDocResume("关文档");         // 卡不能跟到桌面上去
         ClearBoardFreeze();                 // 文档都关了，白板下面没有页可冻结
 
