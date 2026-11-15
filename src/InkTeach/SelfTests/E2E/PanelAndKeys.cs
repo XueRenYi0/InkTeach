@@ -1179,6 +1179,33 @@ internal sealed partial class App
                   !Host.State.Board && DocView.ResidentPages >= 1 && !ui.CellActiveForTest(2),
                   $"板开={Host.State.Board} 驻留={DocView.ResidentPages} 格亮={ui.CellActiveForTest(2)}");
 
+            // ⭐ 文档模式的主条那一格 = **手掌**（2026-11-15：PDF 像放映，不是穿透）。
+            //   · 文档开着：图标是 Fluent 的 Hand Right，点它 = 开/关拖页（不进穿透）；
+            //   · 手掌开着：工具格一律不亮（手里是拖页，画不出字）；
+            //   · 关掉手掌：图标回到"没开"的那张，工具格恢复。
+            {
+                var handCell = ui.CellRectForTest(1);
+                float hcx = (handCell.MinX + handCell.MaxX) * 0.5f * DpiScale;
+                float hcy = (handCell.MinY + handCell.MaxY) * 0.5f * DpiScale;
+                Check("文档开着：那一格画的是手掌（不是穿透箭头）",
+                      ui.CellIconForTest(1) is "handRight" or "handRightFilled",
+                      $"画的是 {ui.CellIconForTest(1)}");
+                ClickPhysical(hcx, hcy);
+                SettleFrames(300);
+                Check("文档开着：点那一格 = 开手掌（不是穿透）",
+                      DocPanMode && !PassThrough && ui.CellActiveForTest(1)
+                      && ui.CellIconForTest(1) == "handRightFilled",
+                      $"手掌={DocPanMode} 穿透={PassThrough} 格亮={ui.CellActiveForTest(1)} "
+                      + $"图标={ui.CellIconForTest(1)}");
+                Check("手掌开着：工具格不亮（手里是拖页）", !ui.CellActiveForTest(3),
+                      $"笔格亮={ui.CellActiveForTest(3)}");
+                ClickPhysical(hcx, hcy);
+                SettleFrames(300);
+                Check("再点一下：手掌关（回到工具）",
+                      !DocPanMode && ui.CellIconForTest(1) == "handRight",
+                      $"手掌={DocPanMode} 图标={ui.CellIconForTest(1)}");
+            }
+
             DocView.Close();
             SettleFrames(250);
         }

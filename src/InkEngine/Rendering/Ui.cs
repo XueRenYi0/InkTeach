@@ -499,8 +499,16 @@ public interface IEngineCommands
     /// 穿透开关（「鼠标 / 让给下层」那一格）。**开** = 点击交给下层程序；
     /// **关** = 回到批注，并直接切回画笔（画笔用得最多，省一次点格，2026-10-24 用户定）。
     /// 退出时恢复进穿透前的白板状态。
+    /// **文档模式里用户开不了穿透**（那格变成"手掌"，2026-11-15）：引擎会挡下并给一句提示，
+    /// 课堂计时/点名那条内部强制路径不走这里（见引擎的 force）。
     /// </summary>
     void SetPassThrough(bool on);
+    /// <summary>
+    /// 文档「手掌」开关（2026-11-15：PDF 模式像放映）。文档开着时主条那格就是它：
+    /// 开 = 画布拖动改拖页（上下滚相机，不落墨），关 = 回到当前工具。
+    /// 没有文档时是空操作（那一格回到普通穿透格）。
+    /// </summary>
+    void ToggleDocPan();
     /// <summary>临时开关批注键盘模式（取色板色值输入框要收键盘）。</summary>
     void SetKeyboardMode(bool on);
     /// <summary>
@@ -1169,6 +1177,14 @@ public readonly struct UiState
     public bool PptMode { get; init; }
     /// <summary>**当前有没有打开文档**（图片/PDF 页层，2026-10-07）。"关闭文档"那格按它亮/灰。</summary>
     public bool DocOpen { get; init; }
+    /// <summary>
+    /// 文档「手掌」开着吗（2026-11-15：PDF 模式像放映——主条那格在文档开着时是手）。
+    ///
+    /// 开着 = 画布按下/拖动是**拖页**（相机上下滚），不落墨；
+    /// 主条那一格按它亮/暗，鼠标指针按它换成手型。
+    /// 只在文档开着时有意义：关文档 / 换工具 / 进穿透都会把它关掉（见引擎）。
+    /// </summary>
+    public bool DocPanMode { get; init; }
     /// <summary>白板开着（板面模式）。界面用它判断“箭头清屏”这条设置现在生效不生效。</summary>
     public bool BoardOn { get; init; }
     /// <summary>设置项「箭头清屏」开着。</summary>

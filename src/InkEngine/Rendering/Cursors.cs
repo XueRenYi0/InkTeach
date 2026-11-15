@@ -38,6 +38,17 @@ internal enum CursorKind
     /// <summary>整体移动（选中框内部）。</summary>
     Move,
 
+    /// <summary>
+    /// 手型：文档「手掌」开着时用它（2026-11-15：PDF 像放映，拖动 = 拖页）。
+    ///
+    /// 用系统 `IDC_HAND`（那支"链接手"）：它是 Windows 里唯一现成的手型，
+    /// 会跟随用户的"指针大小 / 颜色 / 指针方案"。
+    /// ⚠ 语义上它本来是"链接可点"，这里是"按住拖页"——浏览器 / Acrobat 拖 PDF 也是这个手感，
+    ///   比四向箭头（会被读成缩放/移动物体）更不容易误会。要"张开的手掌"只能自绘，
+    ///   而自绘光标在大尺寸/高对比主题下会输给系统那套，本轮先用系统的。
+    /// </summary>
+    Hand,
+
     /// <summary>左右拉伸（选中框左右边中点）。</summary>
     ResizeWE,
 
@@ -132,6 +143,7 @@ internal static class Cursors
         CursorKind.Cross => System(Native.IDC_CROSS),
         CursorKind.IBeam => System(Native.IDC_IBEAM),
         CursorKind.Move => System(Native.IDC_SIZEALL),
+        CursorKind.Hand => System(Native.IDC_HAND),
         CursorKind.ResizeWE => System(Native.IDC_SIZEWE),
         CursorKind.ResizeNS => System(Native.IDC_SIZENS),
         CursorKind.ResizeNWSE => System(Native.IDC_SIZENWSE),
@@ -148,6 +160,7 @@ internal static class Cursors
         CursorKind.Cross => "IDC_CROSS 十字",
         CursorKind.IBeam => "IDC_IBEAM 文本",
         CursorKind.Move => "IDC_SIZEALL 移动",
+        CursorKind.Hand => "IDC_HAND 手型（拖页）",
         CursorKind.ResizeWE => "IDC_SIZEWE 左右拉伸",
         CursorKind.ResizeNS => "IDC_SIZENS 上下拉伸",
         CursorKind.ResizeNWSE => "IDC_SIZENWSE 对角拉伸",

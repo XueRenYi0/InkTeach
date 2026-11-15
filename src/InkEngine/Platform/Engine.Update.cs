@@ -351,8 +351,18 @@ public partial class InkEngine
         _quit = true;
     }
 
-    internal void SetPassThroughFromUi(bool on, bool toPen = false)
+    /// <summary>
+    /// 穿透开关（用户入口：主条那格 / 全局热键）。
+    ///
+    /// <paramref name="force"/> = **内部强制路径**（课堂计时 / 点名：开窗就把指针让给下层）。
+    /// 那条路在文档模式里也照旧；**用户入口**被挡（见 <see cref="BlockUserPassThroughInDoc"/>）。
+    /// </summary>
+    internal void SetPassThroughFromUi(bool on, bool toPen = false, bool force = false)
     {
+        // 文档模式 = 像放映（2026-11-15 用户定）：**用户不开放穿透**。
+        // 文档页在穿透下是整层让开的，老师看到的会是"PDF 突然没了"；
+        // 要穿透就先退出文档（页条菜单「退出文档」）。
+        if (on && !force && BlockUserPassThroughInDoc()) return;
         // 开穿透 = 键盘/点击归下层：回放中开它就点不到控制条了，先收掉回放。
         if (on) ExitReplayForEdit("开穿透");
         // 界面那格只发"切换"（`!st.PassThrough`），所以这就是"穿透开关"这条路：
@@ -360,6 +370,20 @@ public partial class InkEngine
         // `toPen` 只由**用户主动退出**的路径传（面板穿透格 / 全局热键）：退回来直接是画笔。
         SetPassThrough(on, restoreBoard: true, toPen: toPen);
         NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// 用户入口这一刻能不能进穿透：**文档模式不行**（2026-11-15 定，PDF 像放映）。
+    /// 主条那一格和全局热键走同一条判据（界面那边也按 DocOpen 先分派到手，这里是兜底）。
+    /// 返回 true = 挡住了，原因已经写进状态行。
+    /// </summary>
+    private bool BlockUserPassThroughInDoc()
+    {
+        if (!DocView.IsOpen) return false;
+        SetInkStatus("文档模式下请先退出文档，再穿透");
+        Console.WriteLine("[穿透] 文档模式里不开放穿透（先退出文档）");
+        NotifyUiStateChanged();
+        return true;
     }
 
     /// <summary>

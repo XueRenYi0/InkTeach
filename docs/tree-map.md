@@ -16,7 +16,7 @@
       - `OcrText.cs` 148 行
 
     **InkEngine/Classroom/**
-      - `Classroom.cs` 2,102 行 — 计时/点名窗：状态、名单、窗口交互。
+      - `Classroom.cs` 2,104 行 — 计时/点名窗：状态、名单、窗口交互。
       - `ClassroomDraw.cs` 717 行 — 课堂窗绘制：卡片/按钮/名牌/环/分段表。
 
     **InkEngine/Core/**
@@ -49,7 +49,7 @@
 
     **InkEngine/Doc/**
       - `DocImageSource.cs` 292 行
-      - `DocImport.cs` 634 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
+      - `DocImport.cs` 776 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
       - `DocMemory.cs` 64 行
       - `DocPages.cs` 533 行
       - `DocStore.cs` 246 行
@@ -70,7 +70,7 @@
       - `DwellAssist.cs` 122 行
       - `Engine.Capture.cs` 374 行 — 截图状态、确认/取消、手柄与读数。
       - `Engine.Clipboard.cs` 506 行
-      - `Engine.Input.cs` 1,952 行 — 指针输入、停顿成型、动态橡皮。
+      - `Engine.Input.cs` 1,978 行 — 指针输入、停顿成型、动态橡皮。
       - `Engine.TouchGestures.cs` 751 行 — 触摸手势：单指/双指/三指/长按/惯性。
       - `GoogleInkSlidingWindow.cs` 670 行 — Google Ink 滑动窗口输入。
       - `InkModel.cs` 285 行
@@ -93,10 +93,10 @@
       - `AutoStart.cs` 196 行
       - `Backup.cs` 457 行
       - `DiagLog.cs` 1,270 行 — 运行日志、设备卡、日志上传同意。
-      - `Engine.Hotkey.cs` 611 行 — 热键处理：WM_HOTKEY → 动作。
+      - `Engine.Hotkey.cs` 619 行 — 热键处理：WM_HOTKEY → 动作。
       - `Engine.Keyboard.cs` 484 行
       - `Engine.Radial.cs` 799 行 — 呼出盘：按住/划向扇区/松手。
-      - `Engine.Update.cs` 1,099 行 — 自动更新：检查/下载/换壳。
+      - `Engine.Update.cs` 1,123 行 — 自动更新：检查/下载/换壳。
       - `EraserTelemetry.cs` 329 行
       - `GcLatency.cs` 109 行
       - `KeyBindings.cs` 576 行 — 键位表、作用域、冲突检测、解析。
@@ -124,9 +124,9 @@
 
     **InkEngine/Rendering/**
       - `CanvasTiles.cs` 444 行
-      - `Cursors.cs` 492 行
-      - `Engine.Cursor.cs` 795 行 — 光标形状与滚动条交互。
-      - `Engine.UiBridge.cs` 990 行 — 引擎 ↔ 界面边界：IOverlayUi 命令转发。
+      - `Cursors.cs` 505 行
+      - `Engine.Cursor.cs` 800 行 — 光标形状与滚动条交互。
+      - `Engine.UiBridge.cs` 991 行 — 引擎 ↔ 界面边界：IOverlayUi 命令转发。
       - `GlyphFill.cs` 341 行
       - `Icons.Paths.cs` 142 行
       - `LegacyOverlayLayer.cs` 74 行
@@ -143,8 +143,8 @@
       - `OverlayLayerManager.cs` 192 行
       - `OverlayLayerRegistration.cs` 215 行
       - `SvgPath.cs` 271 行
-      - `Ui.cs` 1,638 行 — 界面接入契约：IOverlayUi / IEngineCommands / UiState。
-      - `UiHost.cs` 258 行
+      - `Ui.cs` 1,654 行 — 界面接入契约：IOverlayUi / IEngineCommands / UiState。
+      - `UiHost.cs` 259 行
       - `UiImageBytes.cs` 40 行
 
     **InkEngine/Replay/**
@@ -199,7 +199,7 @@
       - `App.Dev.Geometry.cs` 470 行
       - `App.Dev.Input.cs` 76 行
       - `App.Dev.Metrics.cs` 590 行
-      - `App.Dev.PageShow.cs` 593 行
+      - `App.Dev.PageShow.cs` 612 行 — 界面出图 / 状态探针：--panelshow 离屏截图、--pageshow 画布截图。
       - `App.Dev.Render.cs` 484 行
       - `App.Dev.Sheets.cs` 382 行
       - `App.Dev.Showcase.cs` 438 行
@@ -245,7 +245,7 @@
         - `BandAction.cs` 84 行
         - `BoardAndLaser.cs` 1,377 行 — 白板底纹/激光/光标 E2E。
         - `Diagnostics.cs` 3,295 行 — 诊断/环境/性能 E2E。
-        - `Documents.cs` 1,329 行 — 文档导入 E2E。
+        - `Documents.cs` 1,428 行 — 文档导入 E2E。
         - `Erasers.cs` 1,003 行 — 橡皮擦 E2E（整笔/像素/动态）。
         - `FacesProbe.cs` 186 行
         - `GlyphEraseTest.cs` 59 行
@@ -267,7 +267,7 @@
         - `Navigation.cs` 1,154 行 — 滚动/翻页/相机 E2E。
         - `OverlayAudit.cs` 218 行
         - `PageAudit.cs` 153 行
-        - `PanelAndKeys.cs` 6,571 行 — 产品界面/键位/穿透 E2E。
+        - `PanelAndKeys.cs` 6,598 行 — 产品界面/键位/穿透 E2E。
         - `PhotoBeautifyShow.cs` 80 行
         - `PlotFromCard.cs` 174 行
         - `PlotSuiteTest.cs` 205 行
@@ -302,7 +302,7 @@
 
     **InkUi/Design/**
       - `IconAtlas.cs` 1,940 行 — 图标绘制：路径解析/缓存/尺寸缩放。
-      - `Icons.g.cs` 498 行
+      - `Icons.g.cs` 516 行
       - `Tokens.cs` 465 行
       - `Widgets.cs` 149 行
 
@@ -318,7 +318,7 @@
       - `UiActionTable.cs` 45 行
 
     **InkUi/Panels/**
-      - `FullUi.MorePanel.cs` 2,365 行 — 更多面板：首页/设置/说明/日志/AI 服务入口。
+      - `FullUi.MorePanel.cs` 2,381 行 — 更多面板：首页/设置/说明/日志/AI 服务入口。
       - `FullUi.Pages.cs` 704 行 — 更多面板的各页（启动器 / 设置 / 说明 / 日志 / AI 服务）：绘制与命中；
       - `FullUi.Settings.cs` 3,046 行 — 设置页：工具条/通用/书写/墨迹/AI/备份。
       - `HelpUi.cs` 499 行
@@ -326,4 +326,4 @@
     **InkUi/Shell/**
       - `Anim.cs` 89 行
       - `FullUi.cs` 1,883 行 — 工具条/球/上带/色带的主体布局与绘制。
-      - `FullUi.Interaction.cs` 2,301 行 — 界面命中、开合、换页、贴边隐藏。
+      - `FullUi.Interaction.cs` 2,308 行 — 界面命中、开合、换页、贴边隐藏。

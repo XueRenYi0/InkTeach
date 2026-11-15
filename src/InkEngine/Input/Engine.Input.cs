@@ -271,6 +271,20 @@ public partial class InkEngine
         // 界面之外的穿透：交下层窗口，我们不收这一下。
         if (PassThrough) return;
 
+        // 文档「手掌」（2026-11-15：PDF 像放映）：文档模式里手掌开着时，**画布按下 = 拖页**——
+        // 不落墨、不选中、不进文本/图形。排在穿透之后（穿透下根本收不到这一下）、
+        // 工具分流之前（它要压住这一整下的工具语义）。触摸 / 笔 / 鼠标同一套。
+        if (DocPanMode && DocView.IsOpen && TryBeginDocPanPress(sy))
+        {
+            _activePointer = id;
+            _activePointerType = ptype;
+            PointerX = x; PointerY = y; PointerInside = true;
+            Native.SetCapture(hWnd);
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
         // 图库里点了一张之后（`_libraryPending` 非空）：**这一次按下就是"把它放下来"**
         // ——和"粘贴对象"同一条路（一步撤销、放完自动选中）。
         // 位置：排在界面之后（点在工具条上不该跑到画布上插东西）、落笔之前
@@ -1207,6 +1221,9 @@ public partial class InkEngine
         ScreenToCanvas(ref x, ref y);   // 相机：屏幕 → 画布，下游全按画布坐标走
         PointerX = x; PointerY = y; PointerInside = true;
 
+        // 文档手掌拖动：这一串移动只归平移（不落墨、不转发界面悬停、不喂工具）。
+        if (DocPanMoveFromPointer(id, sy)) return;
+
         // 字体下拉：拖动滚动（含惯性）。
         if (FontListPointerMove(x, y, id)) { _dirty = true; return; }
 
@@ -1672,6 +1689,15 @@ public partial class InkEngine
                 ApplyCursor();
             }
             _dirty = true;
+            return;
+        }
+
+        // 文档手掌：抬手 = 结束拖动（捕获在我们手里，必须自己放开）。
+        if (DocPanUpFromPointer(id))
+        {
+            Native.ReleaseCapture();
+            _drawing = false;
+            ApplyCursor();
             return;
         }
 

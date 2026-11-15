@@ -1259,6 +1259,11 @@ public sealed partial class FullUi
     /// </summary>
     private string CellIconName(int cell, in UiState st) => cell switch
     {
+        // 箭头那一格：**文档模式里画手掌**（2026-11-15：PDF 像放映——点它拖页，不是穿透）。
+        // 文档没开时才回到那两张鼠标箭头（穿透：常态描边 / 选中实心）。
+        1 => st.DocOpen
+                ? (IsActive(1, st) ? "handRightFilled" : "handRight")
+                : (IsActive(1, st) ? Cells[1].Filled : Cells[1].Icon),
         // 图形那一格：亮着（手里就是某种图形）才跟着当前种类走，没亮画通用的那张（见 DrawCell 那段）
         10 => IsActive(10, st) ? ShapeIcon(st.Tool) : Cells[10].Icon,
         6 => IsActive(6, st)
@@ -1283,9 +1288,13 @@ public sealed partial class FullUi
     /// </summary>
     private bool IsActive(int i, in UiState st)
     {
-        if (i == 1) return st.PassThrough;
+        // 文档模式里那一格是**手掌**（不是穿透）：亮不亮看文档手掌开没开。
+        if (i == 1) return st.DocOpen ? st.DocPanMode : st.PassThrough;
         if (i == 2) return st.Board;
         if (i == 11) return st.LibraryOpen && !st.LibraryShapesTab;
+        // 文档「手掌」开着 = 手里是"拖页"，工具格一律不高亮——和穿透同一条道理：
+        // 亮着笔却一笔也画不出来，老师会以为坏了（2026-11-15）。
+        if (st.DocPanMode) return false;
         if (st.PassThrough) return false;
         return i switch
         {
@@ -1534,11 +1543,18 @@ public sealed partial class FullUi
             return id switch
             {
                 // 0 号收起格、球（-2）：自解释，不配（收窄）
-                1 => (_host != null && _host.State.ClearOnArrowActive ? "清屏并穿透" : c.Tip,
-                      Key(KeyAction.TogglePassThrough),
-                      _host != null && _host.State.ClearOnArrowActive
-                          ? "清空桌面批注（Ctrl+Z 撤销）"
-                          : "打开后点击落到底下的程序；再点回来是画笔"),
+                // 1 号（鼠标 / 手掌）：文档模式里它**不是穿透**，是"拖页"（2026-11-15），
+                // 提示必须跟着换——不然悬停写着"打开后点击落到底下的程序"，点下去却是拖页。
+                1 => _host != null && _host.State.DocOpen
+                    ? ("手掌（拖页）", "",
+                       _host.State.DocPanMode
+                           ? "拖动画布上下看页；再点一次回到工具"
+                           : "点一下开手掌：拖动上下看页（不落墨）；要穿透先退出文档")
+                    : (_host != null && _host.State.ClearOnArrowActive ? "清屏并穿透" : c.Tip,
+                       Key(KeyAction.TogglePassThrough),
+                       _host != null && _host.State.ClearOnArrowActive
+                           ? "清空桌面批注（Ctrl+Z 撤销）"
+                           : "打开后点击落到底下的程序；再点回来是画笔"),
                 2 => (c.Tip, Key(KeyAction.ToggleBoard),
                       Loc.T("{0} / {1} 翻屏", Key(KeyAction.FlipPageUp), Key(KeyAction.FlipPageDown))),
                 3 => (c.Tip, Key(KeyAction.ToolPen), "已经是笔 → 再按换颜色"),

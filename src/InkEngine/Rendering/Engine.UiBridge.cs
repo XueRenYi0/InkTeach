@@ -241,6 +241,7 @@ public partial class InkEngine
         UpdateText = UpdateText,
         InkStatus = InkStatus,                  // 界面「墨迹」页的状态行
         DocOpen = DocView.IsOpen,
+        DocPanMode = DocPanMode,                // 文档开着时主条那格画手 / 亮不亮（2026-11-15）
         DocInfo = DocView.IsOpen ? $"{DocView.Title} · {DocView.Count} 页" : "",
         BoardOn = BoardOn,
         ClearOnArrow = ClearOnArrow,

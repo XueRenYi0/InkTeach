@@ -2040,6 +2040,13 @@ public sealed partial class FullUi
         switch (idx)
         {
             case 1:
+                // 文档模式（2026-11-15：PDF 像放映）：这一格是**手掌**——点它 = 开/关拖页。
+                // 用户入口在这里**不进穿透**（引擎也有兜底，见 BlockUserPassThroughInDoc）。
+                if (st.DocOpen)
+                {
+                    cmd.ToggleDocPan();
+                    break;
+                }
                 // 进穿透前先清屏（设置开着 + 桌面批注才真的清；引擎自己判）。
                 if (!st.PassThrough) cmd.ClearDesktopOnArrow();
                 cmd.SetPassThrough(!st.PassThrough);

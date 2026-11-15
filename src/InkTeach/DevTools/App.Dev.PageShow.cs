@@ -1,3 +1,6 @@
+// [职责] 界面出图 / 状态探针：--panelshow 离屏截图、--pageshow 画布截图。
+// [测试] --panelshow / --pageshow（本身不判定，出图给人工验收）
+
 using System.Buffers;
 using System.Diagnostics;
 using System.Numerics;
@@ -236,6 +239,22 @@ internal sealed partial class App
             int ci = Array.IndexOf(cli, "--cell");
             if (ci >= 0 && ci + 1 < cli.Length && int.TryParse(cli[ci + 1], out int cellArg))
                 ui.SelectBandCellForTest(cellArg);
+            // --docpan：**文档模式**出图（2026-11-15：PDF 像放映——主条那格画手掌）。
+            // 产品里没有这个入口（和 --recent / --tip 同一类，只服务"图上看细节"）：
+            // 铺一叠假页 + 把手掌打开，那一格就会画成手并亮着。页位图给个纯灰生成器，
+            // 免得后台页线程拿到 null 生成器还空转。
+            if (cli.Contains("--docpan"))
+            {
+                var demoPages = new List<DocPages.Spec>
+                {
+                    new() { Kind = 0, Source = "示范讲义.png", SourceIndex = 0, OutW = 900, OutH = 1200 },
+                };
+                DocView.Generator = sp => FakeDocPageBgra(sp.OutW, sp.OutH, 246, 246, 246);
+                DocView.Open(demoPages, "示范讲义.pdf", Native.GetSystemMetrics(0) * 0.5f, 0f, 24f);
+                BoardOn = false;                     // 文档模式没有白板（不然白板格也亮着，图上像两个选中）
+                Host.Commands.ToggleDocPan();
+                SettleFrames(220);
+            }
             // --width N：先把粗细调成 N 再出图（看"真实大小预览"用）
             int wi = Array.IndexOf(cli, "--width");
             if (wi >= 0 && wi + 1 < cli.Length && float.TryParse(cli[wi + 1], out float widthArg))

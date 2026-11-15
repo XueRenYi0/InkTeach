@@ -579,9 +579,13 @@ internal sealed partial class App
 
         // 穿透里打开文档：自动退穿透 + 切回「笔」（2026-10-16 用户提议"这样才知道打开了"）
         {
+            // 2026-11-15 起文档开着时用户进不了穿透（PDF 像放映）——先把上一组的文档关掉，
+            // 这条才真的在验"从穿透里打开文档会退穿透"，而不是"穿透本来就没开成"。
+            CloseDocument();
             Host.Commands.SetTool(Tool.Eraser);
             SetPassThroughFromUi(true);
             SettleFrames(120);
+            Check("（准备）现在真的在穿透里", PassThrough, $"穿透={PassThrough}");
             OpenBoardAnyForTest(new[] { pFlag });
             SettleFrames(150);
             Check("穿透里打开文档：自动退出穿透", !PassThrough, $"穿透={PassThrough}");
@@ -901,14 +905,16 @@ internal sealed partial class App
             Check("清空文档墨迹：内存与盘都空了",
                   Doc.Strokes.Count == 0 && DocStore.Load(DocStoreKey) == null, "ok");
 
-            // ⭐ 穿透 = 全让开（S2，用户 2026-10-07 定）：页收、条收；退出自动回来
+            // ⭐ 穿透 = 全让开（S2，用户 2026-10-07 定）：页收、条收；退出自动回来。
+            // ⚠ 2026-11-15 起用户入口在文档模式里**被挡**（PDF 像放映，见 FULLUI 那格/热键），
+            //   这里验的是**底层行为**（课堂计时/点名那条强制路径），所以走 force。
             var barRect = PptBarRect();
             float bcx = (barRect.MinX + barRect.MaxX) * 0.5f;
             float bcy = (barRect.MinY + barRect.MaxY) * 0.5f;
             int rb0 = DocView.At(0) != null ? (int)DocView.At(0).Rect.MinX : 0;
             int ry0 = DocView.At(0) != null ? (int)DocView.At(0).Rect.MinY : 0;
 
-            SetPassThroughFromUi(true);
+            SetPassThroughFromUi(true, force: true);
             SettleFrames(260);
             Check("穿透：页位图全放 + 条可见性关闭",
                   DocView.ResidentPages == 0 && !PageBarVisible && !PptBarContains(bcx, bcy),
@@ -996,7 +1002,8 @@ internal sealed partial class App
 
                 // ① 鼠标格开穿透：板盖让位 + **墨迹也让开**（2026-10-17 用户定：全让开——
                 //    屏幕只剩下层程序，不再"几层墨浮着分不清在哪一层"）
-                SetPassThroughFromUi(true);
+                //    ⚠ 2026-11-15 起文档开着时用户入口不给穿透了，这里走 force 验底层行为。
+                SetPassThroughFromUi(true, force: true);
                 SettleFrames(280);
                 int btCoverPt = ScreenProbe.CountNear(rb0 + 300, ry0 + 300, 80, 80, 0, 204, 0, 6);
                 Check("穿透：白板盖让位（全让开）", PassThrough && btCoverPt < 80, $"板绿残留={btCoverPt}");
@@ -1017,7 +1024,7 @@ internal sealed partial class App
 
                 // ③ 再进穿透，这次走「换工具」退（笔格/呼出盘 = "我现在就要写"）——
                 //   以前这里留下混合态：盖没了、板槽的墨还浮在桌面上，接着写还会悄悄写进白板槽
-                SetPassThroughFromUi(true);
+                SetPassThroughFromUi(true, force: true);      // 文档开着：同上，走强制路径
                 SettleFrames(280);
                 SetToolFromUi(Tool.Highlighter);
                 SettleFrames(380);
@@ -1050,7 +1057,7 @@ internal sealed partial class App
                       $"板开={BoardOn} 回原页={Doc.PageKey == btBackKey} 板绿={btCoverOff} 存={Doc.StrokesOf(InkDocument.BoardPageKey).Count} 笔");
 
                 // ⑥ 穿透里开白板（Ctrl+B 同路）：退穿透 + 板回来，一条命令收两个状态
-                SetPassThroughFromUi(true);
+                SetPassThroughFromUi(true, force: true);      // 文档开着：同上，走强制路径
                 SettleFrames(280);
                 SetBoardFromUi(true);
                 SettleFrames(320);
@@ -1122,6 +1129,96 @@ internal sealed partial class App
             if (Doc.PageKey != 0) Doc.SwitchPage(0);
             Doc.Clear();
             Doc.ClearHistory();
+
+            // ------------------------------------------------------------------
+            Console.WriteLine("  -- C4 PDF「手掌」：文档像放映（2026-11-15）--");
+            // ------------------------------------------------------------------
+            // 契约（用户 2026-11-15 定）：文档模式 = 放映——
+            //   · 没有用户穿透（那格是手掌）；打开默认笔；关文档回桌面、那格恢复穿透箭头；
+            //   · 手掌开着时画布拖动 = 拖页（纵向），不落墨；换任何工具都退出手掌。
+            {
+                // 先摆一个"不是笔"的工具，证明"打开文档默认笔"不是碰巧。
+                SetToolFromUi(Tool.Highlighter);
+                OpenBoardAnyForTest(new[] { pPdf2 });      // 走产品入口（含 PrepareAnnotateAfterOpen）
+                SettleFrames(300);
+                Check("手掌：打开 PDF → 工具 = 笔、手掌关",
+                      DocView.IsOpen && Tool == Tool.Pen && !DocPanMode,
+                      $"文档={DocView.IsOpen} 工具={Tool} 手掌={DocPanMode}");
+
+                // 用户穿透入口：文档开着 → 挡住 + 状态行说清怎么办
+                SetPassThroughFromUi(true);
+                SettleFrames(120);
+                Check("手掌：文档开着时用户穿透被挡（提示先退出文档）",
+                      !PassThrough && InkStatus.Contains("先退出文档"),
+                      $"穿透={PassThrough} 状态={InkStatus}");
+
+                // 主条那一格（命令通道）→ 手掌开；界面画的是手、那格亮着
+                Host.Commands.ToggleDocPan();
+                SettleFrames(120);
+                Check("手掌：点那格 → 手掌开", DocPanMode, $"手掌={DocPanMode}");
+                if (CurrentUi is InkUi.FullUi fui)
+                {
+                    Check("手掌：主条那格画的是手（handRight/handRightFilled）",
+                          fui.CellIconForTest(1) is "handRight" or "handRightFilled",
+                          $"画的是 {fui.CellIconForTest(1)}");
+                    Check("手掌：那格在手掌开着时是亮着的", fui.CellActiveForTest(1),
+                          $"亮={fui.CellActiveForTest(1)}");
+                }
+                else Console.WriteLine("  SKIP: 没挂产品界面，主条图标那两条这次不判");
+
+                // 拖动 = 拖页：相机跟着走、**一笔都不落**
+                int strokesBefore = Doc.Strokes.Count;
+                float camBefore = ViewOffsetY;
+                bool grabbed = TryBeginDocPanPress(700f);
+                DocPanDragForTest(640f);          // 往上拖（页面顶部：往上才有余量）
+                DocPanDragForTest(580f);
+                float camAfter = ViewOffsetY;
+                DocPanReleaseForTest();
+                SettleFrames(120);
+                Check("手掌：拖动 → 相机跟着走（纵向）",
+                      grabbed && MathF.Abs(camAfter - camBefore) > 40f,
+                      $"cam {camBefore:F0} → {camAfter:F0}");
+                Check("手掌：拖动不落墨（一笔都没多）", Doc.Strokes.Count == strokesBefore,
+                      $"笔画 {strokesBefore} → {Doc.Strokes.Count}");
+                // 光标判据要确定性：把指针摆到画布上、设备当鼠标（否则可能停在按钮上 / 还是触摸态）
+                PointerX = 200f; PointerY = 200f + ViewOffsetY;
+                LastPointerType = Native.PT_MOUSE;
+                Check("手掌：拖动中光标是手型", ComputeCursorKind() == CursorKind.Hand,
+                      Cursors.Name(ComputeCursorKind()));
+
+                // 出图：文档模式 + 手掌格亮着（人工验收这一格到底长什么样）
+                try
+                {
+                    string shotDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inkteach-doctest");
+                    Directory.CreateDirectory(shotDir);
+                    string shot = System.IO.Path.Combine(shotDir, "C4-文档手掌.bmp");
+                    bool shotOk = ScreenProbe.SaveBmp(shot, 0, 0, _virtualW, _virtualH);
+                    Console.WriteLine($"  截图：{(shotOk ? "已存" : "存图失败")} {shot}");
+                }
+                catch (Exception ex) { Console.WriteLine("  截图失败（不影响判定）：" + ex.Message); }
+
+                // 点笔格 = 换工具 = 手掌自动关（"我要写字了"）
+                Host.Commands.SetTool(Tool.Pen);
+                SettleFrames(120);
+                Check("手掌：点笔 → 手掌自动关", !DocPanMode, $"手掌={DocPanMode}");
+
+                // 关文档：手掌关、回桌面、用户穿透恢复
+                CloseDocument();
+                SettleFrames(240);
+                Check("手掌：关文档 → 手掌关 + 回到桌面",
+                      !DocPanMode && !DocView.IsOpen && Doc.PageKey == 0,
+                      $"手掌={DocPanMode} 文档={DocView.IsOpen} slot={Doc.PageKey}");
+                SetPassThroughFromUi(true);
+                SettleFrames(150);
+                Check("手掌：关文档后用户穿透重新可用", PassThrough, $"穿透={PassThrough}");
+                SetPassThroughFromUi(false);
+                SettleFrames(150);
+                if (CurrentUi is InkUi.FullUi fui2)
+                    Check("手掌：关文档后那格回到穿透箭头",
+                          fui2.CellIconForTest(1) == "cursorArrow",
+                          $"画的是 {fui2.CellIconForTest(1)}");
+            }
+
             try { Directory.Delete(pdfDir2, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         }
 
@@ -1234,7 +1331,9 @@ internal sealed partial class App
 
         Shot("1-打开文档");
         SetBoardFromUi(true);       Shot("2-开白板");
-        SetPassThroughFromUi(true); Shot("3-开穿透");
+        // 探针要摆出"穿透 × 文档"这一态：用户入口在文档模式里已关闭（2026-11-15），
+        // 用内部强制路径（和课堂计时/点名同一条），才照得出底层让位行为。
+        SetPassThroughFromUi(true, force: true); Shot("3-开穿透");
         SetPassThroughFromUi(false); Shot("4-关穿透");
         SetBoardFromUi(false);      Shot("5-关白板");
         SetBoardFromUi(true);       Shot("6-再开白板");

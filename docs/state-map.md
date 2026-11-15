@@ -1,6 +1,6 @@
 # 状态地图（自动生成，勿手改）
 
-> 生成：2026-11-15 17:35 ／ 脚本：`tools/gen-state-map.ps1` ／ ADR-005 D4
+> 生成：2026-11-15 23:21 ／ 脚本：`tools/gen-state-map.ps1` ／ ADR-005 D4
 > 用法：改一个私有字段前，先在这里查它被哪些同族文件读写；只列被 >=2 个文件引用的字段。
 > 它降低定位成本，不降低验证成本；拆不拆类看 ADR-005 D4 的触发条件，不按行数。
 
@@ -8,9 +8,9 @@
 
 | 字段 | 引用文件 | 主要文件 | 写入点 |
 | --- | --- | --- | --- |
-| `_dirty` | 23 | Engine.cs, Engine.Host.cs, Engine.Selection.Beautify.cs, Engine.Selection.Gesture.cs, Engine.Selection.Vertex.cs, Engine.SelectionBar.Actions.cs …+17 | 297 |
+| `_dirty` | 23 | Engine.cs, Engine.Host.cs, Engine.Selection.Beautify.cs, Engine.Selection.Gesture.cs, Engine.Selection.Vertex.cs, Engine.SelectionBar.Actions.cs …+17 | 298 |
 | `_windows` | 15 | Engine.cs, Engine.Host.cs, Engine.Capture.cs, Engine.Clipboard.cs, Engine.Input.cs, Engine.Hotkey.cs …+9 | 1 |
-| `_drawing` | 9 | Engine.cs, Engine.Host.cs, Engine.SelectionBar.cs, Engine.Input.cs, Engine.TouchGestures.cs, Engine.Radial.cs …+3 | 29 |
+| `_drawing` | 9 | Engine.cs, Engine.Host.cs, Engine.SelectionBar.cs, Engine.Input.cs, Engine.TouchGestures.cs, Engine.Radial.cs …+3 | 30 |
 | `_libraryPending` | 8 | Engine.Host.cs, Engine.Hotkey.cs, Engine.Radial.cs, Engine.Library.cs, Engine.Library.Input.cs, Engine.Library.Layout.cs …+2 | 14 |
 | `_libraryPendingTitle` | 8 | Engine.Host.cs, Engine.Hotkey.cs, Engine.Radial.cs, Engine.Library.cs, Engine.Library.Input.cs, Engine.Library.Layout.cs …+2 | 13 |
 | `_restoreToolAfterLibrarySelection` | 8 | Engine.Input.cs, Engine.Hotkey.cs, Engine.Radial.cs, Engine.Library.cs, Engine.Library.Input.cs, Engine.Library.Layout.cs …+2 | 4 |
@@ -67,30 +67,30 @@
 | `_inkTrail` | 2 | Overlay.Capture.cs, Overlay.cs | 9 |
 | `_latencyWait` | 2 | Overlay.Capture.cs, Overlay.cs | 4 |
 
-## FullUi（8 文件 / 140 字段 / 113 个跨文件字段）
+## FullUi（8 文件 / 142 字段 / 112 个跨文件字段）
 
 | 字段 | 引用文件 | 主要文件 | 写入点 |
 | --- | --- | --- | --- |
-| `_host` | 8 | FullUi.Ai.cs, FullUi.AiMenu.cs, FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs …+2 | 13 |
+| `_host` | 8 | FullUi.Ai.cs, FullUi.AiMenu.cs, FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs …+2 | 12 |
 | `_widgets` | 8 | FullUi.Ai.cs, FullUi.AiMenu.cs, FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs …+2 | 1 |
 | `_moreOpen` | 7 | FullUi.Ai.cs, FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.cs …+1 | 9 |
 | `_dark` | 7 | FullUi.Ai.cs, FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.cs …+1 | 3 |
 | `_screen` | 6 | FullUi.Ai.cs, FullUi.AiMenu.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 2 |
 | `_more` | 6 | FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 1 |
 | `_moreH` | 6 | FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 1 |
-| `_moreHover` | 5 | FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.Interaction.cs | 37 |
+| `_moreHover` | 5 | FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.Interaction.cs | 38 |
+| `_actionFlashUntil` | 5 | FullUi.AiMenu.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 6 |
 | `_penPickerOpen` | 5 | FullUi.Ai.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 3 |
 | `_work` | 5 | FullUi.Ai.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 2 |
 | `_aiMenuOpen` | 5 | FullUi.Ai.cs, FullUi.AiMenu.cs, FullUi.MorePanel.cs, FullUi.cs, FullUi.Interaction.cs | 2 |
-| `_bandCell` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 29 |
-| `_press` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 19 |
+| `_bandCell` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 28 |
+| `_morePress` | 4 | FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.Interaction.cs | 20 |
 | `_morePage` | 4 | FullUi.Ai.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.Interaction.cs | 19 |
-| `_morePress` | 4 | FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.Interaction.cs | 19 |
+| `_press` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 16 |
 | `_railHover` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 15 |
 | `_hover` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 14 |
 | `_hubHint` | 4 | FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.Interaction.cs | 10 |
 | `_dragging` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 8 |
-| `_frameShiftValid` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 7 |
 
 ## Model（8 文件 / 64 字段 / 4 个跨文件字段）
 

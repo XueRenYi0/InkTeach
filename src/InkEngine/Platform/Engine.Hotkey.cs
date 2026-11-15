@@ -53,6 +53,8 @@ public partial class InkEngine
             // 穿透开关（全局 Ctrl+Alt+Shift+T 这条同一条路）：退出时恢复进穿透前的板态，
             // 见 SetPassThrough 的 restoreBoard。用户主动退出 = 回到画笔（2026-10-24）。
             case KeyAction.TogglePassThrough:
+                // 文档模式里用户入口不开穿透（2026-11-15；和主条那格同一条判据）。
+                if (!PassThrough && BlockUserPassThroughInDoc()) break;
                 // 和点箭头同一条路：进穿透前按设置清桌面（白板/PPT/文档不动）。
                 if (!PassThrough) ClearDesktopOnArrowFromUi();
                 SetPassThrough(!PassThrough, restoreBoard: true, toPen: PassThrough);
@@ -302,6 +304,9 @@ public partial class InkEngine
         _stepPlan = null;
         _stepIndex = 0;
         _stepSnap = ShapeSnapKind.None;      // 「直棱柱」那颗胶囊跟着半成品一起作废
+        // 换工具 = 退出"文档手掌"（2026-11-15：手掌不是工具，点任何工具格 = 我要写字了）。
+        // 放在 Tool = t 之前：ExitDocPan 只碰手掌/光标，不看 Tool。
+        ExitDocPan("换工具");
         Tool = t;
         // 一次性图形：任何主动换工具都取消它；面板选卡会在 SetShapePresetFromUi 里重新置上。
         _shapeOneShot = false;
@@ -405,6 +410,9 @@ public partial class InkEngine
     /// </summary>
     private void SetPassThrough(bool on, bool restoreBoard = false, bool toPen = false)
     {
+        // 进穿透 = 离开"文档模式"的交互（2026-11-15）：手掌先收掉，
+        // 免得退回来时是"手里是笔、一动却是拖页"的混合态。
+        if (on) ExitDocPan("进穿透");
         // 进穿透先记下板态（要被"开关退出"用来恢复）。
         // 只在"真的从关到开"这一下记——重复调 SetPassThrough(true) 时 BoardOn 已经被关掉了，
         // 再记一次就会把外面的快照覆盖成 false，退出时反而不恢复。

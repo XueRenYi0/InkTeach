@@ -90,6 +90,9 @@ public partial class InkEngine
         if (PassThrough) return CursorKind.Leave;                 // 谁来接管由系统决定
         if (LastPointerType == Native.PT_TOUCH) return CursorKind.Hidden;
 
+        // 文档「手掌」（2026-11-15）：文档里手掌开着 = 拖页 → 系统手型（排在界面/穿透之后）。
+        if (DocPanMode && DocView.IsOpen) return CursorKind.Hand;
+
         if (_drawing)
         {
             // 拖拽中不重新做命中测试：指针早就离开手柄了，重测会让光标在半路变回去。
@@ -363,7 +366,9 @@ public partial class InkEngine
             bool touchEraserCursor = LastPointerType == Native.PT_TOUCH
                                      && _drawing && _touchMode == TouchMode.Write
                                      && (EffectiveTool == Tool.Eraser || EffectiveTool == Tool.PixelEraser);
+            // 文档「手掌」：拖页时手里没有笔——不给落点反馈（否则橡皮会顶着一个圈在拖页）。
             if (PassThrough || !PointerInside || CaptureFrameHidden
+                || (DocPanMode && DocView.IsOpen)
                 || (LastPointerType == Native.PT_TOUCH && !touchEraserCursor))
                 return ToolCursorShape.None;
 

@@ -2018,7 +2018,9 @@ public partial class InkEngine
             if (_classroomPassThroughForced) return;
             _classroomPassThroughForced = true;
             _classroomPassThroughBefore = PassThrough;
-            if (!PassThrough) SetPassThroughFromUi(true);
+            // **force**：课堂窗开着就得把指针让给记事本 / 点名表——文档模式也照旧。
+            // 用户入口（主条那格 / 全局热键）在文档模式里是挡着的，见 BlockUserPassThroughInDoc。
+            if (!PassThrough) SetPassThroughFromUi(true, force: true);
         }
         else
         {

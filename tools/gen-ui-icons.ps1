@@ -110,6 +110,9 @@ $icons = [ordered]@{
     #   starAdd  = 选中栏的“收进来”动作（**带加号**）
     'star'            = @('Star')
     'starAdd'         = @('Star Add')
+    # 文档「手掌」格（2026-11-15：PDF 模式像放映，主条箭头那格变成手——拖页看页）。
+    # 用 Fluent 自家的 Hand Right：24 网格、和这一排同一口径；regular 常态、filled 手掌开着。
+    'handRight'       = @('Hand Right')
 }
 
 # 激活态用的 filled 变体（Windows 11 的惯例：常态 regular、选中 filled）
@@ -134,6 +137,7 @@ $filledIcons = [ordered]@{
     # 收藏：入口打开/已收藏 = 实心星；动作 = Star Add
     'starFilled'        = @('Star')
     'starAddFilled'     = @('Star Add')
+    'handRightFilled'   = @('Hand Right')
 }
 
 # 每张外库图标来自哪一家（写进生成的注释里，便于追许可：MDI/Lucide/Tabler/Radix 都要留版权声明）
