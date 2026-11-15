@@ -804,6 +804,10 @@ public partial class InkEngine
     /// </summary>
     internal void ClearCurrentPageFromUi()
     {
+        // 正在编辑文本框时先**提交**再清：否则文本框还挂在编辑宿主上，
+        // 清空只把它从 Doc 里删掉，之后继续输入/提交会留下一个“文档里没有、
+        // 屏幕上还能画”的幽灵框（2026-11-15 主条垃圾桶可达这条路径）。
+        if (_textBoxEditing) EndTextBoxEditFromUi(true);
         ExitReplayForEdit("清空墨迹");
 
         int n = 0;

@@ -106,14 +106,14 @@
       - `Privacy.cs` 62 行
       - `SelfTestCancel.cs` 140 行
       - `Toast.cs` 40 行
-      - `Tooltip.cs` 245 行
+      - `Tooltip.cs` 250 行
       - `UiScale.cs` 63 行
       - `Update.cs` 951 行 — 自动更新：版本比较、清单解析、下载/换壳。
       - `UpdateProbe.cs` 364 行
 
     **InkEngine/Ppt/**
-      - `Ppt.cs` 1,564 行 — PPT 批注：放映联动、按页落盘、翻页。
-      - `PptBar.cs` 174 行
+      - `Ppt.cs` 1,563 行 — PPT 批注：放映联动、按页落盘、翻页。
+      - `PptBar.cs` 249 行
       - `PptComLate.cs` 319 行
       - `PptComSource.cs` 440 行
       - `PptLaunch.cs` 236 行
@@ -126,7 +126,7 @@
       - `CanvasTiles.cs` 444 行
       - `Cursors.cs` 492 行
       - `Engine.Cursor.cs` 791 行 — 光标形状与滚动条交互。
-      - `Engine.UiBridge.cs` 986 行 — 引擎 ↔ 界面边界：IOverlayUi 命令转发。
+      - `Engine.UiBridge.cs` 990 行 — 引擎 ↔ 界面边界：IOverlayUi 命令转发。
       - `GlyphFill.cs` 341 行
       - `Icons.Paths.cs` 142 行
       - `LegacyOverlayLayer.cs` 74 行
@@ -134,7 +134,7 @@
       - `Overlay.Content.cs` 575 行
       - `Overlay.cs` 1,363 行 — 覆盖层主文件：窗口/初始化/生命周期。
       - `Overlay.Frame.cs` 1,638 行 — 覆盖层帧渲染：内容/界面/装饰合成。
-      - `Overlay.PptBar.cs` 654 行 — PPT 条/回放条/滚动条绘制。
+      - `Overlay.PptBar.cs` 705 行 — PPT 条/回放条/滚动条绘制。
       - `Overlay.Radial.cs` 657 行 — 呼出盘绘制。
       - `Overlay.Readout.cs` 1,460 行 — 读数、收藏面板、滚动条、回放/PPT 条绘制。
       - `Overlay.SelectionBar.cs` 1,065 行 — 选中操作条/色板/字体/图层/菜单的绘制。
@@ -222,7 +222,7 @@
     **InkTeach/Host/**
       - `App.cs` 345 行 — 宿主启动、参数分发、模式路由、用法帮助。
       - `App.Dev.Cursor.cs` 538 行
-      - `App.Dev.Ppt.cs` 249 行
+      - `App.Dev.Ppt.cs` 248 行
       - `App.Dev.Scroll.cs` 147 行
       - `App.Dev.ShapeShow.cs` 597 行
       - `App.Dev.Show.cs` 429 行
@@ -242,10 +242,10 @@
         - `ArrowClearTest.cs` 94 行
         - `AutoStart.cs` 106 行
         - `Backup.cs` 210 行
-        - `BandAction.cs` 81 行
+        - `BandAction.cs` 84 行
         - `BoardAndLaser.cs` 1,377 行 — 白板底纹/激光/光标 E2E。
-        - `Diagnostics.cs` 3,284 行 — 诊断/环境/性能 E2E。
-        - `Documents.cs` 1,238 行 — 文档导入 E2E。
+        - `Diagnostics.cs` 3,295 行 — 诊断/环境/性能 E2E。
+        - `Documents.cs` 1,257 行 — 文档导入 E2E。
         - `Erasers.cs` 1,003 行 — 橡皮擦 E2E（整笔/像素/动态）。
         - `FacesProbe.cs` 186 行
         - `GlyphEraseTest.cs` 59 行
@@ -267,11 +267,11 @@
         - `Navigation.cs` 1,154 行 — 滚动/翻页/相机 E2E。
         - `OverlayAudit.cs` 218 行
         - `PageAudit.cs` 153 行
-        - `PanelAndKeys.cs` 6,377 行 — 产品界面/键位/穿透 E2E。
+        - `PanelAndKeys.cs` 6,429 行 — 产品界面/键位/穿透 E2E。
         - `PhotoBeautifyShow.cs` 80 行
         - `PlotFromCard.cs` 174 行
         - `PlotSuiteTest.cs` 205 行
-        - `PptStorage.cs` 1,698 行 — PPT 批注落盘 E2E。
+        - `PptStorage.cs` 1,783 行 — PPT 批注落盘 E2E。
         - `PredictLinear.cs` 111 行
         - `Qr.cs` 48 行
         - `SelAiShow.cs` 126 行
@@ -318,12 +318,12 @@
       - `UiActionTable.cs` 45 行
 
     **InkUi/Panels/**
-      - `FullUi.MorePanel.cs` 2,335 行 — 更多面板：首页/设置/说明/日志/AI 服务入口。
-      - `FullUi.Pages.cs` 434 行
-      - `FullUi.Settings.cs` 3,091 行 — 设置页：工具条/通用/书写/墨迹/AI/备份。
+      - `FullUi.MorePanel.cs` 2,337 行 — 更多面板：首页/设置/说明/日志/AI 服务入口。
+      - `FullUi.Pages.cs` 438 行
+      - `FullUi.Settings.cs` 3,034 行 — 设置页：工具条/通用/书写/墨迹/AI/备份。
       - `HelpUi.cs` 499 行
 
     **InkUi/Shell/**
       - `Anim.cs` 89 行
-      - `FullUi.cs` 1,828 行 — 工具条/球/上带/色带的主体布局与绘制。
-      - `FullUi.Interaction.cs` 2,285 行 — 界面命中、开合、换页、贴边隐藏。
+      - `FullUi.cs` 1,883 行 — 工具条/球/上带/色带的主体布局与绘制。
+      - `FullUi.Interaction.cs` 2,270 行 — 界面命中、开合、换页、贴边隐藏。

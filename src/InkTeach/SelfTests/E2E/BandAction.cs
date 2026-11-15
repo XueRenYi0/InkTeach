@@ -69,10 +69,13 @@ internal sealed partial class App
         Host.Commands.SetTool(Tool.Eraser);
         ui.SelectBandCellForTest(6);
         SettleFrames(40);
-        var clear = ui.ActionRectForTest;
-        Check("橡皮带仍是一个「清空」",
-              ui.ActionCountForTest == 1 && clear.MaxX - clear.MinX > 40f,
-              $"动作数 {ui.ActionCountForTest}，宽 {clear.MaxX - clear.MinX:F0}");
+        Check("橡皮带不再有「清空」动作（2026-11-15 起统一走主条垃圾桶）",
+              ui.ActionCountForTest == 0 && ui.ActionRectForTest.IsEmpty,
+              $"动作数 {ui.ActionCountForTest}，宽 {ui.ActionRectForTest.MaxX - ui.ActionRectForTest.MinX:F0}");
+        Check("垃圾桶的提示和快捷键在",
+              ui.TipContentForTest(15).Title != null
+              && !string.IsNullOrEmpty(ui.TipContentForTest(15).Key),
+              $"{ui.TipContentForTest(15).Title} / {ui.TipContentForTest(15).Key}");
 
         Console.WriteLine($"上带动作按钮：通过 {pass}，失败 {fail}");
         ExitCode = fail == 0 ? 0 : 1;

@@ -119,7 +119,11 @@ public sealed partial class FullUi
 
     private RectF MoreChipRect(int cell)
     {
-        int idx = cell - 1;
+        // 宫格的槽位跟主条显示顺序走（**不是身份序号**）：自定义用户看到的两处
+        // 排列必须一致，否则"文本/橡皮"在设置页里会跟主条反过来。
+        int pos = Array.IndexOf(CellOrder, cell);
+        if (pos <= 0) return RectF.Empty;          // 0 号是球，宫格里不出现
+        int idx = pos - 1;
         float w = (SettingsContentW() - (MoreChipCols - 1) * MoreChipGap) / MoreChipCols;
         int col = idx % MoreChipCols, row = idx / MoreChipCols;
         float y = MoreProfileRect(0).MaxY + MoreChipTopGap + row * (MoreChipH + MoreChipGap);
@@ -1418,7 +1422,7 @@ public sealed partial class FullUi
         // "按下即生效、必须改成'按住候选、抬起生效'才能长按"的几个：虚实线格、
         // 图形段的 22 格、关闭白板 ✕。别的元素各自有安排：
         //   · 工具格本来就在抬起时执行（见 PointerUp），在下面 idx 分支武装；
-        //   · 清空 = 按住 0.8 秒清空、滑条 = 拖动、PPT 页码格 = 长按菜单 → **排除**；
+        //   · 清屏 = 主条垃圾桶单击（不长按）、滑条 = 拖动、PPT 页码格 = 长按菜单 → **排除**；
         //   · 色片 / 文字段没有提示（收窄清单）→ 不武装，按下即生效照旧。
         if (touchLike && BandOpen())
         {
@@ -1484,7 +1488,7 @@ public sealed partial class FullUi
         }
 
         // 主条上的空白（格间缝、两端内边距）也允许拖动整条：
-        // 14 格之后整条中心正好落在组间缝里，从中心按下拖不走会被当成"面板坏了"。
+        // 16 格之后整条中心不一定落在组间缝里，从中心按下拖不走会被当成"面板坏了"。
         if (BarRect().Contains(p.X, p.Y))
         {
             _press = -3;
@@ -1626,13 +1630,9 @@ public sealed partial class FullUi
         {
             // 触摸/笔长按已经弹过提示：这一次按下作废——不拖动、也不执行（等松手）。
             if (_tipHoldFired) return true;
-            // **动作按钮不参与拖动**。
-            //
-            // 用户实测报的 bug："按住清空的时候，手一抖就把整个面板拖走了"——
-            // 面板一走，按钮就不在指针下面了，看着就是"清空没反应"。
-            // 只有点在**主条上**（球或者工具格）才算"抓住面板"。
+            // **动作按钮不参与拖动**：只有点在**主条上**（球或者工具格）才算"抓住面板"。
             // （「更多」面板的行有它自己的 `_morePress`，走不到这里——它是全屏模态。）
-            bool draggable = _press != 2000 && _press < 1000;
+            bool draggable = _press < 1000;
             if (draggable && !_dragging && Vector2.Distance(p, _pressPos) > Tokens.DragThreshold)
             {
                 _dragging = true;
@@ -1642,20 +1642,6 @@ public sealed partial class FullUi
             {
                 _anchor = _dragStartAnchor + (p - _pressPos);
                 Invalidate();               // 位置一变就要重画；引擎那边每帧都会加进脏区
-            }
-
-            // 按住清空的时候指针滑出按钮 = 算了（各家按钮都是这个约定）。
-            // 判定区给 8 像素余量，免得手抖一两像素就取消。
-            if (_press == 2000)
-            {
-                var hit = ActionRect();
-                if (p.X < hit.MinX - 8f || p.X > hit.MaxX + 8f
-                    || p.Y < hit.MinY - 8f || p.Y > hit.MaxY + 8f)
-                {
-                    _actionHoldFrom = double.NegativeInfinity;
-                    _press = -1;
-                    Invalidate();
-                }
             }
             return true;
         }
@@ -1933,13 +1919,6 @@ public sealed partial class FullUi
             return true;
         }
 
-        // 按住清空：松手即取消（够 0.8 秒的那一次已经在 UpdateBandAction 里执行过了）
-        if (idx == 2000)
-        {
-            _actionHoldFrom = double.NegativeInfinity;
-            Invalidate();
-            return true;
-        }
         if (idx == -2) { Toggle(); return true; }        // 点球：展开
         if (idx == 0) { Toggle(); return true; }         // 点带子最左那格：收起
         Activate(idx);
@@ -2120,6 +2099,12 @@ public sealed partial class FullUi
             case 14:
                 // 「更多」：打开屏幕中央的面板（2026-10-01 起；抽屉从产品路径退场）
                 OpenMore();
+                break;
+            case 15:
+                // 垃圾桶：清空当前页 / 当前幻灯片 / 当前这一屏。**不换工具、不收设置条**；
+                // 引擎侧 ClearCurrentPageFromUi 可一步撤销，快捷键沿用 Ctrl+Shift+C。
+                cmd.Clear();
+                _actionFlashUntil = _host.NowMs + 260;
                 break;
         }
         Invalidate();

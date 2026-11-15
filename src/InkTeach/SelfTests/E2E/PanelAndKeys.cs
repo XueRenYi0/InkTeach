@@ -1400,10 +1400,10 @@ internal sealed partial class App
             SettleFrames(150);
         }
 
-        // ---- ⑥.5 上带右端的两个动作：清空（按住 0.8 秒）、全选（点一下）----
+        // ---- ⑥.5 主条垃圾桶（清空当前页）与选择条的全选 ----
         //
-        // 出自假面板：清空挂在**橡皮**那条（擦一点/擦一块/全擦掉是一路的事），
-        // 按住 0.8 秒才算数；全选挂在**选择**那条。清空可撤销，但代价大，所以防误触。
+        // 2026-11-15 用户定：橡皮带不再有「清空」，清屏统一走主条垃圾桶（单击 + 可撤销）；
+        // 全选仍挂在选择那条。
         {
             Doc.Clear();
             Doc.ClearHistory();
@@ -1418,8 +1418,7 @@ internal sealed partial class App
                 s.AddPoint(_virtualX + 380 + i * 40, _virtualY + 340, 1f, 1);
                 Doc.AddStroke(s);
             }
-            // 再补一笔**洋红**的：专供"屏幕像素"核对。本轮那个 bug（清空之后墨还留在
-            // 屏幕上、连橡皮都擦不掉）只有量屏幕才抓得到——当时只验了 Doc.Strokes.Count。
+            // 再补一笔**洋红**的：专供"屏幕像素"核对。清屏之后墨必须真的从屏幕上消失。
             float magX = _virtualX + 900f, magY = _virtualY + 620f;
             var magStroke = new Stroke
             {
@@ -1434,47 +1433,31 @@ internal sealed partial class App
             int inkBefore = ScreenProbe.CountMagenta((int)magX - 240, (int)magY - 40, 480, 80);
             Check("清空前：洋红那笔在屏幕上", inkBefore > 300, $"{inkBefore} 像素");
 
-            Host.Commands.SetTool(Tool.Eraser);
+            Host.Commands.SetTool(Tool.Pen);
             SettleFrames(200);
-            var barA = ui.BarRectForTest;          // 指针挪回面板：设置条才开着
-            SendMouse((int)((barA.MinX + barA.MaxX) * 0.5f * DpiScale),
-                      (int)((barA.MinY + barA.MaxY) * 0.5f * DpiScale), 0);
-            SettleFrames(400);
+            int bandBefore = ui.BandCellForTest;
+            var trash = ui.CellRectForTest(15);
+            Check("完整档主条有垃圾桶", !trash.IsEmpty,
+                  $"垃圾桶格 = {trash.MinX:F0},{trash.MinY:F0}");
 
-            var act = ui.ActionRectForTest;
-            Check("橡皮那条右端有「清空」", act.MaxX - act.MinX > 40f,
-                  $"动作按钮宽 {act.MaxX - act.MinX:F0}");
-
-            float ax = (act.MinX + act.MaxX) * 0.5f * DpiScale;
-            float ay = (act.MinY + act.MaxY) * 0.5f * DpiScale;
             int before = Doc.Strokes.Count;
-
-            // 按住 0.3 秒就松手：**不清空**，而且那一刻进度条该走到一半
-            SendMouse((int)ax, (int)ay, 0);                            SettleFrames(60);
-            SendMouse((int)ax, (int)ay, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(300);
-            bool midHold = ui.ActionHoldingForTest
-                        && ui.HoldProgressForTest > 0.1f && ui.HoldProgressForTest < 0.9f;
-            SendMouse((int)ax, (int)ay, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(250);
-            Check("按住 0.3 秒松手：不清空（进度条走到一半）",
-                  midHold && Doc.Strokes.Count == before,
-                  $"按住中 = {midHold}，笔画 {before} → {Doc.Strokes.Count}");
-
-            // 按住够 0.8 秒：清空
-            SendMouse((int)ax, (int)ay, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(1100);
-            SendMouse((int)ax, (int)ay, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(250);
-            Check("按住 0.8 秒：清空生效", Doc.Strokes.Count == 0,
+            ClickPhysical((trash.MinX + trash.MaxX) * 0.5f * DpiScale,
+                          (trash.MinY + trash.MaxY) * 0.5f * DpiScale);
+            SettleFrames(300);
+            Check("点垃圾桶：清空当前页", Doc.Strokes.Count == 0,
                   $"笔画 {before} → {Doc.Strokes.Count}");
+            Check("点垃圾桶：不换工具、不挪设置条",
+                  Tool == Tool.Pen && ui.BandCellForTest == bandBefore,
+                  $"工具 = {Tool}，色带格 {bandBefore} → {ui.BandCellForTest}");
 
-            // **屏幕上也得干净**。这一条是本轮真 bug 的靶子：清空是在界面的 Render 里
-            // 触发的，引擎渲染完无条件把脏区清了 → 文档空了、屏幕上那层墨还留着，
-            // 表现就是"清空没用，而且常规橡皮也擦不掉"（文档里已经没东西可擦）。
+            // **屏幕上也得干净**：文档空了、屏幕还留着墨，是最容易被忽略的旧 bug。
             int inkAfter = ScreenProbe.CountMagenta((int)magX - 240, (int)magY - 40, 480, 80);
             Check("清空之后**屏幕上**也干净了（不然就是'墨迹卡住'）", inkAfter < 40,
                   $"{inkBefore} → {inkAfter} 像素");
 
             Host.Commands.Undo();
             SettleFrames(250);
-            Check("清空能撤销回来（不是不可逆的破坏）", Doc.Strokes.Count == before,
+            Check("垃圾桶清空能撤销回来（不是不可逆的破坏）", Doc.Strokes.Count == before,
                   $"撤销后 {Doc.Strokes.Count} 笔");
             int inkUndo = ScreenProbe.CountMagenta((int)magX - 240, (int)magY - 40, 480, 80);
             Check("撤销之后墨回到屏幕上", inkUndo > 300, $"{inkAfter} → {inkUndo} 像素");
@@ -2707,19 +2690,45 @@ internal sealed partial class App
                       (setTile45.MinY + setTile45.MaxY) * 0.5f * DpiScale);   // 设置子页（档位/宫格在这页）
         SettleFrames(250);
 
-        Check("完整档是 15 格", ui.VisibleCountForTest == 15, $"显示 {ui.VisibleCountForTest} 格");
-        Check("文本在橡皮后、选择前；截屏/图形/收藏/撤销/重做依次顺延",
-              ui.CellRectForTest(7).MinX > ui.CellRectForTest(6).MaxX
-              && ui.CellRectForTest(8).MinX > ui.CellRectForTest(7).MaxX
+        Check("完整档是 16 格", ui.VisibleCountForTest == 16, $"显示 {ui.VisibleCountForTest} 格");
+        // 2026-11-15 新顺序：画笔、荧光笔、激光笔、文本、橡皮、垃圾桶，
+        // 后面才是选择 / 截屏 / 图形 / 收藏 / 撤销 / 重做 / 更多。
+        // 身份下标仍是旧的稳定值（7 = 文本、6 = 橡皮、15 = 垃圾桶），
+        // 这里按屏幕上的实际 X 坐标验顺序。
+        Check("画笔→荧光笔→激光笔→文本→橡皮→垃圾桶→选择→截屏→图形→收藏→撤销→重做→更多",
+              ui.CellRectForTest(3).MinX > ui.CellRectForTest(2).MaxX
+              && ui.CellRectForTest(4).MinX > ui.CellRectForTest(3).MaxX
+              && ui.CellRectForTest(5).MinX > ui.CellRectForTest(4).MaxX
+              && ui.CellRectForTest(7).MinX > ui.CellRectForTest(5).MaxX
+              && ui.CellRectForTest(6).MinX > ui.CellRectForTest(7).MaxX
+              && ui.CellRectForTest(15).MinX > ui.CellRectForTest(6).MaxX
+              && ui.CellRectForTest(8).MinX > ui.CellRectForTest(15).MaxX
               && ui.CellRectForTest(9).MinX > ui.CellRectForTest(8).MaxX
               && ui.CellRectForTest(10).MinX > ui.CellRectForTest(9).MaxX
               && ui.CellRectForTest(11).MinX > ui.CellRectForTest(10).MaxX
               && ui.CellRectForTest(12).MinX > ui.CellRectForTest(11).MaxX
+              && ui.CellRectForTest(13).MinX > ui.CellRectForTest(12).MaxX
               && ui.CellRectForTest(14).MinX > ui.CellRectForTest(13).MaxX,
-              $"文本 {ui.CellRectForTest(7).MinX:F0} → 选择 {ui.CellRectForTest(8).MinX:F0} → "
-              + $"截屏 {ui.CellRectForTest(9).MinX:F0} → 图形 {ui.CellRectForTest(10).MinX:F0} → "
-              + $"收藏 {ui.CellRectForTest(11).MinX:F0} → 撤销 {ui.CellRectForTest(12).MinX:F0} → "
+              $"画笔 {ui.CellRectForTest(3).MinX:F0} → 荧光笔 {ui.CellRectForTest(4).MinX:F0} → "
+              + $"激光 {ui.CellRectForTest(5).MinX:F0} → 文本 {ui.CellRectForTest(7).MinX:F0} → "
+              + $"橡皮 {ui.CellRectForTest(6).MinX:F0} → 垃圾桶 {ui.CellRectForTest(15).MinX:F0} → "
+              + $"选择 {ui.CellRectForTest(8).MinX:F0} → 截屏 {ui.CellRectForTest(9).MinX:F0} → "
+              + $"图形 {ui.CellRectForTest(10).MinX:F0} → 收藏 {ui.CellRectForTest(11).MinX:F0} → "
+              + $"撤销 {ui.CellRectForTest(12).MinX:F0} → 重做 {ui.CellRectForTest(13).MinX:F0} → "
               + $"更多 {ui.CellRectForTest(14).MinX:F0}");
+
+        // 「更多 → 工具栏」的钉住宫格必须跟主条同序（不是身份序）：文本在橡皮前、
+        // 垃圾桶在橡皮后。宫格 6 列换行，所以先比行、同一行再比 X。
+        bool BeforeChip(RectF a, RectF b)
+            => a.MinY < b.MinY - 0.5f
+            || (MathF.Abs(a.MinY - b.MinY) <= 0.5f && a.MinX < b.MinX);
+        int[] chipOrder = { 1, 2, 3, 4, 5, 7, 6, 15, 8, 9, 10, 11, 12, 13, 14 };
+        bool chipOk = true;
+        for (int k = 1; k < chipOrder.Length; k++)
+            chipOk &= BeforeChip(ui.ChipRectForTest(chipOrder[k - 1]), ui.ChipRectForTest(chipOrder[k]));
+        Check("更多宫格顺序 = 主条顺序（文本在橡皮前、垃圾桶在橡皮后）", chipOk,
+              "宫格顺序按 CellOrder；文本/橡皮/垃圾桶三段必须同序");
+
         Check("完整档 = 最宽宽度档", ui.DensityForTest == 3, $"宽度档 = {ui.DensityForTest}");
         Check("完整档的笔保留全部 20 个粗细档", ui.ActiveGradeCountForTest(Tool.Pen) == 20,
               $"档数 = {ui.ActiveGradeCountForTest(Tool.Pen)}");
@@ -2794,7 +2803,7 @@ internal sealed partial class App
         ClickPhysical((fullSeg.MinX + fullSeg.MaxX) * 0.5f * DpiScale,
                       (fullSeg.MinY + fullSeg.MaxY) * 0.5f * DpiScale);
         SettleFrames(250);
-        Check("切回完整档", ui.VisibleCountForTest == 15, $"显示 {ui.VisibleCountForTest} 格");
+        Check("切回完整档", ui.VisibleCountForTest == 16, $"显示 {ui.VisibleCountForTest} 格");
 
         // 取消钉住"图形"（下标 10）：档位自动变成自定义，主条上少一格。
         // ⚠ 宫格**只在自定义档显示**（2026-10-02 拍板），所以先切到自定义档再点宫格。
@@ -2807,7 +2816,7 @@ internal sealed partial class App
                       (chip.MinY + chip.MaxY) * 0.5f * DpiScale);
         SettleFrames(250);
         Check("取消钉住→进自定义档、主条少一格",
-              ui.ProfileForTest == 1 && !ui.PinnedForTest(10) && ui.VisibleCountForTest == 14,
+              ui.ProfileForTest == 1 && !ui.PinnedForTest(10) && ui.VisibleCountForTest == 15,
               $"档位 = {ui.ProfileForTest}，钉着 = {ui.PinnedForTest(10)}，显示 {ui.VisibleCountForTest} 格");
 
         // 画笔现在也开放：点一下应当从主条移除。
@@ -2828,6 +2837,7 @@ internal sealed partial class App
         {
             ui.CloseMoreForTest();                 // 设置面板会挡住主条，先关掉再验色带
             for (int c = 2; c <= 13; c++) ui.SetPinForTest(c, false);
+            ui.SetPinForTest(15, false);           // 垃圾桶也取消钉住，才能压到 3 格
             // 先验 4 格：球 + 鼠标 + 橡皮 + 更多（画笔已隐藏）
             ui.SetPinForTest(6, true);
             ui.OpenRailForTest();
@@ -2839,19 +2849,17 @@ internal sealed partial class App
                   $"显示 {ui.VisibleCountForTest} 格，色片 {ui.SwatchCountForTest} 个，"
                   + $"粗细按钮 = {ui.BandHasWidthButtonForTest}");
 
-            // 4 格自定义 + 橡皮：清空必须在；滑条/粗细按钮让位
+            // 4 格自定义 + 橡皮：2026-11-15 起橡皮带不再有「清空」，
+            // 清屏统一走主条垃圾桶；4 格仍按通用规则用粗细按钮。
             Host.Commands.SetTool(Tool.PixelEraser);
             ui.SelectBandCellForTest(6);
             SettleFrames(200);
-            var act4 = ui.ActionRectForTest;
-            Check("4 格自定义：橡皮带保留「清空」",
-                  !act4.IsEmpty && act4.MaxX - act4.MinX >= 50f,
-                  $"按钮宽 {act4.MaxX - act4.MinX:F0}（0 = 没有）");
-            Check("4 格自定义：没有滑条 / 粗细按钮（给清空让位）",
-                  ui.EraserSizeHiddenForTest && !ui.BandHasSliderForTest
-                  && !ui.BandHasWidthButtonForTest,
-                  $"隐藏={ui.EraserSizeHiddenForTest}，滑条={ui.BandHasSliderForTest}"
-                  + $"，粗细按钮={ui.BandHasWidthButtonForTest}");
+            Check("4 格自定义：橡皮带不再有「清空」动作按钮",
+                  ui.ActionRectForTest.IsEmpty,
+                  $"动作按钮宽 {ui.ActionRectForTest.MaxX - ui.ActionRectForTest.MinX:F0}");
+            Check("4 格自定义：橡皮保留粗细按钮",
+                  ui.BandHasWidthButtonForTest && !ui.BandHasSliderForTest,
+                  $"滑条={ui.BandHasSliderForTest}，粗细按钮={ui.BandHasWidthButtonForTest}");
             Host.Commands.SetTool(Tool.Pen);
             ui.SelectBandCellForTest(3);
             SettleFrames(150);
@@ -2883,16 +2891,18 @@ internal sealed partial class App
             Check("3 格粗细按钮：点一下换档", Host.State.Width != widthBefore3,
                   $"{widthBefore3:F0} → {Host.State.Width:F0}");
 
-            // 极简 5 格：橡皮带必须有「清空」+ 3 档小滑条（2026-10-25 用户定）
+            // 极简 5 格：垃圾桶不进入极简；橡皮带保留 3 档小滑条。
             ui.SetProfileForTest(0);
             Host.Commands.SetTool(Tool.PixelEraser);
             ui.OpenRailForTest();
             ui.SelectBandCellForTest(6);
             SettleFrames(250);
-            var actMini = ui.ActionRectForTest;
-            Check("极简 5 格：橡皮带保留「清空」",
-                  !actMini.IsEmpty && actMini.MaxX - actMini.MinX >= 50f,
-                  $"按钮宽 {actMini.MaxX - actMini.MinX:F0}（0 = 没有）");
+            Check("极简 5 格：不显示垃圾桶（需要的人在自定义里钉）",
+                  ui.CellRectForTest(15).IsEmpty,
+                  $"垃圾桶格 = {ui.CellRectForTest(15).IsEmpty}");
+            Check("极简 5 格：橡皮带不再有「清空」",
+                  ui.ActionRectForTest.IsEmpty,
+                  $"动作按钮宽 {ui.ActionRectForTest.MaxX - ui.ActionRectForTest.MinX:F0}");
             Check("极简 5 格：橡皮带保留 3 档小滑条",
                   ui.BandHasSliderForTest && !ui.BandHasWidthButtonForTest
                   && ui.ActiveGradeCountForTest(Tool.PixelEraser) == 3,
@@ -2904,6 +2914,7 @@ internal sealed partial class App
 
             // 恢复为全部钉住；后面的偏好落盘用例会再取消“图形”。
             for (int c = 2; c <= 13; c++) ui.SetPinForTest(c, true);
+            ui.SetPinForTest(15, true);
             ui.SetProfileForTest(1);
             SettleFrames(200);
         }
@@ -2913,7 +2924,7 @@ internal sealed partial class App
         ui.CloseMoreForTest();
         SettleFrames(250);
         Check("收尾：回到完整档、面板已关",
-              ui.ProfileForTest == 2 && ui.VisibleCountForTest == 15 && !ui.MoreOpenForTest,
+              ui.ProfileForTest == 2 && ui.VisibleCountForTest == 16 && !ui.MoreOpenForTest,
               $"档位 = {ui.ProfileForTest}，显示 {ui.VisibleCountForTest} 格，面板 = {ui.MoreOpenForTest}");
 
         // ---- ⑥ 收起来，然后空闲必须 0 帧 ----
@@ -2981,7 +2992,7 @@ internal sealed partial class App
             bool cover = true; string missing = "";
             void Need(bool ok, string what) { if (!ok) { cover = false; missing += what + " "; } }
 
-            for (int c = 1; c <= 14; c++)                       // 1..14 该有（0 号收起格不配）
+            for (int c = 1; c <= 15; c++)                       // 1..15 该有（0 号收起格不配）
                 Need(ui.TipContentForTest(c).Title != null, $"缺格{c}");
             Need(ui.TipContentForTest(0).Title == null, "收起格不该有");
             Need(ui.TipContentForTest(-2).Title == null, "球不该有");
@@ -3011,7 +3022,8 @@ internal sealed partial class App
                 Need(ui.TipContentForTest(100 + i).Title != null, $"荧光色{i}应有提示");
             Host.Commands.SetTool(Tool.Eraser);
             ui.SelectBandCellForTest(6);
-            Need(ui.TipContentForTest(400).Title != null, "清空（按住）应配");
+            Need(ui.TipContentForTest(400).Title == null, "橡皮带不再有清空动作");
+            Need(ui.TipContentForTest(15).Title != null, "垃圾桶应有提示");
             for (int i = 0; i < 2; i++)
                 Need(ui.TipContentForTest(200 + i).Title == null, $"橡皮段{i}不该有");
             Host.Commands.SetTool(Tool.Marquee);
@@ -3024,7 +3036,7 @@ internal sealed partial class App
             for (int i = 0; i < 2; i++)
                 Need(ui.TipContentForTest(200 + i).Title == null, $"框选段{i}不该有");
             Host.Commands.SetTool(Tool.Rectangle);
-            ui.SelectBandCellForTest(10);        // 图形那一格（文本插入后是 10）
+            ui.SelectBandCellForTest(10);        // 图形那一格（身份 10）
             for (int i = 0; i < ui.BandSegmentCountForTest; i++)
                 Need(ui.TipContentForTest(200 + i).Title != null, $"缺图形段{i}");
             Host.Commands.SetTool(Tool.Capture);
@@ -3034,7 +3046,7 @@ internal sealed partial class App
                 Need(ui.TipContentForTest(200 + i).Title == null, $"截图段{i}不该有");
             Host.Commands.SetTool(Tool.Pen);
             Check("提示范围：该有的都有、该没有的都没有（收窄后的清单）", cover,
-                  cover ? "15 格 + 各格上带逐个数过" : $"不符：{missing}");
+                  cover ? "16 格 + 各格上带逐个数过" : $"不符：{missing}");
 
             // --- 触摸长按（2026-10-02 第二轮）：主流四步手势 ---
             //   短按=执行 / 按住不动 0.6 秒=出提示且松手不执行 / 按住后滑走=不弹提示。
@@ -3386,6 +3398,11 @@ internal sealed partial class App
         // 同时验落盘已改成稳定 key（以后再加图标/再排序都不会串格）。
         SetUiPref("cellsVersion", "2");
         SetUiPref("unpinned", "8,10");
+        // 迁移必须只改格表，不能把白板底纹/间距/透明度写成默认值
+        // （SavePrefs 读的是引擎状态，写得太早会把还没推给引擎的偏好覆盖掉）。
+        SetUiPref("boardPattern", "1");
+        SetUiPref("boardStep", "64");
+        SetUiPref("boardOpacity", "0.50");
         SaveSettingsForTest();
         ReloadUiPrefsForTest();
         SetUiFactory(() => new InkUi.FullUi());
@@ -3398,8 +3415,13 @@ internal sealed partial class App
               + $"文本={ui?.PinnedForTest(7)} 收藏={ui?.PinnedForTest(11)} "
               + $"更多={ui?.PinnedForTest(14)}");
         Check("迁移后落盘用稳定 key（shapes,text,undo）",
-              GetUiPref("unpinned") == "text,shapes,undo" && GetUiPref("cellsVersion") == "5",
+              GetUiPref("unpinned") == "text,shapes,undo" && GetUiPref("cellsVersion") == "6",
               $"unpinned={GetUiPref("unpinned")}，cellsVersion={GetUiPref("cellsVersion")}");
+        Check("迁移没有把白板偏好写成默认值",
+              Host.State.BoardPattern == 1 && MathF.Abs(Host.State.BoardPatternStep - 64f) < 0.5f
+              && MathF.Abs(Host.State.BoardOpacity - 0.50f) < 0.01f,
+              $"底纹={Host.State.BoardPattern}，间距={Host.State.BoardPatternStep}，"
+              + $"透明度={Host.State.BoardOpacity:F2}");
         Check("压感偏好也读回来了（重启后仍是关）",
               !Host.State.PressureOn, $"PressureOn = {Host.State.PressureOn}");
         Check("精细笔迹：开关撤掉后重启仍是开（常开）",
@@ -3585,14 +3607,14 @@ internal sealed partial class App
             SettleFrames(120);
         }
 
-        // ---- 文本工具：橡皮后入口、点画布输入、自动换行、空框清理、更多兜底 ----
+        // ---- 文本工具：橡皮前入口、点画布输入、自动换行、空框清理、更多兜底 ----
         {
             // 前面的迁移用例把界面留在了「自定义、text 未钉」，这里先恢复成完整档再验主栏。
             ui.SetPinForTest(7, true);
             ui.SetProfileForTest(2);
             SettleFrames(150);
             var textCell = ui.CellRectForTest(7);
-            Check("主栏有「文本」格（橡皮后、已钉住）",
+            Check("主栏有「文本」格（橡皮前、已钉住）",
                   !textCell.IsEmpty && ui.PinnedForTest(7)
                   && ui.CellIconForTest(7) == "text",
                   $"格 ({textCell.MinX:F0},{textCell.MinY:F0})-({textCell.MaxX:F0},{textCell.MaxY:F0})，"
@@ -3964,6 +3986,36 @@ internal sealed partial class App
                       TextBoxCountForTest == beforeWhole
                       && tb?.Text != null && tb.Text.Trim().Length > 0,
                       $"文本框={TextBoxCountForTest} 文字长度={tb?.Text?.Length ?? 0}");
+            }
+
+            // 编辑中点垃圾桶：先提交再清，必须连编辑宿主一起结束，
+            // 否则会留下“文档里没有、屏幕上还能画”的幽灵框（2026-11-15 修）。
+            Doc.Clear();
+            Doc.ClearHistory();
+            SettleFrames(120);
+            SetToolFromUi(Tool.Text);
+            InsertPlainTextBoxForTest("清屏目标");
+            var clearBox = Doc.Selected.Count == 1 ? Doc.Selected[0] : null;
+            if (clearBox != null)
+            {
+                BeginTextBoxEdit(clearBox);
+                Host.SetTextBoxEditTextForTest("清屏目标");
+                SettleFrames(150);
+                var trashBox = ui.CellRectForTest(15);
+                ClickPhysical((trashBox.MinX + trashBox.MaxX) * 0.5f * DpiScale,
+                              (trashBox.MinY + trashBox.MaxY) * 0.5f * DpiScale);
+                SettleFrames(250);
+                Check("编辑中点垃圾桶：先提交再清，编辑宿主跟着收掉",
+                      !TextBoxEditing && TextBoxCountForTest == 0,
+                      $"editing={TextBoxEditing} 文本框={TextBoxCountForTest}");
+                Host.Commands.Undo();
+                SettleFrames(150);
+                Check("垃圾桶清掉的文本框能撤销回来",
+                      TextBoxCountForTest == 1 && !TextBoxEditing,
+                      $"文本框={TextBoxCountForTest} editing={TextBoxEditing}");
+                Doc.Clear();
+                Doc.ClearHistory();
+                SettleFrames(120);
             }
 
             // 编辑中点击画布空白：**同一下**就出新输入框，旧框变成普通显示、
@@ -4992,7 +5044,7 @@ internal sealed partial class App
         {
             Host.Commands.SetTool(tool);
             SettleFrames(120);
-            string icon = ui.CellIconForTest(9);
+            string icon = ui.CellIconForTest(10);
             bool changed = icons.Count == 0 || icon != icons[icons.Count - 1];
             Check($"「{name}」那一格的图标 = {icon}", changed,
                   changed
@@ -5014,7 +5066,7 @@ internal sealed partial class App
         {
             Host.Commands.SetTool(t);
             SettleFrames(120);
-            string icon = ui.CellIconForTest(9);
+            string icon = ui.CellIconForTest(10);
             Check($"手里是{t}时，图形那一格画通用图标",
                   icon == "shapes", $"画的是 {icon}（期望 shapes）");
         }
@@ -5022,7 +5074,7 @@ internal sealed partial class App
         Host.Commands.SetTool(Tool.Rectangle);
         SettleFrames(120);
         Check("切回矩形：图标立刻跟着回到矩形",
-              ui.CellIconForTest(9) == "square", $"画的是 {ui.CellIconForTest(9)}（期望 square）");
+              ui.CellIconForTest(10) == "square", $"画的是 {ui.CellIconForTest(10)}（期望 square）");
         // 这一段是**真渲染过的**：图标名一旦拼错，`IconAtlas.Draw` 会当场抛
         // （那条"绝不画一个空图标了事"的规矩），所以它同时就是
         // "自绘的图标（oval / parallelogram / axes / parabola / hyperbola / sine / cosine

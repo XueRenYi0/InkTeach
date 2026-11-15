@@ -1138,7 +1138,8 @@ internal sealed partial class App
             Check("（准备）第 2 页能起回放", StartReplayForTest(), "");
             {
                 var pptBar = PptBarRect();
-                float ax = pptBar.MaxX - PptBar.ArrowW * DpiScale * 0.5f;
+                var ar = PptBar.ArrowCell(pptBar, left: false, DpiScale);
+                float ax = (ar.MinX + ar.MaxX) * 0.5f;
                 float ay = (pptBar.MinY + pptBar.MaxY) * 0.5f;
                 int nextBefore = fake.NextCalls;
                 SendMouse((int)ax, (int)ay, 0);                          SettleFrames(60);
@@ -1151,7 +1152,7 @@ internal sealed partial class App
                       $"active={ReplayActive}，NextCalls {nextBefore} → {fake.NextCalls}");
             }
 
-            // 再回放，然后**点页码**：回放先退场，菜单照开（互不打架）
+            // 再回放，然后**点页码**：回放先退场、页号面板照开（互不打架）
             fake.Slide = 3; fake.SlideId = 258;
             StepPpt();
             SettleFrames(150);
@@ -1166,12 +1167,22 @@ internal sealed partial class App
                 SendMouse((int)mx, (int)my, 0);                           SettleFrames(60);
                 SendMouse((int)mx, (int)my, Native.MOUSEEVENTF_LEFTDOWN);  SettleFrames(60);
                 SendMouse((int)mx, (int)my, Native.MOUSEEVENTF_LEFTUP);    SettleFrames(150);
-                Check("点页码：回放先退场、菜单照开（不打架）",
-                      !ReplayActive && PptMenuOpen,
-                      $"active={ReplayActive}，菜单={PptMenuOpen}");
+                Check("点页码：回放先退场、页号面板照开（不打架）",
+                      !ReplayActive && PptPagePanelOpen,
+                      $"active={ReplayActive}，面板={PptPagePanelOpen}");
+                // 点 ☰：面板收起、菜单打开（两颗键各管一层）
+                var mc = PptBar.MenuCell(pptBar2, DpiScale);
+                float cxx = (mc.MinX + mc.MaxX) * 0.5f;
+                float cyy = (mc.MinY + mc.MaxY) * 0.5f;
+                SendMouse((int)cxx, (int)cyy, 0);                          SettleFrames(60);
+                SendMouse((int)cxx, (int)cyy, Native.MOUSEEVENTF_LEFTDOWN); SettleFrames(60);
+                SendMouse((int)cxx, (int)cyy, Native.MOUSEEVENTF_LEFTUP);   SettleFrames(120);
+                Check("点 ☰：面板收起、菜单打开",
+                      !PptPagePanelOpen && PptMenuOpen,
+                      $"面板={PptPagePanelOpen}，菜单={PptMenuOpen}");
                 // 用户 2026-10-01 提议：菜单里直接给「回放本页墨迹」——
                 // 放映时手就在条上，不用再去开中央面板。点它 = 收菜单 + 起当前页回放。
-                PptMenuItemRectAt(2, out var miReplay);
+                PptMenuItemRectAt(1, out var miReplay);
                 float rix = (miReplay.MinX + miReplay.MaxX) * 0.5f;
                 float riy = (miReplay.MinY + miReplay.MaxY) * 0.5f;
                 SendMouse((int)rix, (int)riy, 0);                           SettleFrames(60);

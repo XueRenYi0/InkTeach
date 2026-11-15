@@ -673,6 +673,25 @@ internal sealed partial class App
 
             Check("条上页码 1/3", BarPageNow == 1 && BarTotal == 3, $"{BarPageNow}/{BarTotal}");
 
+            // 文档模式的底部条菜单（2026-11-15 起：☰ 打开、四项，末项改叫「退出文档」）。
+            // 只验名单和"同一颗键开、同一颗键收"；动作（保存/回放/清空/退出）在 PPT 那条
+            // 同名分支里验过，这里不重复清文档。
+            {
+                var dbar = PptBarRect();
+                var dmc = PptBar.MenuCell(dbar, DpiScale);
+                float dmx = (dmc.MinX + dmc.MaxX) * 0.5f;
+                float dmy = (dbar.MinY + dbar.MaxY) * 0.5f;
+                PptBarPointerDown(dmx, dmy);
+                Check("文档菜单：四项、「关闭文档」已改名「退出文档」",
+                      PptMenuOpen && PptMenuItemCount == 4
+                      && PptMenuItemText(0) == "自动保存墨迹" && PptMenuItemText(1) == "回放这一屏墨迹"
+                      && PptMenuItemText(2) == "清除全部墨迹" && PptMenuItemText(3) == "退出文档",
+                      $"{PptMenuItemText(0)} / {PptMenuItemText(1)} / "
+                      + $"{PptMenuItemText(2)} / {PptMenuItemText(3)}");
+                PptBarPointerDown(dmx, dmy);
+                Check("文档菜单：再点 ☰ 收起", !PptMenuOpen, $"菜单={PptMenuOpen}");
+            }
+
             BarNext();
             SettleFrames((int)DocMemory.FlipMs + 120);
             Check("下一页：视口到第 2 页顶 + 页码跟着变",

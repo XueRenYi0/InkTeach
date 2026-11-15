@@ -1189,6 +1189,12 @@ public sealed partial class FullUi
         // 引擎早就把 UndoDepth / RedoDepth 递给界面了，只是界面一直没用。
         // 压暗而不是藏起来：位置固定、老师不用去找；点它也没事（引擎那边是空操作）。
         if (CellUnavailable(i, st)) ink = new Color4(ink.R, ink.G, ink.B, 0.30f);
+        // 垃圾桶是“点一下立刻执行”的动作格，没有设置条可看；点击后闪一圈强调色，
+        // 空页清空时老师也能确认“点到了”（否则只有状态行变化，屏幕上像没反应）。
+        if (i == (int)Cell.Trash && _host != null && _host.NowMs < _actionFlashUntil)
+            ctx.DrawRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(r.MinX + 2, r.MinY + 4, r.MaxX - 2, r.MaxY - 4), 8f, 8f),
+                Brush(ctx, Tokens.Accent), 2f);
         if (PerfSkipIcons) return;
         DrawCellIcon(ctx, i, r, Tokens.Icon, ink, active, st);
     }
@@ -1254,7 +1260,7 @@ public sealed partial class FullUi
     private string CellIconName(int cell, in UiState st) => cell switch
     {
         // 图形那一格：亮着（手里就是某种图形）才跟着当前种类走，没亮画通用的那张（见 DrawCell 那段）
-        9 => IsActive(9, st) ? ShapeIcon(st.Tool) : Cells[9].Icon,
+        10 => IsActive(10, st) ? ShapeIcon(st.Tool) : Cells[10].Icon,
         6 => IsActive(6, st)
                 ? (st.Tool == Tool.PixelEraser ? "eraserMedium" : "eraser")
                 : "eraserPure",
@@ -1347,7 +1353,7 @@ public sealed partial class FullUi
 
     /// <summary>
     /// 手指/笔按住不动 = 长按候选（鼠标永不进这里）。到 600ms 由 <see cref="UpdateTip"/> 点亮。
-    /// 只给"有提示文案、且长按没有被别的功能占用"的元素武装：清空（按住清空）、滑条、
+    /// 只给"有提示文案、且长按没有被别的功能占用"的元素武装：滑条、
     /// PPT 页码格（长按菜单）都不会走到这儿（调用点已经排除）。
     /// </summary>
     private void ArmTipHold(int target)
@@ -1467,8 +1473,6 @@ public sealed partial class FullUi
     {
         return ActionAt(i) switch
         {
-            BandAction.Clear => ("清空墨迹", Key(KeyAction.Clear),
-                                 "按住 0.8 秒；只清当前页 / 当前幻灯片 / 当前这一屏；可撤销"),
             BandAction.CloseBoard => ("关闭白板", Key(KeyAction.ToggleBoard), "只关白板，墨迹留着"),
             BandAction.SelectAll => ("全选", Key(KeyAction.SelectAll), "选中当前这一屏的全部对象"),
             BandAction.Copy => ("复制", Key(KeyAction.Copy), "复制选中对象到剪贴板；可粘到本软件或别的程序"),
@@ -1539,6 +1543,7 @@ public sealed partial class FullUi
                 12 => (c.Tip, Key(KeyAction.Undo), ""),
                 13 => (c.Tip, Key(KeyAction.Redo), ""),
                 14 => (c.Tip, "", UpdateAvailable ? "有新版本，点开去「检查更新」" : "课堂工具、墨迹、设置都在这儿"),
+                15 => (c.Tip, Key(KeyAction.Clear), "只清当前页 / 当前幻灯片 / 当前这一屏；可撤销"),
                 _ => default,
             };
         }
@@ -2119,7 +2124,7 @@ public sealed partial class FullUi
         _rail.Jump(1f);
     }
 
-    /// <summary>自检用：上带右端那个动作按钮（清空/全选）的矩形 + 按住状态。</summary>
+    /// <summary>自检用：上带右端动作按钮（关闭白板 / 全选三连 / 粘贴 / 完成）的矩形。</summary>
     internal RectF ActionRectForTest => CurAction == BandAction.None ? RectF.Empty : ActionRect();
     /// <summary>自检用：选择那条右端三连里第 i 个（0 全选 / 1 复制 / 2 粘贴）的矩形。</summary>
     internal RectF ActionRectAtForTest(int i) => i >= 0 && i < ActionCount ? ActionRectAt(i) : RectF.Empty;
@@ -2133,8 +2138,6 @@ public sealed partial class FullUi
     internal int TextFontSizeCountForTest => TextFontSizes.Length;
     internal float TextFontSizeAtForTest(int i) => TextFontSizes[i];
     internal bool TextFontMenuOpenForTest => _textFontMenuOpen;
-    internal bool ActionHoldingForTest => ActionHolding;
-    internal float HoldProgressForTest => HoldProgress();
 
     /// <summary>自检用：这一格现在压暗没有（撤销/重做栈空）。</summary>
     internal bool CellUnavailableForTest(int cell) => CellUnavailable(cell, _host.State);
@@ -2258,7 +2261,6 @@ public sealed partial class FullUi
     internal int ActiveGradeCountForTest(Tool tool) => ActiveWidthGrades(tool).Length;
     internal bool BandHasWidthButtonForTest => BandHasWidthButton;
     internal bool BandHasSliderForTest => BandHasSlider;
-    internal bool EraserSizeHiddenForTest => EraserSizeHidden;
     internal RectF WidthButtonRectForTest => WidthButtonRect();
 
     internal void TogglePinForTest(int cell) => TogglePin(cell);

@@ -184,8 +184,9 @@ public sealed partial class FullUi
                     }
                     if (Ui.ChipsShown)
                     {
-                        for (int cell = 1; cell < Cells.Length; cell++)
+                        for (int oi = 1; oi < CellOrder.Length; oi++)
                         {
+                            int cell = CellOrder[oi];
                             var cr = Ui.MoreChipRect(cell);
                             bool pinned = Ui._pinned[cell];
                             bool locked = !FullUi.CanUnpin(cell);
@@ -243,9 +244,12 @@ public sealed partial class FullUi
             for (int i = 0; i < 3; i++)
                 if (Ui.MoreProfileRect(i).Contains(x, y)) return MoreHitProfile + i;
             if (Ui.ChipsShown)
-                for (int cell = 1; cell < Cells.Length; cell++)
+                for (int oi = 1; oi < CellOrder.Length; oi++)
+                {
+                    int cell = CellOrder[oi];
                     if (FullUi.CanUnpin(cell) && Ui.MoreChipRect(cell).Contains(x, y))
                         return MoreHitChip + cell;
+                }
 
             for (int i = 0; i < Rows.Length; i++)
                 if (Ui.MoreRowRect(i).Contains(x, y)) return MoreHitRow + i;

@@ -35,8 +35,31 @@ public sealed partial class FullUi : IOverlayUi
 
     // ---- 按钮表 -------------------------------------------------------------
     //
-    // index 0 是"收起格"（就是那个球缩到带子里），1..N 是工具。
-    // 分组用 GroupEnd 标出来：组间的间隔要明显大于组内，眼睛才分得开块。
+    // **身份 = Cell 枚举值，位置 = CellOrder 数组**。两者分开之后：
+    //   · 加一格只给 Cell 追加一个值（放数组末尾，绝不改老值）；
+    //   · 换顺序只改 CellOrder，不动任何 case / 命中 / 存档下标。
+    // 2026-11-15 用户定的顺序：画笔、荧光笔、激光笔、文本、橡皮、垃圾桶。
+    private enum Cell
+    {
+        Ball = 0,
+        Cursor = 1,
+        Board = 2,
+        Pen = 3,
+        Highlighter = 4,
+        Laser = 5,
+        Eraser = 6,
+        Text = 7,
+        Select = 8,
+        Capture = 9,
+        Shapes = 10,
+        Star = 11,
+        Undo = 12,
+        Redo = 13,
+        More = 14,
+        Trash = 15,
+    }
+
+    // 下标 = Cell 的值（**身份表**，不要为了排序改这里；排序看 CellOrder）。
     private static readonly (string Icon, string Filled, string Tip)[] Cells =
     {
         ("pen",       "penFilled",       "收起"),
@@ -54,10 +77,32 @@ public sealed partial class FullUi : IOverlayUi
         ("undo",      "undoFilled",      "后撤"),
         ("redo",      "redoFilled",      "重做"),
         ("more",      "moreFilled",      "更多"),
+        ("delete",    "delete",          "清空本页（可撤销）"),
     };
 
-    /// <summary>每一组的最后一格（下标）。组之间画一条分隔线。</summary>
-    private static readonly int[] GroupEnds = { 0, 2, 7, 9, 13, 14 };
+    /// <summary>
+    /// 主条显示顺序（**唯一一份**）。所有用户都按这一份顺序；
+    /// 以后用户自定义排序只改这份数据，不改上面的 Cell 身份。
+    /// </summary>
+    private static readonly int[] CellOrder =
+    {
+        (int)Cell.Ball, (int)Cell.Cursor, (int)Cell.Board,
+        (int)Cell.Pen, (int)Cell.Highlighter, (int)Cell.Laser,
+        (int)Cell.Text, (int)Cell.Eraser, (int)Cell.Trash,
+        (int)Cell.Select, (int)Cell.Capture, (int)Cell.Shapes, (int)Cell.Star,
+        (int)Cell.Undo, (int)Cell.Redo, (int)Cell.More,
+    };
+
+    /// <summary>每一格属于哪一组（组之间画分隔线）。按身份查，和显示顺序无关。</summary>
+    private static readonly int[] CellGroupOf =
+    {
+        0,              // Ball
+        1, 1,           // Cursor, Board
+        2, 2, 2, 2, 2, 3, 3, 3, 3, // Pen, Highlighter, Laser, Eraser, Text, Select, Capture, Shapes, Star
+        4, 4,           // Undo, Redo
+        5,              // More
+        2,              // Trash（身份在末尾，视觉上排在橡皮后）
+    };
 
     /// <summary>
     /// 格子的**稳定身份**（下标会因排序变化，身份不会）。
@@ -67,6 +112,7 @@ public sealed partial class FullUi : IOverlayUi
     {
         "ball", "cursor", "board", "pen", "highlighter", "laser", "eraser",
         "text", "select", "capture", "shapes", "star", "undo", "redo", "more",
+        "trash",
     };
 
     /// <summary>v2 落盘顺序（收藏追加在最右）。老配置的数字只在这个顺序里解释。</summary>
@@ -81,7 +127,7 @@ public sealed partial class FullUi : IOverlayUi
     // 三档（用户定的默认是"完整档"）：
     //   · 极简 = 一条**短胶囊**，固定五格（球 + 鼠标 + 画笔 + 橡皮 + 更多）；
     //   · 自定义 = 老师自己钉的那份集合（默认＝全部；最少可到球 + 鼠标 + 更多）；
-    //   · 完整 = 全部十五格。
+    //   · 完整 = 全部十六格（2026-11-15 加垃圾桶）。
     // 规则一条：**极简与自定义都必须是完整档顺序的子序列**——同一个工具在哪一档里
     // 都在同一个相对位置，来回切档不用重新找。
 
@@ -93,17 +139,21 @@ public sealed partial class FullUi : IOverlayUi
     /// 不把新格硬塞进老用户的工具条（用户 2026-10-25 定的硬规则）。
     /// v3 只重排（收藏挪到截屏后），不新增格子；老配置按稳定 key 迁移钉住状态。
     /// </summary>
-    private const int CellsVersion = 5;
+    private const int CellsVersion = 6;
 
     /// <summary>每一格从哪个版本开始存在（和 <see cref="CellKeys"/> 对齐）。</summary>
     private static readonly int[] CellSinceVersion =
     {
-        0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 2, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 2, 0, 0, 0, 6,
     };
 
     // 极简固定 5 格：球 + 鼠标 + 画笔 + 橡皮 + 更多。
-    // 白板 / 撤销仍在完整档和自定义里，只是不在极简主栏显示。
-    private static readonly int[] MiniCells = { 1, 3, 6, 14 };
+    // 白板 / 文本 / 垃圾桶仍在完整档和自定义里，只是不在极简主栏显示
+    // （2026-11-15 用户定：极简不加垃圾桶，需要的人自己去自定义里钉）。
+    private static readonly int[] MiniCells =
+    {
+        (int)Cell.Cursor, (int)Cell.Pen, (int)Cell.Eraser, (int)Cell.More,
+    };
 
     private Profile _profile = Profile.Full;
 
@@ -112,7 +162,8 @@ public sealed partial class FullUi : IOverlayUi
 
     // 自定义硬地板只保留鼠标和「更多」：球永远在，所以最少 3 格。
     // 画笔 / 橡皮 / 白板 / 后撤都开放取消；极简仍是固定 5 格，不受这里影响。
-    private static bool CanUnpin(int cell) => cell is not (1 or 14);
+    private static bool CanUnpin(int cell)
+        => cell != (int)Cell.Cursor && cell != (int)Cell.More;
 
     private static bool[] CreateAllPinned()
     {
@@ -122,22 +173,28 @@ public sealed partial class FullUi : IOverlayUi
     }
 
     /// <summary>
-    /// 这一档实际显示的格子（含 0 号收起格），**始终按完整档的顺序排列**。
+    /// 这一档实际显示的格子（含 0 号收起格），**始终按 <see cref="CellOrder"/> 排列**。
     /// 布局、命中、绘制三处都只认这个列表——不这么统一，切档时总有一处忘了跟着变。
+    ///
+    /// 身份仍是 <see cref="Cell"/> 的值；顺序只由 CellOrder 决定。以后用户自定义顺序
+    /// 只改这份数组（或它读的偏好），不用再动任何 case / 命中 / 存档下标。
     /// </summary>
     private int[] VisibleCells()
     {
-        var list = new List<int> { 0 };
+        var list = new List<int> { (int)Cell.Ball };
         switch (_profile)
         {
             case Profile.Mini:
-                list.AddRange(MiniCells);
+                foreach (int cell in CellOrder)
+                    if (Array.IndexOf(MiniCells, cell) >= 0) list.Add(cell);
                 break;
             case Profile.Custom:
-                for (int i = 1; i < Cells.Length; i++) if (_pinned[i]) list.Add(i);
+                foreach (int cell in CellOrder)
+                    if (cell != (int)Cell.Ball && _pinned[cell]) list.Add(cell);
                 break;
             default:
-                for (int i = 1; i < Cells.Length; i++) list.Add(i);
+                foreach (int cell in CellOrder)
+                    if (cell != (int)Cell.Ball) list.Add(cell);
                 break;
         }
         return list.ToArray();
@@ -152,7 +209,7 @@ public sealed partial class FullUi : IOverlayUi
     ///   4～7 格          = 4 色、5 档笔/3 档橡皮；4 格用粗细按钮，5～7 格用滑条；
     ///   8～9 格          = 6 色、7 档粗细、方形虚线；
     ///   10～11 格        = 8 色、10 档粗细、方形虚线；
-    ///   12～15 格（完整）= 全部 8 色、全部粗细档、长方形虚线、完整标签。
+    ///   12～16 格（完整）= 全部 8 色、全部粗细档、长方形虚线、完整标签。
     ///
     /// 色片**按可用宽度铺满**；低于约 28px 时先减色片，不继续缩。
     ///
@@ -177,7 +234,7 @@ public sealed partial class FullUi : IOverlayUi
     private int VisibleCount()
     {
         if (_profile == Profile.Mini) return MiniCells.Length + 1;
-        if (_profile == Profile.Full) return Cells.Length;
+        if (_profile == Profile.Full) return CellOrder.Length;
         int n = 1;                                  // 0 号收起格永远在
         for (int i = 1; i < _pinned.Length; i++) if (_pinned[i]) n++;
         return n;
@@ -227,7 +284,7 @@ public sealed partial class FullUi : IOverlayUi
     //（Tokens.TipFastDelayMs/TipBetweenWindowMs，WPF 的 BetweenShowDelay 口径）；
     // 原「功能提示」开关撤除、改常开。
     //
-    // 目标编号**沿用 `HoverAt` 那一套**（-2 球 / 0..13 格 / 100+ 色片 / 200+ 分段 /
+    // 目标编号**沿用 `HoverAt` 那一套**（-2 球 / 0..15 格 / 100+ 色片 / 200+ 分段 /
     // 300 滑条 / 400 动作按钮 / 500 虚实线）——同一份编号既管高亮也管提示，
     // 不另写一套"哪块算哪块"的映射（那迟早会和高亮漂移）。
     //
@@ -475,9 +532,7 @@ public sealed partial class FullUi : IOverlayUi
             if (_ai.Running) return true;            // AI 面板开合
             if (_settingsFlingActive) return true;   // 设置页双指惯性
             if (_apiFetching) return true;           // AI 服务页：等模型列表返回
-            // 按住清空、或者刚按完那一下的闪光：都要继续给帧，否则进度条不走、
-            // 也永远到不了 0.8 秒那个点（"按住不放"这条全靠帧在推进）。
-            if (ActionHolding) return true;
+            // 动作按钮刚按完那一下的闪光：要继续给帧，否则描边闪不出来。
             if (_host != null && _host.NowMs < _actionFlashUntil) return true;
             // 色带正在"等悬停意图"时也得给帧：不然 120 毫秒到了没人去展开它，
             // 或者 220 毫秒到了没人去收它。展开/收起一旦完成，这两个条件立刻为假 → 空闲回到 0 帧。
@@ -608,8 +663,9 @@ public sealed partial class FullUi : IOverlayUi
                 _pinned[cell] = false;
         }
 
-        // **新增格子的迁移**（2026-10-25 硬规则）：老用户不硬塞新格，
-        // 内部转「自定义」、旧格全钉、新格不钉，工具条外观一个像素不变。
+        // **新增格子的迁移**：一般规则仍是"老用户不硬塞新格"（内部转自定义、
+        // 旧格全钉、新格不钉）。**垃圾桶是唯一例外**（2026-11-15 用户定）：
+        // 它是清屏的正式入口，所有用户都默认钉住；否则老用户会找不到。
         // 用 `CellSinceVersion` 按身份判断，不再假设"新格一定在最后"。
         int savedVersion = int.TryParse(_host.GetPref("cellsVersion"), out int cellsVer) ? cellsVer : 1;
         if (savedVersion < CellsVersion)
@@ -617,6 +673,11 @@ public sealed partial class FullUi : IOverlayUi
             for (int i = 1; i < Cells.Length; i++)
             {
                 if (CellSinceVersion[i] <= savedVersion) continue;
+                if (i == (int)Cell.Trash)
+                {
+                    _pinned[i] = true;
+                    continue;
+                }
                 if (_host.State.IsFirstRun)
                 {
                     _pinned[i] = true;
@@ -627,7 +688,6 @@ public sealed partial class FullUi : IOverlayUi
                     if (_profile == Profile.Full) _profile = Profile.Custom;
                 }
             }
-            SavePrefs();
         }
 
         // 白板底纹是**引擎状态**（画进分块缓存的），界面这边只是它的"存储器"：
@@ -647,6 +707,11 @@ public sealed partial class FullUi : IOverlayUi
         // 停顿成型同样是引擎状态，而且**默认开**（用户 2026-09-23 定）。
         // 所以这里读的是"关过的"那一份：只有明确写着 "0" 才关，没有这一项就是开。
         _host.Commands.SetDwellShape(_host.GetPref("dwellShape") != "0");
+
+        // 迁移/首启后写一次偏好。**必须放在上面这些"偏好 → 引擎状态"之后**：
+        // SavePrefs 读的是 _host.State，早写会把还没推给引擎的白板底纹/间距/透明度/
+        // 坐标系网格/停顿成型当成默认值覆盖掉（v5→v6 每个老用户都会踩一次）。
+        if (savedVersion < CellsVersion) SavePrefs();
 
         // **默认档位 = 完整**（用户 2026-10-05 定："刚开始的新软件要完整的图标那种"）。
         // 以前这里在没有"profile"偏好时按逻辑屏宽自动落极简（<1300 → 极简）——在 200% 缩放的
@@ -725,7 +790,6 @@ public sealed partial class FullUi : IOverlayUi
         FinishMoreCloseIfDone();         // 关闭动画结束后再清 PageHost（避免闪回 Home）
         UpdatePeek();                    // 贴边隐藏该不该收
         UpdateRail();                    // 色线该不该长成设置条
-        UpdateBandAction();              // "按住清空"够 0.8 秒没有
         UpdateTip();                     // 悬停提示"到点没有"
         _frameShift = ComputeShift();
         _frameShiftValid = true;
@@ -915,10 +979,7 @@ public sealed partial class FullUi : IOverlayUi
 
     /// <summary>这一格属于第几组（分隔线画在"组变了"的两个相邻格之间）。</summary>
     private static int GroupOf(int cell)
-    {
-        for (int i = 0; i < GroupEnds.Length; i++) if (cell <= GroupEnds[i]) return i;
-        return GroupEnds.Length - 1;
-    }
+        => (uint)cell < (uint)CellGroupOf.Length ? CellGroupOf[cell] : CellGroupOf.Length - 1;
 
     /// <summary>带子完全展开时的宽。**按这一刻显示的格子算**，改档位/格数都不用动数字。</summary>
     private float ExpandedWidth()
@@ -1143,18 +1204,12 @@ public sealed partial class FullUi : IOverlayUi
     };
 
     /// <summary>
-    /// 4 格自定义时，橡皮带让位给“面积擦 / 整笔擦 / 清空”三样：
-    /// 连 30px 的粗细按钮也不画，避免把两个模式段压到 20 多像素
-    /// （2026-10-25 用户定：4 格砍掉滑条，保清空）。
-    /// </summary>
-    private bool EraserSizeHidden => _bandCell == 6 && VisibleCount() <= 4;
-
-    /// <summary>
     /// 4 格及以下不再塞滑条，改成一颗“粗细”按钮：点一下循环当前工具的有效档位。
     /// 3 格时色片也降到 3 个，保证每个仍有可点的宽度。
+    /// （2026-11-15：橡皮带不再放「清空墨迹」，原先为它让位的 EraserSizeHidden 一并撤销。）
     /// </summary>
     private bool BandHasWidthButton =>
-        !EraserSizeHidden && (_bandCell is 3 or 4 or 5 or 6) && VisibleCount() <= 4;
+        (_bandCell is 3 or 4 or 5 or 6) && VisibleCount() <= 4;
 
     private const float WidthButtonW = 30f;
     private const float WidthButtonGap = 8f;
@@ -1505,7 +1560,7 @@ public sealed partial class FullUi : IOverlayUi
     /// 315 宽）里"板色 + 底纹 + 间距"已经占满，塞不下 146 宽的滑条——所以退到紧凑布局时
     /// 滑条一起去掉（用户 2026-09-27 选的口径：极简档"翻页不要，保留黑白色，底纹 间距"）。
     /// </summary>
-    private bool BandHasSlider => !EraserSizeHidden && !BandHasWidthButton
+    private bool BandHasSlider => !BandHasWidthButton
         && (_bandCell == 2 ? !BoardCompactBand : _bandCell is 3 or 4 or 5 or 6);
     /// <summary>
     /// 上带里有几段。白板那一格取自 <see cref="BoardBand"/>（完整 8 段 / 紧凑 5 段，

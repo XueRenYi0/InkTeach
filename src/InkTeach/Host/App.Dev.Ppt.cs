@@ -81,27 +81,26 @@ internal sealed partial class App
         }
 
         var bar = PptBarRect();
-        float midX = (bar.MinX + bar.MaxX) * 0.5f;
         float midY = (bar.MinY + bar.MaxY) * 0.5f;
+        var pageCell = PptBar.MidCell(bar, UiUnit);
+        float pageX = (pageCell.MinX + pageCell.MaxX) * 0.5f;
+        var menuCell = PptBar.MenuCell(bar, UiUnit);
+        float menuX = (menuCell.MinX + menuCell.MaxX) * 0.5f;
 
         if (argv.Contains("--menu"))
         {
-            PptBarPointerDown(midX, midY);      // 2026-10-02 第五轮：点页码 = 菜单
-            PptBarPointerUp(midX, midY);
+            PptBarPointerDown(menuX, midY);     // 2026-11-15：菜单在 ☰ 上（按下即开）
         }
         else if (argv.Contains("--panel"))
         {
-            PptBarPointerDown(midX, midY);      // 点页码 → 菜单
-            PptBarPointerUp(midX, midY);
-            PptMenuItemRectAt(0, out var miJump);
-            PptBarPointerDown((miJump.MinX + miJump.MaxX) * 0.5f,   // 菜单第一项 → 页号面板
-                              (miJump.MinY + miJump.MaxY) * 0.5f);
+            PptBarPointerDown(pageX, midY);     // 点页码 → 页号面板（直接开）
+            PptBarPointerUp(pageX, midY);
         }
         else
         {
-            // 悬停在**页码格**上：它才是条上的主角（点它出菜单），顺便把悬停高亮出进图里
-            // ——用户 2026-09-26 指出过"页码那里没有悬停指示"，这条图就是给那件事看的。
-            PptBarPointerMove(midX, midY);
+            // 悬停在**页码格**上：它才是条上的主角（点它出页号面板），顺便把悬停高亮
+            // 出进图里——用户 2026-09-26 指出过"页码那里没有悬停指示"，这条图就是给那件事看的。
+            PptBarPointerMove(pageX, midY);
         }
         SettleFrames(200);
 

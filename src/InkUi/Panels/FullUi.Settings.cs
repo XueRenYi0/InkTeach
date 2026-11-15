@@ -27,18 +27,17 @@ public sealed partial class FullUi
 {
     // ---- 上带右端的"动作"按钮（照假面板）------------------------------------
     //
-    // 假面板里：**清空**挂在橡皮那条的右端（擦一点 / 擦一块 / 全擦掉，语义是一路的），
-    // 而且**按住 0.8 秒才算数**——清空本身可撤销，但代价大，防误触；
-    // **全选**挂在选择那条的右端，点一下就执行。
-    // 这两条我们一直缺（计划 10.1 的第 1 条），2026-09-17 用户点名要。
+    // 假面板里：**清空**原来挂在橡皮那条的右端（按住 0.8 秒防误触）；
+    // 2026-11-15 用户定：橡皮带不再放清空，清屏统一走主条垃圾桶（单击 + 可撤销）。
+    // **全选**仍挂在选择那条的右端，点一下就执行。
     //
     // **关闭白板**（2026-09-27 用户定的）挂白板那条的右端，点一下就执行。
     // 它是"白板格点第一下不再关板"补上的那一半：关板从此**只有这一个手动入口**
     //（另一条是"开穿透会自动关板"的互斥，那是自动的、不是入口）。
     //
-    // 位置：上带**最右端**。粗细滑条也在右端，所以橡皮那条是
-    // `[整笔擦][面积擦] …… [粗细滑条][清空]`——动作永远贴在最外沿。
-    private enum BandAction { None = 0, Clear, SelectAll, Copy, Paste, CloseBoard, PasteImage, TextDone, AiMenu }
+    // 位置：上带**最右端**。2026-11-15 起橡皮带不再挂「清空」，
+    // 清屏统一走主条垃圾桶；这里的动作只剩白板关闭、选择三连、截图粘贴、文本完成。
+    private enum BandAction { None = 0, SelectAll, Copy, Paste, CloseBoard, PasteImage, TextDone, AiMenu }
 
     /// <summary>
     /// 「选择」上带右端的三连（2026-11-03 用户定）：全选 / 复制 / 粘贴。
@@ -60,7 +59,7 @@ public sealed partial class FullUi
     private BandAction ActionOf(int bandCell) => bandCell switch
     {
         2 => BandAction.CloseBoard,   // 白板那条：最右端一个"关闭白板"
-        6 => BandAction.Clear,        // 清空 ≈ "全擦掉"，和两种橡皮排一条
+        // 橡皮带不再放「清空墨迹」：2026-11-15 起清屏统一走主条垃圾桶（单击 + 可撤销）。
         7 => _host?.State.TextBoxEditing == true ? BandAction.TextDone : BandAction.None,
         8 => BandAction.SelectAll,    // 单动作口径的兜底；实际按 ActionAt 取三连
         // 2026-11-03：**截图格是 9、图形格是 10**（文本插到 7 之后整体后移了一格）。
@@ -83,8 +82,6 @@ public sealed partial class FullUi
         }
         return i == 0 ? ActionOf(_bandCell) : BandAction.None;
     }
-    // 橡皮的“清空”始终在：极简 5 格也必须有（2026-10-25 用户定）。
-    // 它只清当前页/当前屏；整份清空在翻页条菜单。
     private BandAction CurAction => ActionOf(_bandCell);
 
     private const float ActionW = 92f;
@@ -98,28 +95,15 @@ public sealed partial class FullUi
     /// </summary>
     private const float ActionWNarrow = 46f;
 
-    /// <summary>
-    /// 「清空墨迹」那一档的宽（**四个字** + 图标；2026-10-25 从“清除全部墨迹”改名）。
-    /// 宽一点不会挤坏带子：段和滑条是按剩余宽度等比缩的（见 SegmentRect）。
-    /// </summary>
-    private const float ActionWClear = 128f;
-    /// <summary>窄档的「清空」只放两字（62 = 图标 16 + 两字 + 留白）。</summary>
-    private const float ActionWClearTight = 62f;
-    /// <summary>8～9 格的「清空」比完整档窄一档，但还放得下两字 + 图标。</summary>
-    private const float ActionWClearCompact = 92f;
+    /// <summary>窄动作按钮的宽（62 = 图标 16 + 两字 + 留白；选择三连是纯文字）。</summary>
+    private const float ActionWTight = 62f;
 
     private float ActionWidthOf(BandAction a) => a switch
     {
         BandAction.CloseBoard => ActionWNarrow,
-        // 全选 / 复制 / 粘贴：两字 + 留白（62 = 图标 16 + 两字 + 边距；这三个是纯文字）
-        BandAction.SelectAll or BandAction.Copy or BandAction.Paste => ActionWClearTight,
+        // 全选 / 复制 / 粘贴：两字 + 留白
+        BandAction.SelectAll or BandAction.Copy or BandAction.Paste => ActionWTight,
         BandAction.AiMenu => AiCellW,
-        BandAction.Clear => Density switch
-        {
-            BandDensity.Minimal => ActionWClearTight,
-            BandDensity.Compact => ActionWClearCompact,
-            _ => ActionWClear,
-        },
         _ => ActionW,
     };
 
@@ -128,10 +112,8 @@ public sealed partial class FullUi
 
     private float ActionWidthAt(int i) =>
         ActionAt(i) == BandAction.AiMenu ? AiCellW
-        : _bandCell == 8 ? ActionWClearTight
+        : _bandCell == 8 ? ActionWTight
         : ActionWidthOf(ActionAt(i));
-
-    private const double ClearHoldMs = 800;
 
     /// <summary>动作区整块：贴在带子最右端，三个按钮从左到右排。</summary>
     private RectF ActionGroupRect()
@@ -185,10 +167,8 @@ public sealed partial class FullUi
         }
     }
 
-    /// <summary>清空的按住计时（-inf = 没在按）与"刚按完闪一下"的时刻。</summary>
-    private double _actionHoldFrom = double.NegativeInfinity;
+    /// <summary>"刚按完闪一下"的时刻（动作按钮的点击反馈）。</summary>
     private double _actionFlashUntil = double.NegativeInfinity;
-    private bool ActionHolding => !double.IsNegativeInfinity(_actionHoldFrom);
 
     /// <summary>
     /// **双击选择格 = 全选**（用户 2026-09-27 定）。照的是 InkClass 那个"经典交互"：
@@ -209,41 +189,14 @@ public sealed partial class FullUi
     /// </summary>
     private SelectMode _selModeBeforeDoubleClick = SelectMode.Rect;
 
-    /// <summary>按住进度 0..1（画那个从左往右的填充）。</summary>
-    private float HoldProgress()
-    {
-        if (!ActionHolding || _host == null) return 0f;
-        return (float)Math.Clamp((_host.NowMs - _actionHoldFrom) / ClearHoldMs, 0.0, 1.0);
-    }
-
     /// <summary>
-    /// 每帧推进一次"按住清空"。**必须在每帧调**（和面板动画同一套节奏）：
-    /// 只在 PointerUp 里判时间的话，老师按住不放、松手前那一下永远不会触发。
-    /// </summary>
-    private void UpdateBandAction()
-    {
-        if (!ActionHolding || _host == null) return;
-        if (_host.NowMs - _actionHoldFrom < ClearHoldMs) return;
-        _actionHoldFrom = double.NegativeInfinity;
-        _actionFlashUntil = _host.NowMs + 260;
-        _host.Commands.Clear();
-        Invalidate();
-    }
-
-    /// <summary>
-    /// 动作按钮被点：按语义分派。清空是**按住**（这里只记时刻），其余点一下执行。
-    /// 选择那条的三连（全选 / 复制 / 粘贴）走同一条路。
+    /// 动作按钮被点：按语义分派。选择那条的三连（全选 / 复制 / 粘贴）走同一条路。
     /// </summary>
     private void HandleBandAction(int i)
     {
         if (_host == null) return;
         switch (ActionAt(i))
         {
-            case BandAction.Clear:
-                // 清空：**按住才算数**（0.8 秒），松手即取消。进度由 UpdateBandAction 每帧推进。
-                _actionHoldFrom = _host.NowMs;
-                _press = 2000;
-                return;
             case BandAction.CloseBoard:
                 // 关闭白板：**点一下就执行**（和全选一样）——关板可逆，不必按住。
                 // ⚠ 板已经关着时这一下什么都不做（按钮也是压暗的，见 DrawOneBandAction）。
@@ -278,7 +231,7 @@ public sealed partial class FullUi
     }
 
     /// <summary>
-    /// 动作按钮：图标 ＋ 文字；清空那条按住时从左边往右填进度。
+    /// 动作按钮：图标 ＋ 文字；点击后闪一下。
     ///
     /// 白板那条的「关闭白板」只有**一个 ✕**（窄版，没有文字，见 <see cref="ActionWNarrow"/>），
     /// 而且**板已经关着时整块压暗、点了也不动**——那时候关板没有意义
@@ -299,22 +252,15 @@ public sealed partial class FullUi
     {
         if (a == BandAction.None) return;
         if (a == BandAction.AiMenu) { DrawAiCell(ctx, r); return; }
-        bool clear = a == BandAction.Clear;
         bool closeBoard = a == BandAction.CloseBoard;
         bool paste = a == BandAction.PasteImage;
         bool textDone = a == BandAction.TextDone;
         bool dim = closeBoard && (_host == null || !_host.State.Board);
         var ink = dim ? new Color4(InkCol.R, InkCol.G, InkCol.B, 0.30f) : InkCol;
         var rr = new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY), 7f, 7f);
-        var tint = clear ? new Color4(0.90f, 0.35f, 0.25f, 1f) : Tokens.Accent;
+        var tint = Tokens.Accent;
 
         ctx.FillRoundedRectangle(rr, Brush(ctx, new Color4(tint.R, tint.G, tint.B, (dim ? 0.03f : 0.08f))));
-        float t = HoldProgress();
-        if (t > 0.002f)
-            ctx.FillRoundedRectangle(
-                new RoundedRectangle(new Vortice.RawRectF(r.MinX, r.MinY,
-                                     r.MinX + (r.MaxX - r.MinX) * t, r.MaxY), 7f, 7f),
-                Brush(ctx, new Color4(tint.R, tint.G, tint.B, 0.45f)));
         ctx.DrawRoundedRectangle(rr, Brush(ctx, BorderCol), 1f);
 
         // 窄版（关闭白板）：图标居中占满，没有文字那一栏
@@ -343,15 +289,12 @@ public sealed partial class FullUi
         }
 
         var iconBox = new RectF { MinX = r.MinX + 6f, MinY = r.MinY, MaxX = r.MinX + 28f, MaxY = r.MaxY };
-        IconAtlas.DrawCentered(ctx, textDone ? "check" : paste ? "image" : clear ? "broom" : "selectAll",
+        IconAtlas.DrawCentered(ctx, textDone ? "check" : paste ? "image" : "selectAll",
                                 iconBox, 16f, Brush(ctx, ink));
         var labelBox = new RectF { MinX = r.MinX + 28f, MinY = r.MinY, MaxX = r.MaxX - 6f, MaxY = r.MaxY };
         bool tight = Density <= BandDensity.Compact;
-        // 标签长短按可用宽度降级：极简“清空”，宽档“清空墨迹”。
-        bool clearTight = Density <= BandDensity.Minimal;
         _widgets.Text(ctx, textDone ? "完成"
                               : paste ? (tight ? "粘贴" : "粘贴图片")
-                              : clear ? (clearTight ? "清空" : "清空墨迹")
                               : "全选",
                       labelBox, 12.5f, Brush(ctx, InkCol));
 

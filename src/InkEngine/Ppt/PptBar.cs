@@ -8,13 +8,14 @@ internal enum PptBarZone
     None = 0,
     LeftArrow,      // ◀ 上一页
     RightArrow,     // ▶ 下一页
-    Page,           // 页码格：**点它弹菜单**（第一项「指定页码跳转」进页号面板）
+    Page,           // 页码格：**点它直接开页号面板**；按下后移动 = 拖条
+    Menu,           // 最右 ☰：**点它开 / 收菜单**
 }
 
 /// <summary>
-/// PPT 放映时贴在屏幕上的那**一条**控件：`[◀] [页码] [▶]`。
+/// PPT 放映时贴在屏幕上的那**一条**控件：`[◀] [页码] [▶] │ [☰]`。
 ///
-/// 沿革（用户 2026-09-26 / 09-27 / 10-02 四次拍板，设计过程见 计划-PPT条-单条与拖动.md）：
+/// 沿革（用户 2026-09-26 / 09-27 / 10-02 / 11-15 五次拍板，设计过程见 计划-PPT条-单条与拖动.md）：
 ///   · 第一版参考 Inkeys：底部左、右**各一条** ＋ 可拖的进度条 ＋ 长按菜单；
 ///   · 第二版收成现在这样：**只留一条**、**删掉进度条**（改成"点页码弹面板跳页"）、
 ///     **加拖动位置**（默认左下角，重启还记得），长按仍然是菜单；
@@ -25,6 +26,11 @@ internal enum PptBarZone
 ///   · 第四版（2026-10-02 第五轮）**取消长按入口**：单击页码 = 打开菜单，
 ///     原页号面板降为菜单第一项「指定页码跳转」——"跳页"和"退出"点一下都看得见，
 ///     长按整段空出来给"功能提示"的触摸长按（见 调研-悬停提示-Tooltip.md 10.3）。
+///   · 第五版（2026-11-15，本轮）**菜单从页码格里拆出来**：页码格回归"点一下 = 页号面板"
+///     （跳页是最高频动作，不该再借道菜单）；菜单有了自己的**三横线「☰」**按钮，长在
+///     最右，三种模式（PPT / 白板 / 文档）共用。菜单**不再跟条同宽**（固定 180）：它是
+///     一个独立浮层，和条同宽反而把四字条目撑得很空。条**不镜像**——不管拖到屏幕哪边，
+///     永远是"页码在左、☰ 在最右"，老师的手感才固定。
 ///
 /// 三条硬约束（改尺寸时别碰）：
 ///   · **高 = 主界面那条的高**（`InkUi.Tokens.BarHeight`）。引擎看不见界面工程的令牌
@@ -42,27 +48,40 @@ internal static class PptBar
     // ---- 尺度（逻辑像素）----
     public const float BarH = 48f;
     public const float ArrowW = 40f;
-    public const float BarW = ArrowW * 2f + BarH * 1.618f;   // ≈ 158（= 40 + 78 + 40）
+    public const float PageCellW = BarH * 1.618f;            // ≈ 78（黄金矩形）
+    public const float MenuBtnW = 40f;                       // 最右 ☰ 的点击格
+    /// <summary>页码组与 ☰ 之间的分隔带：**1px 竖线画在正中间**，两边各留 3.5 的呼吸。
+    /// 这一带不算热区（见 <see cref="ZoneAt"/>）——点在线上不动作，也不会漏成画布笔画。</summary>
+    public const float MenuGapW = 8f;
+    /// <summary>条宽。**缩放组将来插在页码组和 ☰ 之间**（结构已经就位：`MidCell` / `MenuCell`
+    /// 各算各的，加一组只需 `BarW += ZoomW + MenuGapW` 并补一个 Zone），现在**不放**缩放控件
+    /// （用户 2026-11-15：先把菜单拆出来，缩放下一轮再做）。</summary>
+    public const float BarW = ArrowW * 2f + PageCellW + MenuGapW + MenuBtnW;   // ≈ 206
     public const float EdgeMargin = 16f;                     // 默认位置离屏幕左/下边
 
     /// <summary>拖动的判定阈值（逻辑像素）：移动超过它 = 拖条；
-    /// 没动过再松手 = 单击（开菜单）。8 比界面的 `DragThreshold`(4) 松一点：
-    /// 手指按住不动时多少会抖，卡太紧会把"想点菜单"拖成"挪条"。</summary>
+    /// 没动过再松手 = 单击（开面板）。8 比界面的 `DragThreshold`(4) 松一点：
+    /// 手指按住不动时多少会抖，卡太紧会把"想点页码"拖成"挪条"。</summary>
     public const float DragSlop = 8f;
 
-    // ---- 页号面板（菜单第一项「指定页码跳转」进来）----
+    // ---- 页号面板（点页码格直接进来）----
     public const int GridCols = 10;          // 每行 10 个页号
     public const float GridCell = 44f;       // 格子 44×44（触摸点得中）
     public const float GridGap = 6f;
     public const float PanelPad = 8f;
     public const float PanelGap = 8f;        // 面板与条之间的缝
 
-    // ---- 菜单（**点页码格**弹出来的那张）----
-    // **宽度 = 条宽**：菜单是从条上长出来的，一样宽看着才像一套（用户要的"小巧精致"）。
-    public const float MenuW = BarW;
+    // ---- 菜单（**点最右 ☰** 弹出来的那张）----
+    // **宽度固定 180**（2026-11-15 用户定）：菜单是独立浮层，不跟条宽走。
+    // 跟条同宽时条目左右各空一大截，"小巧精致"就没了；固定宽之后三种模式（PPT /
+    // 白板 / 文档）的菜单是同一个盒子，换模式不跳尺寸。
+    public const float MenuW = 180f;
     public const float MenuItemH = 40f;
     public const float MenuGap = 8f;
     public const float MenuPad = 6f;
+    /// <summary>菜单离屏幕边至少留这么多（夹紧用；比条的 <see cref="EdgeMargin"/> 小一档，
+    /// 因为菜单是"临时摊开的一张纸"，贴边一点无妨）。</summary>
+    public const float MenuMargin = 12f;
 
     /// <summary>由左上角位置算矩形（位置是物理像素）。</summary>
     public static RectF RectAt(float x, float y, float dpi) => new()
@@ -88,35 +107,91 @@ internal static class PptBar
         return new Vector2(Math.Clamp(x, minX, maxX), Math.Clamp(y, minY, maxY));
     }
 
-    /// <summary>页码格（中格）——**点它弹页号面板、长按它开菜单**，页码文字也在这块里居中。</summary>
+    /// <summary>◀ 格（最左 40；条不镜像，翻页组永远在左）。</summary>
+    public static RectF ArrowCell(in RectF bar, bool left, float dpi)
+    {
+        float a = ArrowW * dpi;
+        return new RectF
+        {
+            MinX = left ? bar.MinX : bar.MaxX - (MenuBtnW + MenuGapW) * dpi - a,
+            MinY = bar.MinY,
+            MaxX = left ? bar.MinX + a : bar.MaxX - (MenuBtnW + MenuGapW) * dpi,
+            MaxY = bar.MaxY,
+        };
+    }
+
+    /// <summary>页码格（中格，黄金矩形）——**点它开页号面板**，页码文字也在这块里居中。</summary>
     public static RectF MidCell(in RectF bar, float dpi)
     {
         float a = ArrowW * dpi;
-        return new RectF { MinX = bar.MinX + a, MinY = bar.MinY, MaxX = bar.MaxX - a, MaxY = bar.MaxY };
+        return new RectF
+        {
+            MinX = bar.MinX + a, MinY = bar.MinY,
+            MaxX = bar.MinX + a + PageCellW * dpi, MaxY = bar.MaxY,
+        };
     }
 
-    /// <summary>点到了哪一块（三块一人一半，不重叠也不留缝）。</summary>
+    /// <summary>最右的 ☰ 格（40 宽，热区整高）。</summary>
+    public static RectF MenuCell(in RectF bar, float dpi)
+    {
+        float m = MenuBtnW * dpi;
+        return new RectF { MinX = bar.MaxX - m, MinY = bar.MinY, MaxX = bar.MaxX, MaxY = bar.MaxY };
+    }
+
+    /// <summary>页码组与 ☰ 之间那条 1px 竖线的中心 x（绘制用；命中把整条分隔带留空）。</summary>
+    public static float DividerX(in RectF bar, float dpi)
+        => bar.MaxX - (MenuBtnW + MenuGapW * 0.5f) * dpi;
+
+    /// <summary>点到了哪一块（四块 + 一条不算热区的分隔带，不重叠也不留缝）。</summary>
     public static PptBarZone ZoneAt(in RectF bar, float x, float y, float dpi)
     {
         if (!bar.Contains(x, y)) return PptBarZone.None;
+
+        float mb = MenuBtnW * dpi;
+        if (x >= bar.MaxX - mb) return PptBarZone.Menu;      // 最右 ☰
+
+        // 分隔带（8 宽）不是热区：它只是两个组之间的呼吸。指针落在这儿什么也不做
+        // （调用方仍然把它吃掉，绝不能让这一下漏成画布上的笔画）。
+        float groupEnd = bar.MaxX - (MenuBtnW + MenuGapW) * dpi;
+        if (x >= groupEnd) return PptBarZone.None;
+
         float a = ArrowW * dpi;
         if (x < bar.MinX + a) return PptBarZone.LeftArrow;
-        if (x > bar.MaxX - a) return PptBarZone.RightArrow;
+        if (x >= groupEnd - a) return PptBarZone.RightArrow;
         return PptBarZone.Page;
     }
 
-    // ---- 长按菜单（**长按页码格**弹出来的那张，2026-09-27 起没有别的入口）----
+    // ---- 菜单（**点 ☰** 弹出来的那张）----
 
+    /// <summary>
+    /// 菜单矩形（2026-11-15 定的锚法：**外缘对齐**，条本身不镜像）。
+    ///   · 条在屏幕左半边 → 菜单**左缘**贴条左缘（往右摊开）；
+    ///   · 条在屏幕右半边 → 菜单**右缘**贴条右缘（往左摊开）；
+    ///   · 两边都夹进屏幕（离边 <see cref="MenuMargin"/>）；
+    ///   · 优先开在条的上方；上方放不下（条贴着屏幕顶）才改开在下方。
+    /// 为什么按"条中心在哪半边"而不是"右边放不放得下"：后者的判定会随菜单宽度漂，
+    /// 条拖到某条线上菜单就突然换边；按屏幕中线分，拖到哪儿都是同一个手感。
+    /// </summary>
     public static RectF MenuRect(in RectF bar, int itemCount, float dpi, in RectF screen)
     {
         float w = MenuW * dpi;
         float h = (itemCount * MenuItemH + MenuPad * 2f) * dpi;
         float gap = MenuGap * dpi;
-        float slack = 4f * dpi;
-        float x = Math.Clamp(bar.MinX, screen.MinX + slack, Math.Max(screen.MinX + slack, screen.MaxX - slack - w));
-        float top = bar.MinY - gap - h;
-        float minTop = screen.MinY + slack;
-        if (top < minTop) top = minTop;                // 条太靠上就往回收，别出屏幕
+        float m = MenuMargin * dpi;
+
+        float barCx = (bar.MinX + bar.MaxX) * 0.5f;
+        float scrCx = (screen.MinX + screen.MaxX) * 0.5f;
+        float x = barCx <= scrCx ? bar.MinX : bar.MaxX - w;      // 外缘对齐
+
+        float minX = screen.MinX + m, maxX = screen.MaxX - m - w;
+        if (maxX < minX) maxX = minX;                            // 屏幕比菜单还窄：钉在左边
+        x = Math.Clamp(x, minX, maxX);
+
+        float minY = screen.MinY + m, maxY = screen.MaxY - m - h;
+        if (maxY < minY) maxY = minY;
+        float top = bar.MinY - gap - h;                          // 先试上方
+        if (top < minY) top = bar.MaxY + gap;                    // 上方没地方 → 开在下方
+        top = Math.Clamp(top, minY, maxY);
         return new RectF { MinX = x, MinY = top, MaxX = x + w, MaxY = top + h };
     }
 

@@ -512,7 +512,7 @@ internal sealed partial class App
                   $"穿透 = {PassThrough}，挂着 = {PptHotkeysOnForTest}");
         }
 
-        // ---- ①.6 悬停提示：页码格 / ◀ / 长按菜单（2026-10-02）----
+        // ---- ①.6 悬停提示：页码格 / ◀ / ☰ / 菜单（2026-10-02，2026-11-15 加 ☰）----
         {
             var bar = PptBarRect();
             float dpi = DpiScale;
@@ -521,13 +521,12 @@ internal sealed partial class App
             UpdateEngineTooltip();
             SettleFrames(1700);                   // > 1.5s 首次延迟 + 淡入（2026-10-16 起延迟两档）
             StepEngineTooltip();                  // 自检里没有主循环，手动推一下"到点"
-            Check("悬停页码格 1.5 秒：提示出现（点 = 页码跳转菜单）",
-                  TooltipShown && TooltipTitle == "页码" && TooltipNote.Contains("结束放映"),
+            Check("悬停页码格 1.5 秒：提示出现（点 = 页号格子）",
+                  TooltipShown && TooltipTitle == "页码" && TooltipNote.Contains("页号"),
                   $"亮={TooltipShown}，标题={TooltipTitle}，说明={TooltipNote}");
 
             // ◀ ▶ 按收窄后的清单**不配提示**（箭头一看就懂、按下即翻页）：悬停也不该冒卡
-            var left = new RectF { MinX = bar.MinX, MinY = bar.MinY,
-                                   MaxX = bar.MinX + PptBar.ArrowW * dpi, MaxY = bar.MaxY };
+            var left = PptBar.ArrowCell(bar, left: true, dpi);
             PptBarPointerMove((left.MinX + left.MaxX) * 0.5f, (left.MinY + left.MaxY) * 0.5f);
             UpdateEngineTooltip();
             SettleFrames(650);
@@ -536,12 +535,20 @@ internal sealed partial class App
                   !TooltipShown && string.IsNullOrEmpty(TooltipTitle),
                   $"亮={TooltipShown}，标题={TooltipTitle ?? "（空）"}");
 
+            // ☰ 有提示（它是新入口，不点不知道里面是什么）
+            var mcell = PptBar.MenuCell(bar, dpi);
+            PptBarPointerMove((mcell.MinX + mcell.MaxX) * 0.5f, (mcell.MinY + mcell.MaxY) * 0.5f);
+            UpdateEngineTooltip();
+            Check("悬停 ☰：有提示（标题 = 菜单）",
+                  TooltipTitle == "菜单" && !string.IsNullOrEmpty(TooltipNote),
+                  $"标题={TooltipTitle ?? "（空）"}，说明={TooltipNote}");
+
             PptBarPointerMove(bar.MinX + 6f * dpi, bar.MaxY + 160f * dpi);   // 条外面
             UpdateEngineTooltip();
             SettleFrames(120);
             Check("指针移开条：提示立刻收", !TooltipShown, $"亮={TooltipShown}");
 
-            // 菜单五项：逐项核对有说明（悬停码 100+i，和真实悬停同一套编号）
+            // 菜单四项：逐项核对有说明（悬停码 100+i，和真实悬停同一套编号）
             bool menuTipsAll = true; string menuTipsMiss = "";
             for (int i = 0; i < PptMenuItemCount; i++)
             {
@@ -550,7 +557,7 @@ internal sealed partial class App
                 if (string.IsNullOrEmpty(TooltipTitle) || string.IsNullOrEmpty(TooltipNote))
                 { menuTipsAll = false; menuTipsMiss += i + " "; }
             }
-            Check("菜单五项都有说明（六字标题之外）", menuTipsAll,
+            Check("菜单四项都有说明（六字标题之外）", menuTipsAll,
                   menuTipsAll ? $"{PptMenuItemCount} 项" : $"缺：{menuTipsMiss}");
 
             PptBarHover = -1;
@@ -688,9 +695,9 @@ internal sealed partial class App
         Check("到末页再点“下一页”不越界（PPT 自己夹住）",
               fake.Slide == 3, $"PPT 第 {fake.Slide} 页");
 
-        // ---- ⑧.5 PPT 控件条（PptBar）：用户 2026-09-26 定的最终形态 ----
-        //      一条、默认屏幕左下角、可拖可记；点箭头翻页、点页码弹页号面板、
-        //      长按不动松手弹菜单、长按后拖挪位置。
+        // ---- ⑧.5 PPT 控件条（PptBar）：2026-09-26 定形态，2026-11-15 拆出 ☰ ----
+        //      一条、默认屏幕左下角、可拖可记；点箭头翻页、点页码开页号面板、
+        //      点最右 ☰ 开菜单、按住页码格拖挪位置。
         {
             float screenW = _virtualW, screenBottom = _virtualY + _virtualH;
 
@@ -700,10 +707,49 @@ internal sealed partial class App
             Check("PPT 条的高 = 主界面那条的高",
                   Math.Abs(PptBar.BarH - InkUi.Tokens.BarHeight) < 0.01f,
                   $"PptBar.BarH={PptBar.BarH}，Tokens.BarHeight={InkUi.Tokens.BarHeight}");
-            float midW = PptBar.BarW - PptBar.ArrowW * 2f;
-            Check("中区（页码格）是黄金矩形",
-                  Math.Abs(midW / PptBar.BarH - 1.618f) < 0.02f,
-                  $"中区 {midW:F0} ÷ 高 {PptBar.BarH} = {midW / PptBar.BarH:F3}（黄金比 1.618）");
+            Check("页码格是黄金矩形",
+                  Math.Abs(PptBar.PageCellW / PptBar.BarH - 1.618f) < 0.02f,
+                  $"页码格 {PptBar.PageCellW:F0} ÷ 高 {PptBar.BarH} = {PptBar.PageCellW / PptBar.BarH:F3}（黄金比 1.618）");
+            Check("条宽 = ◀ + 页码格 + ▶ + 分隔带 + ☰（≈206）",
+                  Math.Abs(PptBar.BarW - (PptBar.ArrowW * 2f + PptBar.PageCellW
+                                          + PptBar.MenuGapW + PptBar.MenuBtnW)) < 0.01f
+                  && PptBar.BarW > 206f - 8f && PptBar.BarW < 214f,
+                  $"BarW={PptBar.BarW:F0}");
+            Check("菜单宽固定 180、**不跟条同宽**",
+                  Math.Abs(PptBar.MenuW - 180f) < 0.01f && PptBar.BarW > PptBar.MenuW + 20f,
+                  $"MenuW={PptBar.MenuW:F0}，BarW={PptBar.BarW:F0}");
+
+            // 菜单锚法（纯几何，不碰运行状态）：条在左半边 → 左缘对齐；右半边 → 右缘对齐。
+            // 只按屏幕中线分（不按"右边放不放得下"），否则条拖到某条线上菜单会突然换边。
+            {
+                var scr = new RectF { MinX = _virtualX, MinY = _virtualY,
+                                      MaxX = _virtualX + screenW, MaxY = screenBottom };
+                float bw = PptBar.BarW * DpiScale, bh = PptBar.BarH * DpiScale;
+                float top = scr.MaxY - 200f;
+                var leftBar = new RectF { MinX = scr.MinX + 40f, MinY = top,
+                                          MaxX = scr.MinX + 40f + bw, MaxY = top + bh };
+                var rightBar = new RectF { MinX = scr.MaxX - 40f - bw, MinY = top,
+                                           MaxX = scr.MaxX - 40f, MaxY = top + bh };
+                var lm = PptBar.MenuRect(leftBar, PptMenuItemCount, DpiScale, scr);
+                var rm = PptBar.MenuRect(rightBar, PptMenuItemCount, DpiScale, scr);
+                Check("菜单外缘对齐：条在左 → 左缘齐、条在右 → 右缘齐；宽固定、在屏幕里",
+                      Math.Abs(lm.MinX - leftBar.MinX) < 0.6f
+                      && Math.Abs(rm.MaxX - rightBar.MaxX) < 0.6f
+                      && Math.Abs((lm.MaxX - lm.MinX) - PptBar.MenuW * DpiScale) < 0.6f
+                      && Math.Abs((rm.MaxX - rm.MinX) - PptBar.MenuW * DpiScale) < 0.6f
+                      && lm.MaxY <= leftBar.MinY + 0.5f && rm.MaxY <= rightBar.MinY + 0.5f,
+                      $"左: {lm.MinX - leftBar.MinX:F1}px 差；右: {rm.MaxX - rightBar.MaxX:F1}px 差；"
+                      + $"宽 {lm.MaxX - lm.MinX:F0}/{rm.MaxX - rm.MinX:F0}（应 {PptBar.MenuW * DpiScale:F0}）");
+
+                // 条贴着屏幕顶：上方没地方 → 改开在**下方**（不能伸到屏幕外）
+                var topBar = new RectF { MinX = scr.MinX + 40f, MinY = scr.MinY + 10f,
+                                         MaxX = scr.MinX + 40f + bw, MaxY = scr.MinY + 10f + bh };
+                var tm = PptBar.MenuRect(topBar, PptMenuItemCount, DpiScale, scr);
+                Check("菜单上方放不下时：开在条的下方、仍在屏幕里",
+                      tm.MinY >= topBar.MaxY - 0.5f && tm.MaxY <= scr.MaxY
+                      && tm.MinX >= scr.MinX + PptBar.MenuMargin * DpiScale - 0.5f,
+                      $"菜单 y {tm.MinY:F0}..{tm.MaxY:F0}，条底 {topBar.MaxY:F0}，屏底 {scr.MaxY:F0}");
+            }
 
             // 默认位置：**屏幕左下角**（用户："因为 PPT 本来的工具就在这里"）。
             // 先清干净：上一次自检可能把位置留在临时配置里了（不清的话这一条会飘）。
@@ -718,31 +764,29 @@ internal sealed partial class App
                   && bar.MaxX <= _virtualX + screenW && bar.MaxY <= screenBottom,
                   $"条 x {bar.MinX:F0}..{bar.MaxX:F0}，y {bar.MinY:F0}..{bar.MaxY:F0}");
 
-            // 点右端 ▶ = 下一页（命令给 PPT）
+            // 点右端 ▶ = 下一页（命令给 PPT）。▶ 现在**不在条的最右**了（最右是 ☰），
+            // 所以位置必须按 ArrowCell 取——照旧用 `bar.MaxX - ArrowW/2` 会点到 ☰ 上。
             int nextBefore2 = fake.NextCalls;
-            float arX = bar.MaxX - PptBar.ArrowW * DpiScale * 0.5f;
+            var rightArrowCell = PptBar.ArrowCell(bar, left: false, DpiScale);
+            float arX = (rightArrowCell.MinX + rightArrowCell.MaxX) * 0.5f;
             float arY = (bar.MinY + bar.MaxY) * 0.5f;
             bool ate = PptBarPointerDown(arX, arY);
             Step();
             Check("点右端 ▶：这一下归它、命令给 PPT",
                   ate && fake.NextCalls == nextBefore2 + 1, $"吃掉={ate}，NextCalls={fake.NextCalls}");
 
-            // 点页码格 → **弹菜单**（2026-10-02 第五轮；原来直接弹页号面板）。
+            // 点页码格 → **直接开页号面板**（2026-11-15：菜单搬去 ☰ 之后回归本职）。
             // 先把页数设成 12（页号面板铺成 2 行）：3 页时面板只有一行、点"第 5 格"根本不在面板里，
             // 那样测的是"点面板外"——**用例要挑有代表性的输入**（这坑自检当场踩了一次）。
             fake.Total = 12;
             Step();
             float midX = (bar.MinX + bar.MaxX) * 0.5f, midY = (bar.MinY + bar.MaxY) * 0.5f;
-            PptBarPointerDown(midX, midY);
-            PptBarPointerUp(midX, midY);
-            Check("点页码：弹出菜单（长按入口已取消）",
-                  PptMenuOpen && !PptPagePanelOpen, $"菜单={PptMenuOpen}，面板={PptPagePanelOpen}");
-            Check("菜单第一项＝指定页码跳转", PptMenuItemText(0) == "指定页码跳转",
-                  $"第一项={PptMenuItemText(0)}");
-            PptMenuItemRectAt(0, out var miJump);
-            PptBarPointerDown((miJump.MinX + miJump.MaxX) * 0.5f, (miJump.MinY + miJump.MaxY) * 0.5f);
-            Check("点「指定页码跳转」：页号面板打开、菜单收起",
-                  PptPagePanelOpen && !PptMenuOpen, $"面板={PptPagePanelOpen}，菜单={PptMenuOpen}");
+            var pageCell = PptBar.MidCell(bar, DpiScale);
+            float pageX = (pageCell.MinX + pageCell.MaxX) * 0.5f;
+            PptBarPointerDown(pageX, midY);
+            PptBarPointerUp(pageX, midY);
+            Check("点页码：**直接开页号面板**、菜单不开（2026-11-15）",
+                  PptPagePanelOpen && !PptMenuOpen, $"菜单={PptMenuOpen}，面板={PptPagePanelOpen}");
             PptPanelRect(out var panel);
             Check("面板长在条的上方、在屏幕里",
                   panel.MaxY <= bar.MinY + 0.5f && panel.MinY >= _virtualY
@@ -772,7 +816,7 @@ internal sealed partial class App
                   ateCell2 && fake.GotoCalls == gotoBefore + 2 && fake.GotoTarget == 3 && PptPagePanelOpen,
                   $"GotoCalls={fake.GotoCalls}，跳到第 {fake.GotoTarget} 页，面板={PptPagePanelOpen}");
 
-            // 点别处：面板收起（这才是收起的路径；下面几段要重新走"点页码 → 菜单"入口）
+            // 点别处：面板收起（这才是收起的路径；下面几段要重新走"点页码 / 点 ☰"入口）
             PptBarPointerDown(_virtualX + 6f, _virtualY + 6f);
             Check("点别处：面板收起", !PptPagePanelOpen, $"面板={PptPagePanelOpen}");
 
@@ -786,12 +830,11 @@ internal sealed partial class App
             fake.Total = 75;
             Step();
             bar = PptBarRect();
-            midX = (bar.MinX + bar.MaxX) * 0.5f; midY = (bar.MinY + bar.MaxY) * 0.5f;
-            PptBarPointerDown(midX, midY);                 // 点页码 → 菜单
-            PptBarPointerUp(midX, midY);
-            PptMenuItemRectAt(0, out var miJump75);        // 菜单第一项 → 页号面板
-            PptBarPointerDown((miJump75.MinX + miJump75.MaxX) * 0.5f,
-                              (miJump75.MinY + miJump75.MaxY) * 0.5f);
+            midY = (bar.MinY + bar.MaxY) * 0.5f;
+            pageCell = PptBar.MidCell(bar, DpiScale);
+            pageX = (pageCell.MinX + pageCell.MaxX) * 0.5f;
+            PptBarPointerDown(pageX, midY);                // 点页码 → 页号面板
+            PptBarPointerUp(pageX, midY);
             Check("（准备）75 页时页号面板已打开", PptPagePanelOpen, $"面板={PptPagePanelOpen}");
             PptPanelRect(out var panel75);
             int cellsBad = 0; string firstBadCell = "（全部命中）";
@@ -823,12 +866,11 @@ internal sealed partial class App
             // 先把 75 页那一轮开着的页号面板收掉（不先收，下面"点页码"会被面板吃掉）
             PptBarPointerDown(_virtualX + 6f, _virtualY + 6f);
             bar = PptBarRect();
-            midX = (bar.MinX + bar.MaxX) * 0.5f; midY = (bar.MinY + bar.MaxY) * 0.5f;
-            PptBarPointerDown(midX, midY);                 // 点页码 → 菜单
-            PptBarPointerUp(midX, midY);
-            PptMenuItemRectAt(0, out var miJump400);       // 菜单第一项 → 页号面板
-            PptBarPointerDown((miJump400.MinX + miJump400.MaxX) * 0.5f,
-                              (miJump400.MinY + miJump400.MaxY) * 0.5f);
+            midY = (bar.MinY + bar.MaxY) * 0.5f;
+            pageCell = PptBar.MidCell(bar, DpiScale);
+            pageX = (pageCell.MinX + pageCell.MaxX) * 0.5f;
+            PptBarPointerDown(pageX, midY);                // 点页码 → 页号面板
+            PptBarPointerUp(pageX, midY);
             PptPanelRect(out var panelBig);
             Check("大页数（400 页）：面板被夹顶、确实压到条上（构造出了问题现场）",
                   panelBig.MaxY > bar.MinY + 0.5f,
@@ -857,19 +899,59 @@ internal sealed partial class App
             fake.Total = 12;
             Step();
 
-            // 长按（不动）→ **不再弹菜单**（2026-10-02 第五轮：入口改成单击）；
-            // 松手在页码格上 = 一次正常的单击 → 菜单打开。再点一下收起。
+            // 页码格：按住 750ms 不动 → 不会自己开面板（单击判据仍是"松手才算"）；
+            // 松手 = 一次正常单击 → 页号面板打开；再点一下 = 收起。
             bar = PptBarRect();
             midX = (bar.MinX + bar.MaxX) * 0.5f; midY = (bar.MinY + bar.MaxY) * 0.5f;
-            PptBarPointerDown(midX, midY);
-            SettleFrames(750);                     // 过 600ms 也不该有菜单（长按已不是入口）
-            Check("按住 600ms 不动：**不弹菜单**（长按入口已取消）", !PptMenuOpen, $"菜单={PptMenuOpen}");
-            PptBarPointerUp(midX, midY);
-            Check("松手 = 单击：菜单打开（这才是入口）", PptMenuOpen, $"菜单={PptMenuOpen}");
-            PptBarPointerDown(midX, midY);         // 再点页码格 = 收起（不鬼打墙）
-            Check("再点页码格：菜单收起", !PptMenuOpen, $"菜单={PptMenuOpen}");
+            pageCell = PptBar.MidCell(bar, DpiScale);
+            pageX = (pageCell.MinX + pageCell.MaxX) * 0.5f;
+            var menuCell = PptBar.MenuCell(bar, DpiScale);
+            float menuX = (menuCell.MinX + menuCell.MaxX) * 0.5f;
+            PptBarPointerDown(pageX, midY);
+            SettleFrames(750);                     // 按着不动也不该有面板（松手才算）
+            Check("按住 750ms 不动：面板 / 菜单都没开", !PptPagePanelOpen && !PptMenuOpen,
+                  $"面板={PptPagePanelOpen}，菜单={PptMenuOpen}");
+            PptBarPointerUp(pageX, midY);
+            Check("松手 = 单击：页号面板打开", PptPagePanelOpen, $"面板={PptPagePanelOpen}");
+            PptBarPointerDown(pageX, midY);        // 再点页码格 = 收起（不鬼打墙）
+            Check("再点页码格：面板收起", !PptPagePanelOpen, $"面板={PptPagePanelOpen}");
+
+            // ☰（2026-11-15 新增）：**按下即开**，同一颗键再按一下收起；
+            // 菜单开着时点 ☰ 不许"收起来又立刻打开"（鬼打墙）。
+            Check("（准备）菜单 / 面板都收着", !PptMenuOpen && !PptPagePanelOpen,
+                  $"菜单={PptMenuOpen}，面板={PptPagePanelOpen}");
+            PptBarPointerDown(menuX, midY);
+            Check("点 ☰：菜单打开", PptMenuOpen && !PptPagePanelOpen,
+                  $"菜单={PptMenuOpen}，面板={PptPagePanelOpen}");
+            PptBarPointerDown(menuX, midY);
+            Check("菜单开着再点 ☰：收起（不鬼打墙）", !PptMenuOpen, $"菜单={PptMenuOpen}");
+            // 面板开着时点 ☰：换成菜单（两层不并存）
+            PptBarPointerDown(pageX, midY); PptBarPointerUp(pageX, midY);
+            Check("（准备）页号面板已打开", PptPagePanelOpen, $"面板={PptPagePanelOpen}");
+            PptBarPointerDown(menuX, midY);
+            Check("面板开着点 ☰：面板收起、菜单打开", PptMenuOpen && !PptPagePanelOpen,
+                  $"菜单={PptMenuOpen}，面板={PptPagePanelOpen}");
+            PptBarPointerDown(menuX, midY);        // 收起，别影响后面的拖动用例
             PptBarPointerDown(_virtualX + 6f, _virtualY + 6f);   // 点别处：什么都不发生
             Check("点别处：菜单仍是收起的", !PptMenuOpen, $"菜单={PptMenuOpen}");
+
+            // 分隔带（页码组与 ☰ 之间的 8 宽）不是热区：**但必须被吃掉**，
+            // 漏下去就变成画布上的一笔（拖动也不许从这儿起手）。
+            float divX = PptBar.DividerX(PptBarRect(), DpiScale);
+            Check("分隔带：不算热区、但这一下归条（不漏成笔画）",
+                  PptBar.ZoneAt(PptBarRect(), divX, midY, DpiScale) == PptBarZone.None
+                  && PptBarPointerDown(divX, midY) && !PptBarDragging,
+                  $"zone={PptBar.ZoneAt(PptBarRect(), divX, midY, DpiScale)}，拖动={PptBarDragging}");
+
+            // 条内顺序**固定、不镜像**：拖到屏幕右半边，页码组仍在左、☰ 仍最右。
+            {
+                var now = PptBarRect();
+                Check("条内顺序固定：◀ 在左、☰ 在最右（不镜像）",
+                      PptBar.ZoneAt(now, now.MinX + 2f, midY, DpiScale) == PptBarZone.LeftArrow
+                      && PptBar.ZoneAt(now, now.MaxX - 2f, midY, DpiScale) == PptBarZone.Menu,
+                      $"左端={PptBar.ZoneAt(now, now.MinX + 2f, midY, DpiScale)}，"
+                      + $"右端={PptBar.ZoneAt(now, now.MaxX - 2f, midY, DpiScale)}");
+            }
 
             // **按下就移** → 直接拖动（用户 2026-09-26："点中页码那一块直接拖动就能走"）
             bar = PptBarRect();
@@ -944,25 +1026,26 @@ internal sealed partial class App
                 PointerX = keepPx; PointerY = keepPy;
             }
 
-            // ---- 菜单：**点页码格开**（2026-10-02 第五轮，长按入口取消）；五项逐项点一遍 ----
+            // ---- 菜单：**点最右 ☰ 开**（2026-11-15）；四项逐项点一遍 ----
             // （"加一项漏一处"是这个仓库的老毛病，见 架构-分层与规则.md 五-7）
             bar = PptBarRect();
-            midX = (bar.MinX + bar.MaxX) * 0.5f; midY = (bar.MinY + bar.MaxY) * 0.5f;
-            Check("菜单五项、一律六字（跳/存/放/清/退）",
-                  PptMenuItemCount == 5 && PptMenuItemText(0) == "指定页码跳转"
-                  && PptMenuItemText(1) == "自动保存墨迹" && PptMenuItemText(2) == "回放本页墨迹"
-                  && PptMenuItemText(3) == "清除全部墨迹" && PptMenuItemText(4) == "结束本次放映",
+            midY = (bar.MinY + bar.MaxY) * 0.5f;
+            menuCell = PptBar.MenuCell(bar, DpiScale);
+            menuX = (menuCell.MinX + menuCell.MaxX) * 0.5f;
+            Check("菜单四项、一律六字（存/放/清/退；「指定页码跳转」已删）",
+                  PptMenuItemCount == 4
+                  && PptMenuItemText(0) == "自动保存墨迹" && PptMenuItemText(1) == "回放本页墨迹"
+                  && PptMenuItemText(2) == "清除全部墨迹" && PptMenuItemText(3) == "结束本次放映",
                   $"{PptMenuItemText(0)} / {PptMenuItemText(1)} / {PptMenuItemText(2)} / "
-                  + $"{PptMenuItemText(3)} / {PptMenuItemText(4)}");
+                  + $"{PptMenuItemText(3)}");
 
-            // ① 点页码格 = 开菜单（2026-10-02 第五轮：长按入口取消、单击就是唯一入口）
-            PptBarPointerDown(midX, midY);
-            PptBarPointerUp(midX, midY);
-            Check("点页码格：菜单打开", PptMenuOpen, $"菜单={PptMenuOpen}");
+            // ① 点 ☰ = 开菜单
+            PptBarPointerDown(menuX, midY);
+            Check("点 ☰：菜单打开", PptMenuOpen, $"菜单={PptMenuOpen}");
 
-            // ①.5 「回放本页墨迹」（2026-10-01 用户提议新增）：有墨迹 → 点了起回放、菜单收起
+            // ①.5 「回放本页墨迹」（索引 1）：有墨迹 → 点了起回放、菜单收起
             Check("（准备）当前页有墨迹可回放", Doc.Strokes.Count > 0, $"{Doc.Strokes.Count} 笔");
-            PptMenuItemRectAt(2, out var miReplay);
+            PptMenuItemRectAt(1, out var miReplay);
             PptBarPointerDown((miReplay.MinX + miReplay.MaxX) * 0.5f, (miReplay.MinY + miReplay.MaxY) * 0.5f);
             Step();
             Check("点「回放本页墨迹」：起回放、菜单收起",
@@ -972,13 +1055,12 @@ internal sealed partial class App
             Check("（收尾）回放已停", !ReplayActive, $"回放={ReplayActive}");
 
             // 菜单再开一次，给 ② 用
-            PptBarPointerDown(midX, midY);
-            PptBarPointerUp(midX, midY);
+            PptBarPointerDown(menuX, midY);
             Check("（准备）菜单重新打开", PptMenuOpen, $"菜单={PptMenuOpen}");
 
-            // ② 菜单开着时**再点页码格 = 收起**（原来这是"再点 ⋮"那条路，不能鬼打墙）
-            PptBarPointerDown(midX, midY);
-            Check("菜单开着再点页码格：收起（不鬼打墙）", !PptMenuOpen, $"菜单={PptMenuOpen}");
+            // ② 菜单开着时**点 ☰ = 收起**（同一颗键开、同一颗键收，不能鬼打墙）
+            PptBarPointerDown(menuX, midY);
+            Check("菜单开着再点 ☰：收起（不鬼打墙）", !PptMenuOpen, $"菜单={PptMenuOpen}");
 
             // ---- 穿透开着时，条仍然归我们 ----
             // 用户 2026-09-27 问的"穿透模式下 PPT 翻页起不起作用"，两层都要验：
@@ -988,7 +1070,8 @@ internal sealed partial class App
             //     ——覆盖层那条 WM_NCHITTEST 豁免根本执行不到（这就是用户实测"不管用"的原因）。
             //     修法是照面板那套**再开一块接输入小窗**，下面几条量它的矩形。
             bar = PptBarRect();
-            float rx = bar.MaxX - PptBar.ArrowW * DpiScale * 0.5f;
+            var rxCell = PptBar.ArrowCell(bar, left: false, DpiScale);
+            float rx = (rxCell.MinX + rxCell.MaxX) * 0.5f;
             float ry = (bar.MinY + bar.MaxY) * 0.5f;
             SetPassThroughFromUi(true);
             Check("穿透开着：条那一块仍算「我们的地盘」（NCHITTEST 不会让出去）",
@@ -1012,12 +1095,11 @@ internal sealed partial class App
                       + $"条 ({bar.MinX:F0},{bar.MinY:F0})-({bar.MaxX:F0},{bar.MaxY:F0})");
 
                 // 打开页号面板：窗要**变高**把面板也罩住（不然面板看得见、点不动）。
-                // 2026-10-02 第五轮：点页码 = 菜单，面板从第一项进来。
-                PptBarPointerDown((bar.MinX + bar.MaxX) * 0.5f, (bar.MinY + bar.MaxY) * 0.5f);
-                PptBarPointerUp((bar.MinX + bar.MaxX) * 0.5f, (bar.MinY + bar.MaxY) * 0.5f);
-                PptMenuItemRectAt(0, out var miJumpPass);
-                PptBarPointerDown((miJumpPass.MinX + miJumpPass.MaxX) * 0.5f,
-                                  (miJumpPass.MinY + miJumpPass.MaxY) * 0.5f);
+                // 2026-11-15：点页码 = 直接开面板。
+                var pcNow = PptBar.MidCell(bar, DpiScale);
+                float pcx = (pcNow.MinX + pcNow.MaxX) * 0.5f;
+                PptBarPointerDown(pcx, (bar.MinY + bar.MaxY) * 0.5f);
+                PptBarPointerUp(pcx, (bar.MinY + bar.MaxY) * 0.5f);
                 Check("（准备）页号面板已打开", PptPagePanelOpen, $"面板={PptPagePanelOpen}");
                 Step();
                 PptPanelRect(out var panelNow);
@@ -1034,36 +1116,39 @@ internal sealed partial class App
                   !PptInputWindowShown, $"铺上={PptInputWindowShown}");
 
             // 穿透那两条点了一下 ▶（顺手把开着的菜单收起了），这里重新开起来给 ③④ 用
-            PptBarPointerDown(midX, midY);
-            PptBarPointerUp(midX, midY);
+            {
+                var b3 = PptBarRect();
+                var mc3 = PptBar.MenuCell(b3, DpiScale);
+                PptBarPointerDown((mc3.MinX + mc3.MaxX) * 0.5f, (b3.MinY + b3.MaxY) * 0.5f);
+            }
             Check("（准备）菜单已打开", PptMenuOpen, $"菜单={PptMenuOpen}");
 
-            // ③ 「墨迹保存」（开关，索引 1）：点一下翻状态、**菜单留着**（要让老师看见"开 → 关"）
+            // ③ 「自动保存墨迹」（开关，索引 0）：点一下翻状态、**菜单留着**（要让老师看见"开 → 关"）
             bool saveBefore = PptAutoSaveOn;
-            PptMenuItemRectAt(1, out var mi0);
+            PptMenuItemRectAt(0, out var mi0);
             PptBarPointerDown((mi0.MinX + mi0.MaxX) * 0.5f, (mi0.MinY + mi0.MaxY) * 0.5f);
-            Check("点「墨迹保存」：状态翻过来、菜单留着",
+            Check("点「自动保存墨迹」：状态翻过来、菜单留着",
                   PptAutoSaveOn == !saveBefore && PptMenuOpen,
                   $"{saveBefore} → {PptAutoSaveOn}，菜单={PptMenuOpen}");
             Check("关掉后偏好里记的是 \"0\"（默认开 → 只记差异）",
                   PptAutoSaveOn || GetUiPref("pptAutoSave") == "0",
                   $"pptAutoSave={GetUiPref("pptAutoSave") ?? "(空 = 开)"}");
 
-            // ④ 「墨迹清空」（索引 3，两段确认）：**第一下不执行**
+            // ④ 「清除全部墨迹」（索引 2，两段确认）：**第一下不执行**
             int diskBefore = PptStore.ListPageKeys(fake.Key).Count;
-            PptMenuItemRectAt(3, out var mi1);
+            PptMenuItemRectAt(2, out var mi1);
             PptBarPointerDown((mi1.MinX + mi1.MaxX) * 0.5f, (mi1.MinY + mi1.MaxY) * 0.5f);
-            Check("点「墨迹清空」第一下：进入等确认、文字变「再点确认」、**还没清**",
-                  PptClearConfirm && PptMenuOpen && PptMenuItemText(3) == "再点确认"
+            Check("点「清除全部墨迹」第一下：进入等确认、文字变「再点确认」、**还没清**",
+                  PptClearConfirm && PptMenuOpen && PptMenuItemText(2) == "再点确认"
                   && PptStore.ListPageKeys(fake.Key).Count == diskBefore,
-                  $"等确认={PptClearConfirm}，文字={PptMenuItemText(3)}，盘上还是 {diskBefore} 页");
+                  $"等确认={PptClearConfirm}，文字={PptMenuItemText(2)}，盘上还是 {diskBefore} 页");
 
             // 把自动保存打开，好验证"清空是连盘一起清的"（关着的话盘上本来就该原样）
-            PptMenuItemRectAt(1, out var mi0b);
+            PptMenuItemRectAt(0, out var mi0b);
             PptBarPointerDown((mi0b.MinX + mi0b.MaxX) * 0.5f, (mi0b.MinY + mi0b.MaxY) * 0.5f);
 
             // 第二下：真清
-            PptMenuItemRectAt(3, out var mi1b);
+            PptMenuItemRectAt(2, out var mi1b);
             PptBarPointerDown((mi1b.MinX + mi1b.MaxX) * 0.5f, (mi1b.MinY + mi1b.MaxY) * 0.5f);
             Step();
             Check("点第二下：清空执行、菜单收起、等确认状态放掉",
@@ -1078,13 +1163,13 @@ internal sealed partial class App
             fake.Showing = true; fake.Slide = 1; fake.SlideId = 256; Step();
             Check("清空后再进放映：**不复活**", Doc.Strokes.Count == 0, $"{Doc.Strokes.Count} 条");
 
-            // ⑥ 引导：**每次进放映都提示一遍**（用户 2026-09-27 定；2026-10-02 第五轮文案改成
-            //    "点页码：页码跳转菜单"）。强断言：先把"已经提示过"这个偏好**写死**
+            // ⑥ 引导：**每次进放映都提示一遍**（用户 2026-09-27 定；2026-11-15 文案改成
+            //    "点页码跳页，点 ☰ 开菜单"）。强断言：先把"已经提示过"这个偏好**写死**
             //    （老逻辑下它就不会再出现了），再进放映——引导**照样出现**。
             SetUiPref("pptHint", "1");
             fake.Showing = false; Step();
             fake.Showing = true; Step();
-            Check("进放映：冒出一行引导（告诉老师点页码出菜单）", PptHintVisible, $"提示={PptHintVisible}");
+            Check("进放映：冒出一行引导（告诉老师页码跳页、☰ 开菜单）", PptHintVisible, $"提示={PptHintVisible}");
             SettleFrames(1700);            // 1.5 秒后应该自己消失（不挡讲课）
             Check("1.5 秒后引导自己消失", !PptHintVisible, $"提示={PptHintVisible}");
             fake.Showing = false; Step();
@@ -1094,21 +1179,21 @@ internal sealed partial class App
 
             // ⑦ 「结束放映」（最后一项，它会把放映退掉，所以排在最后）
             bar = PptBarRect();
-            midX = (bar.MinX + bar.MaxX) * 0.5f; midY = (bar.MinY + bar.MaxY) * 0.5f;
-            PptBarPointerDown(midX, midY);
-            PptBarPointerUp(midX, midY);
+            menuCell = PptBar.MenuCell(bar, DpiScale);
+            menuX = (menuCell.MinX + menuCell.MaxX) * 0.5f;
+            PptBarPointerDown(menuX, (bar.MinY + bar.MaxY) * 0.5f);
 
-            // ⑦.0 清空之后没有墨迹：「回放本页墨迹」（索引 2）**置灰**（右侧 0 笔），点了不动
+            // ⑦.0 清空之后没有墨迹：「回放本页墨迹」（索引 1）**置灰**（右侧 0 笔），点了不动
             Check("（准备）清空后无墨迹：回放项置灰、右侧 0 笔",
-                  !PptMenuItemEnabled(2) && PptMenuItemStatus(2) == "0 笔",
-                  $"enabled={PptMenuItemEnabled(2)}，状态={PptMenuItemStatus(2)}");
-            PptMenuItemRectAt(2, out var miReplay0);
+                  !PptMenuItemEnabled(1) && PptMenuItemStatus(1) == "0 笔",
+                  $"enabled={PptMenuItemEnabled(1)}，状态={PptMenuItemStatus(1)}");
+            PptMenuItemRectAt(1, out var miReplay0);
             PptBarPointerDown((miReplay0.MinX + miReplay0.MaxX) * 0.5f, (miReplay0.MinY + miReplay0.MaxY) * 0.5f);
             Check("清空后点置灰的回放项：菜单留着、没有起回放",
                   PptMenuOpen && !ReplayActive, $"菜单={PptMenuOpen}，回放={ReplayActive}");
 
             int exitBefore = fake.ExitCalls;
-            PptMenuItemRectAt(4, out var mi2);            // 结束放映（索引 4）
+            PptMenuItemRectAt(3, out var mi2);            // 结束放映（索引 3）
             PptBarPointerDown((mi2.MinX + mi2.MaxX) * 0.5f, (mi2.MinY + mi2.MaxY) * 0.5f);
             Step();
             Check("点「结束放映」：命令给 PPT、菜单收起",
@@ -1134,11 +1219,11 @@ internal sealed partial class App
             SettleFrames(150);
             Check("白板盖 PPT：进入白板槽、页码条改白板",
                   BoardOn && Doc.PageKey == InkDocument.BoardPageKey
-                  && PptMenuItemText(0) == "指定页码跳转"
-                  && PptMenuItemText(2) == "清空白板全部墨迹"
-                  && PptMenuItemText(3) == "历史板书"
-                  && PptMenuItemText(4) == "退出白板",
-                  $"板开={BoardOn} slot={Doc.PageKey} 菜单={PptMenuItemText(2)} / {PptMenuItemText(3)} / {PptMenuItemText(4)}");
+                  && PptMenuItemText(0) == "播放本屏墨迹"
+                  && PptMenuItemText(1) == "清空白板全部墨迹"
+                  && PptMenuItemText(2) == "历史板书"
+                  && PptMenuItemText(3) == "退出白板",
+                  $"板开={BoardOn} slot={Doc.PageKey} 菜单={PptMenuItemText(1)} / {PptMenuItemText(2)} / {PptMenuItemText(3)}");
 
             var boardMark = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand,
                                          Color = new Color4(0f, 0f, 0f, 1f), Width = 8f };
@@ -1153,18 +1238,18 @@ internal sealed partial class App
             // 不能清到 PPT 当前页，也不能关掉白板。
             {
                 var bbar = PptBarRect();
-                float bmx = (bbar.MinX + bbar.MaxX) * 0.5f;
+                var bmenu = PptBar.MenuCell(bbar, DpiScale);
+                float bmx = (bmenu.MinX + bmenu.MaxX) * 0.5f;
                 float bmy = (bbar.MinY + bbar.MaxY) * 0.5f;
                 PptBarPointerDown(bmx, bmy);
-                PptBarPointerUp(bmx, bmy);
-                Check("白板页码条：点页码开白板菜单", PptMenuOpen, $"菜单={PptMenuOpen}");
-                PptMenuItemRectAt(2, out var miClearBoard);
+                Check("白板页码条：点 ☰ 开白板菜单", PptMenuOpen, $"菜单={PptMenuOpen}");
+                PptMenuItemRectAt(1, out var miClearBoard);
                 PptBarPointerDown((miClearBoard.MinX + miClearBoard.MaxX) * 0.5f,
                                   (miClearBoard.MinY + miClearBoard.MaxY) * 0.5f);
                 Check("白板清空第一下：等确认、还没清",
-                      PptClearConfirm && PptMenuItemText(2) == "再点确认"
+                      PptClearConfirm && PptMenuItemText(1) == "再点确认"
                       && Doc.Strokes.Count == 1,
-                      $"等确认={PptClearConfirm} 文字={PptMenuItemText(2)} 笔={Doc.Strokes.Count}");
+                      $"等确认={PptClearConfirm} 文字={PptMenuItemText(1)} 笔={Doc.Strokes.Count}");
                 PptBarPointerDown((miClearBoard.MinX + miClearBoard.MaxX) * 0.5f,
                                   (miClearBoard.MinY + miClearBoard.MaxY) * 0.5f);
                 SettleFrames(150);
@@ -1208,12 +1293,12 @@ internal sealed partial class App
                   $"板开={BoardOn} PPT={PptMode} slot={Doc.PageKey}");
             // 从白板页码条菜单的「退出白板」退出：只关白板，不关 PPT / 软件。
             var endBar = PptBarRect();
-            float endX = (endBar.MinX + endBar.MaxX) * 0.5f;
+            var endMenu = PptBar.MenuCell(endBar, DpiScale);
+            float endX = (endMenu.MinX + endMenu.MaxX) * 0.5f;
             float endY = (endBar.MinY + endBar.MaxY) * 0.5f;
             PptBarPointerDown(endX, endY);
-            PptBarPointerUp(endX, endY);
             Check("PPT 结束后白板页码条还能开菜单", PptMenuOpen, $"菜单={PptMenuOpen}");
-            PptMenuItemRectAt(4, out var miExitBoard);
+            PptMenuItemRectAt(3, out var miExitBoard);
             PptBarPointerDown((miExitBoard.MinX + miExitBoard.MaxX) * 0.5f,
                               (miExitBoard.MinY + miExitBoard.MaxY) * 0.5f);
             SettleFrames(120);
@@ -1238,7 +1323,7 @@ internal sealed partial class App
 
     /// <summary>
     /// `--pptshow <图>`：**PPT 控件条的摆样**——用假源进入 PPT 模式，把它画出来再截一张。
-    /// 加 `--panel` 出"点页码弹出的页号面板"，加 `--menu` 出"长按弹出的菜单"；
+    /// 加 `--panel` 出"点页码弹出的页号面板"，加 `--menu` 出"点 ☰ 弹出的菜单"；
     /// 加 `--ink` 给当前页铺三笔——「回放本页墨迹」那一项才有得看（右邻显示"N 笔"，
     /// 不加 --ink 出的是置灰的"0 笔"态）。
     ///

@@ -166,12 +166,15 @@ internal sealed partial class OverlayWindow
     }
 
     /// <summary>
-    /// PPT 放映时贴在屏幕上的**那一条**控件（`[◀] [页码] [▶]`），外加它上面的两个浮层
-    /// （点页码弹的**页号面板**、长按弹的菜单）。几何在 `PptBar`、交互状态在 `InkEngine`（Ppt.cs）。
+    /// PPT 放映时贴在屏幕上的**那一条**控件（`[◀] [页码] [▶] │ [☰]`），外加它上面的两个浮层
+    /// （点页码弹的**页号面板**、点 ☰ 弹的菜单）。几何在 `PptBar`、交互状态在 `InkEngine`（Ppt.cs）。
     ///
     /// 它是**浮层**（和选中操作条同一层、同一套令牌）——位置只跟屏幕走（可拖、可记），
     /// 不跟工具条、不受贴边隐藏影响（用户 2026-09-26："外部就是 ppt 页面上，
     /// 不跟着批注软件走"）。
+    ///
+    /// **顺序固定、不镜像**（2026-11-15）：翻页组永远在左、☰ 永远在最右。条拖到屏幕右半边
+    /// 也不翻过来——老师的肌肉记忆比"离手近"重要。
     /// </summary>
     private void DrawPptBar(InkEngine app)
     {
@@ -193,16 +196,24 @@ internal sealed partial class OverlayWindow
                                      radius, radius), _scratch, 2f * dpi);
         }
 
-        float aw = PptBar.ArrowW * dpi;
-        var la = new RectF { MinX = bar.MinX, MinY = bar.MinY, MaxX = bar.MinX + aw, MaxY = bar.MaxY };
-        var ra = new RectF { MinX = bar.MaxX - aw, MinY = bar.MinY, MaxX = bar.MaxX, MaxY = bar.MaxY };
-        DrawPptArrow(app, la, left: true, hot: app.PptBarHover == (int)PptBarZone.LeftArrow);
-        DrawPptArrow(app, ra, left: false, hot: app.PptBarHover == (int)PptBarZone.RightArrow);
+        DrawPptArrow(app, PptBar.ArrowCell(bar, left: true, dpi),
+                     left: true, hot: app.PptBarHover == (int)PptBarZone.LeftArrow);
+        DrawPptArrow(app, PptBar.ArrowCell(bar, left: false, dpi),
+                     left: false, hot: app.PptBarHover == (int)PptBarZone.RightArrow);
+
+        // 1px 分隔线：把"翻页组"和"菜单键"分成两块（页码组内部一对箭头 + 页码仍然是一套）。
+        // 画在 8 宽分隔带的正中间，上下各留 10——不是通栏，看着不割裂。
+        {
+            float dx = PptBar.DividerX(bar, dpi);
+            _scratch.Color = new Color4(theme.PanelBorder.R, theme.PanelBorder.G,
+                                        theme.PanelBorder.B, 0.7f);
+            _ctx.DrawLine(new Vector2(dx, bar.MinY + 10f * dpi),
+                          new Vector2(dx, bar.MaxY - 10f * dpi), _scratch, 1f * dpi);
+        }
 
         // 页码格的**悬停高亮**（用户 2026-09-26 指出："页码那里没有悬停指示"）。
-        // 箭头早就有、就它没有——而它恰恰是"按住不动弹菜单 / 点一下弹页号面板"的那块：
-        // 没有高亮，整条上最该点的地方看着反而是"死的"。
-        // 「⋮」删掉之后（2026-09-27）这一块就是**整个中格**，数字也在它的正中间。
+        // 它现在是"点一下 = 页号面板 / 按住拖 = 挪条"的那块：没有高亮，整条上最该点的
+        // 地方看着反而是"死的"。数字也在这一块的正中间（见下面的绘制）。
         if (app.PptBarHover == (int)PptBarZone.Page)
         {
             var pc = PptBar.MidCell(bar, dpi);
@@ -212,6 +223,11 @@ internal sealed partial class OverlayWindow
             _scratch.Color = theme.Hover;
             _ctx.FillRoundedRectangle(new RoundedRectangle(cBg, cBr, cBr), _scratch);
         }
+
+        // 菜单键（最右 ☰）：悬停有底，三横线自绘（和箭头一样不借 `IconPaths`，
+        // 那张表是生成物、且界面那本引擎看不到）。
+        DrawPptMenuButton(app, PptBar.MenuCell(bar, dpi),
+                          hot: app.PptBarHover == (int)PptBarZone.Menu);
 
         // 页码（**条上的主角**，13 逻辑像素，比角标大一档）：数字用正文色、"/ 总数"用次要色。
         // 分两段画就是"层级"——一个字号一口色的话，"3" 和 "/ 12" 一样重，读不出"我在第几页"。
@@ -232,6 +248,39 @@ internal sealed partial class OverlayWindow
         if (!app.BoardOn && app.PptMode && app.PptHintVisible) DrawPptHint(app);
         if (app.PptPagePanelOpen) DrawPptPagePanel(app);
         if (app.PptMenuOpen) DrawPptMenu(app);
+    }
+
+    /// <summary>
+    /// 菜单键（最右 ☰）：**三横线自绘**。
+    /// 尺寸按"和箭头同一档视觉重量"定：线长 15、线宽 1.6、行距 4.6（总高 ≈ 10.8），
+    /// 比 40 的点击格小一圈，扫一眼是"更多"，不抢页码。悬停时三条线一起变深 ＋ 底色，
+    /// 和箭头 / 页码格同一套反馈。
+    /// </summary>
+    private void DrawPptMenuButton(InkEngine app, in RectF box, bool hot)
+    {
+        float dpi = app.UiUnit;
+        var theme = app.FloatingTheme;
+
+        if (hot)
+        {
+            float inset = 4f * dpi;
+            var bg = new Vortice.RawRectF(box.MinX + inset, box.MinY + inset,
+                                          box.MaxX - inset, box.MaxY - inset);
+            float br = MathF.Min(bg.Right - bg.Left, bg.Bottom - bg.Top) * 0.3f;
+            _scratch.Color = theme.Hover;
+            _ctx.FillRoundedRectangle(new RoundedRectangle(bg, br, br), _scratch);
+        }
+
+        float cx = (box.MinX + box.MaxX) * 0.5f, cy = (box.MinY + box.MaxY) * 0.5f;
+        float half = 7.5f * dpi;        // 半宽：三条线一样长
+        float step = 4.6f * dpi;        // 行距
+        _scratch.Color = hot ? theme.Text : theme.TextMuted;
+        float lw = 1.6f * dpi;
+        for (int i = -1; i <= 1; i++)
+        {
+            float y = cy + i * step;
+            _ctx.DrawLine(new Vector2(cx - half, y), new Vector2(cx + half, y), _scratch, lw);
+        }
     }
 
     /// <summary>
@@ -556,12 +605,12 @@ internal sealed partial class OverlayWindow
     }
 
     /// <summary>
-    /// 菜单（**长按页码格**开）。三项**一律四字**（用户 2026-09-26："菜单可以四字对齐吗"），
-    /// 所以文字天然对齐、不用逐项量宽；分隔线是"一项一组"。
+    /// 菜单（**点最右 ☰** 开；2026-11-15 之前是长按 / 点页码格）。PPT 那张四项都是六字，
+    /// 文字天然对齐、不用逐项量宽；分隔线是"一项一组"。
     ///
     /// 两个临时样子：
-    ///   · 「墨迹保存」右边跟一个"开 / 关"（开关项）；
-    ///   · 「墨迹清空」点过一次之后，整行文字变成「再点确认」并上强调底——
+    ///   · 「自动保存墨迹」右边跟一个"开 / 关"（开关项）；
+    ///   · 「清除全部墨迹」点过一次之后，整行文字变成「再点确认」并上强调底——
     ///     这是**不弹窗的确认**（我们的规矩是"屏幕上一个字都不留"，见 README 的提示条那段）。
     /// </summary>
     private void DrawPptMenu(InkEngine app)
@@ -616,7 +665,9 @@ internal sealed partial class OverlayWindow
             if (st != null)
             {
                 float sw = MeasureTextWidth(st, fmt);
-                _scratch.Color = i == 0 && app.PptAutoSaveOn ? theme.ActiveBg : theme.TextMuted;
+                // 自动保存"开"用强调色（白板菜单的 0 是"播放本屏"，没有开关，不上色）
+                _scratch.Color = i == 0 && !app.BoardOn && app.PptAutoSaveOn
+                    ? theme.ActiveBg : theme.TextMuted;
                 _ctx.DrawText(st, fmt,
                               new Rect(item.MaxX - padX - sw, item.MinY, sw, item.MaxY - item.MinY),
                               _scratch);
@@ -625,12 +676,12 @@ internal sealed partial class OverlayWindow
     }
 
     /// <summary>
-    /// **引导**：进放映的头 1.5 秒，在条的上方浮一行小字（"长按页码可呼出菜单"）。
+    /// **引导**：进放映的头 1.5 秒，在条的上方浮一行小字（"点页码跳页，点 ☰ 开菜单"）。
     ///
     /// 位置**和菜单同一处**——它淡出之后菜单正好在那儿出现，老师会自然地把两件事连起来。
     /// 生命周期见 <see cref="InkEngine.PptHintVisible"/>：**每次进放映都提示一遍、只停 1.5 秒**
-    /// （用户 2026-09-27 定的）——因为「⋮」删掉之后菜单只剩长按这一条路，
-    /// "只提示一次"会让老师第二次上课就想不起来它了。
+    /// （用户 2026-09-27 定的）——菜单和面板都不是"点一下就猜得到"的入口，
+    /// "只提示一次"会让老师第二次上课就想不起来它们了。
     /// </summary>
     private void DrawPptHint(InkEngine app)
     {
@@ -640,13 +691,13 @@ internal sealed partial class OverlayWindow
         var hint = new RectF
         {
             MinX = anchor.MinX, MinY = anchor.MinY,
-            MaxX = anchor.MinX + 172f * dpi, MaxY = anchor.MinY + 32f * dpi,
+            MaxX = anchor.MinX + 196f * dpi, MaxY = anchor.MinY + 32f * dpi,
         };
         DrawPanelCard(app, hint, 8f * dpi);
         _scratch.Color = theme.Text;
-        // 文案（2026-10-02 第五轮）：入口从"长按"改成"点一下"之后，这句话只说
-        // "点它出来的是页码跳转菜单"——用户拍板的短句，指点性质靠"点页码："三个字。
-        _ctx.DrawText(Loc.Tr("点页码：页码跳转菜单"), ReadoutFormatSmall(dpi),
+        // 文案（2026-11-15 第五轮）：菜单搬到 ☰、页码格回归跳页之后，这句话要把
+        // **两颗键各管什么**一次说清（"☰"就是屏幕上那颗键的样子，比"菜单键"好认）。
+        _ctx.DrawText(Loc.Tr("点页码跳页，点 ☰ 开菜单"), ReadoutFormatSmall(dpi),
                       new Rect(hint.MinX, hint.MinY, hint.MaxX - hint.MinX, hint.MaxY - hint.MinY),
                       _scratch);
     }
