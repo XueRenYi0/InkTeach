@@ -35,6 +35,8 @@ src/InkTeach/    Host/ DevTools/ SelfTests/{Unit,E2E}
 | 撤销 / 重做 | `Model.EditActions.cs` | `EditAction` 及各 `*Action` | `--unittest EditAction` |
 | 文档 / 页 / 槽 | `Model.InkDocument.cs` | `InkDocument` · `PageSlot` | `--edittest` |
 | 选择 / 变换 / 手柄 | `Selection.cs` | 手柄顺序 / 紧框 / 变换矩阵 | `--seltest` / `--handletest` |
+| 选中操作条（九格） | `Engine.SelectionBar.cs` | 颜色/粗细/线型 · 取色器 · 菜单 | `--seltest` |
+| 图形端点编辑 | `Engine.Selection.Vertex.cs` | `Engine.Selection.Gesture.cs` · `Engine.Selection.Actions.cs` | `--handletest` |
 | 空间索引 | `SpatialGrid.cs` | 邻近查询 | `--seltest` |
 | 序列化（.inkb） | `InkSerializer.cs` | `SaveStrokes` / `LoadStrokes` | `--savetest` |
 | 自动存档 / 崩溃恢复 | `Recovery.cs` | `BackgroundSaver.cs` · `Engine.cs` 自动存档 | `--recoverytest` |
@@ -53,7 +55,7 @@ src/InkTeach/    Host/ DevTools/ SelfTests/{Unit,E2E}
 | 笔迹模型 | `InkStrokeModeler.cs` | `InkModel.cs` · `InkModelProbe.cs` | `--inkmodeltest` |
 | 平滑 / 运动模型 | `StrokeSmoothing.cs` | `StrokeMotion.cs` · `SmoothProbe.cs` | `--smoothtest` / `--motiontest` |
 | 停顿成型 | `Engine.Input.cs` | 停顿成型（两段）· `DwellAssist.cs` | `--dwelltest` |
-| 触摸手势 | `Engine.Input.cs` | `触摸手势（8.4.0）` · `Touch.cs` | `--touchtest` |
+| 触摸手势 | `Engine.TouchGestures.cs` | `触摸手势（8.4.0）` · `Touch.cs` | `--touchtest` |
 | 亚像素 / 湿墨 / 限速 | `Engine.Input.cs` | `湿墨档位` · `长度限速` | `--inputtest` |
 
 ### Rendering（覆盖层 / 缓存 / 界面边界）
@@ -64,8 +66,11 @@ src/InkTeach/    Host/ DevTools/ SelfTests/{Unit,E2E}
 | 内容层分块缓存 | `CanvasTiles.cs` | `Overlay.Content.cs` 内容层 | `--tiletest` |
 | 界面层合成 | `Overlay.Ui.cs` | 界面层 · `Ui.cs` · `UiHost.cs` | `--uitest` |
 | 多边形读数 / 角度标 | `Overlay.Readout.cs` | 多边形读数 | `--rotatetest` |
+| 选中操作条绘制 | `Overlay.SelectionBar.cs` | `Overlay.Readout.cs` 读数 | `--seltest` |
+| PPT / 回放条 | `Overlay.PptBar.cs` | `Overlay.Readout.cs` | `--ppttest` |
+| Toast / 提示 | `Overlay.Toast.cs` | `Overlay.Readout.cs` | `--paneltest` |
 | 呼出盘 | `Overlay.Radial.cs` | 呼出盘 · `Engine.Radial.cs` | `--radialtest` |
-| 截图取景框 | `Overlay.Capture.cs` | 截图模式 · `ScreenCapture.cs` | `--capturetest` |
+| 截图取景框 | `Overlay.Capture.cs` | 截图模式 · `ScreenCapture.cs` · `Engine.Capture.cs` | `--capturetest` |
 | 光标形状 | `Cursors.cs` | `Engine.Cursor.cs` 指针形状 | `--cursortest` |
 | SVG 路径 / 图标 | `SvgPath.cs` | `Icons.Paths.cs` | `--makeicon` |
 
@@ -75,7 +80,7 @@ src/InkTeach/    Host/ DevTools/ SelfTests/{Unit,E2E}
 | --- | --- | --- | --- |
 | 一笔识别成图形 | `ShapeRecognize.cs` | `PointCloudRecognizer.cs` | `--inktest` |
 | 图形卡目录 | `ShapeCatalog.cs` | `ShapePreview.cs` | `--shapepaneltest` |
-| 收藏库 | `ShapeLibrary.cs` | `Engine.Library.cs` · `LibraryLayout.cs` · `CollectionFingerprint.cs` | `--librarytest` |
+| 收藏库 | `ShapeLibrary.cs` | `Engine.Library.cs` · `Engine.Library.Menu.cs` · `Engine.Library.Layout.cs` · `Engine.Library.Input.cs` | `--librarytest` |
 | 收藏导入导出 | `FavoriteTransfer.cs` | 设置页入口 | `--librarytest` |
 | 图形渲染 / 参数 | `FigureRenderer.cs` | `FigureParamBar.cs` | `--shapetest` |
 | AI 作图 | `AiPlotClient.cs` | `PlotExpression.cs` · `PlotSampler` · `PlotRenderer.cs` | `--plottest` |
@@ -106,7 +111,7 @@ src/InkTeach/    Host/ DevTools/ SelfTests/{Unit,E2E}
 | Ppt | 放映批注 / 翻页 / 落盘 | `Ppt.cs` · `PptLaunch.cs` · `PptLink.cs` | `--ppttest` |
 | Classroom | 计时 / 点名 | `Classroom.cs` · `ClassroomDraw.cs` | `--timertest` / `--rolltest` |
 | Replay | 回放 | `Replay.cs` · `Overlay.cs` 回放 | `--replaytest` |
-| Export | 导出 / 剪贴板 / 图片 / 截图 | `Export.cs` · `Clipboard*.cs` · `Image*.cs` · `PhotoBeautify.cs` | `--iotest` |
+| Export | 导出 / 剪贴板 / 图片 / 截图 | `Export.cs` · `Engine.Clipboard.cs` · `Clipboard*.cs` · `Image*.cs` · `PhotoBeautify.cs` | `--iotest` |
 | Platform | Win32 / 键位 / 缩放 / 更新 / 隐私 / 日志 / 备份 | `Native.cs` · `KeyBindings.cs` · `UiScale.cs` · `Update.cs` · `DiagLog.cs` · `Backup.cs` | `--keytest` / `--settingsaudit` |
 | Platform | Toast / Tooltip / 诊断探针 | `Toast.cs` · `Tooltip.cs` · `Latency.cs` · `GcLatency.cs` | `--paneltest` |
 

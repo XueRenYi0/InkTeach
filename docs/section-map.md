@@ -163,24 +163,36 @@
 | 1285 | Message loop |
 | 1806 | Window procedure |
 
-## src/InkEngine/Core/Engine.Selection.cs（3,561 行）
+## src/InkEngine/Core/Engine.Selection.Gesture.cs（1,459 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
-| 13 | `public partial class InkEngine` |
-| 668 | `internal enum AiMenuKind { PlotOnly, Hand, Image }` |
-| 2020 | `private enum AutoSelZone` |
+| 14 | `public partial class InkEngine` |
+| 223 | `private enum AutoSelZone` |
+
+## src/InkEngine/Core/Engine.Selection.Vertex.cs（1,049 行）
+
+| 行 | 顶层类型 |
+| --- | --- |
+| 14 | `public partial class InkEngine` |
 
 | 行 | 段落 |
 | --- | --- |
-| 15 | 选择手势（框选工具 = 选择工具） |
-| 17 | ---- 拖动期收装饰（方案 A）与拖动预览（方案 B） |
-| 19 | 拖动期收装饰（方案 A）与拖动预览（方案 B） |
-| 68 | 操作条（九格）+ 浮动面板 + 提示条：状态与动作 |
-| 461 | 自定义取色板（8.2.0：色相条 + 饱和度/明度方块 + 当前色预览） |
-| 780 | 图形端点编辑：起手 / 每帧 / 提交 |
-| 1200 | 四个轴端：**只改自己那一截**（2026-11-03） |
-| 1273 | 格距手柄（第 6 颗，开网格才有） |
+| 16 | 图形端点编辑：起手 / 每帧 / 提交 |
+| 436 | 四个轴端：**只改自己那一截**（2026-11-03） |
+| 509 | 格距手柄（第 6 颗，开网格才有） |
+
+## src/InkEngine/Core/Engine.SelectionBar.cs（728 行）
+
+| 行 | 顶层类型 |
+| --- | --- |
+| 14 | `public partial class InkEngine` |
+| 616 | `internal enum AiMenuKind { PlotOnly, Hand, Image }` |
+
+| 行 | 段落 |
+| --- | --- |
+| 16 | 操作条（九格）+ 浮动面板 + 提示条：状态与动作 |
+| 409 | 自定义取色板（8.2.0：色相条 + 饱和度/明度方块 + 当前色预览） |
 
 ## src/InkEngine/Core/InkSerializer.cs（879 行）
 
@@ -375,7 +387,7 @@
 | 900 | 墨迹文件（.inkb）的保存 / 打开（墨迹 A，2026-10-01） |
 | 1106 | "打开文档…"（图片批量 / PDF；2026-10-07，图片与 PDF 导入第一步） |
 
-## src/InkEngine/Input/Engine.Input.cs（3,526 行）
+## src/InkEngine/Input/Engine.Input.cs（1,949 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -387,12 +399,17 @@
 | 662 | 停顿成型：计时 / 触发 / 按住调整 / 定型（规格见 计划-图形工具.md §四十二） |
 | 1091 | 自检入口（`--dwelltest` 用；四条都是"薄封装"，不含任何逻辑） |
 | 1123 | 黑匣子（`--reclive` / `--replayinput`）用的薄钩子 |
-| 1949 | 截图 |
-| 2185 | 调整阶段 |
-| 2304 | 触摸手势（8.4.0）——规格与调研见 调研-触摸手势-学校大屏.md |
-| 2329 | 双指纵滑的惯性（2026-10-28） |
-| 3054 | 反馈群二维码（2026-11-03） |
-| 3189 | 导出（选中 → 透明底 PNG） |
+
+## src/InkEngine/Input/Engine.TouchGestures.cs（748 行）
+
+| 行 | 顶层类型 |
+| --- | --- |
+| 14 | `public partial class InkEngine` |
+
+| 行 | 段落 |
+| --- | --- |
+| 16 | 触摸手势（8.4.0）——规格与调研见 调研-触摸手势-学校大屏.md |
+| 41 | 双指纵滑的惯性（2026-10-28） |
 
 ## src/InkEngine/Input/GoogleInkSlidingWindow.cs（667 行）
 
@@ -737,6 +754,16 @@
 | --- | --- |
 | 20 | Frame |
 
+## src/InkEngine/Rendering/Overlay.PptBar.cs（651 行）
+
+| 行 | 顶层类型 |
+| --- | --- |
+| 19 | `internal sealed partial class OverlayWindow` |
+
+| 行 | 段落 |
+| --- | --- |
+| 242 | 回放（墨迹 C） |
+
 ## src/InkEngine/Rendering/Overlay.Radial.cs（654 行）
 
 | 行 | 顶层类型 |
@@ -748,7 +775,7 @@
 | 20 | 呼出盘（Ctrl+Q）：按住 → 划向扇区 → 松手 |
 | 22 | 和落点反馈一样画在**浮动层**、坐标和指针同源（画布坐标 + CanvasToWindow）， |
 
-## src/InkEngine/Rendering/Overlay.Readout.cs（3,452 行）
+## src/InkEngine/Rendering/Overlay.Readout.cs（1,463 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -757,15 +784,22 @@
 | 行 | 段落 |
 | --- | --- |
 | 20 | 多边形读数（规格 9.7）：三角形的三个内角 / 平行四边形的两个夹角 |
-| 1911 | ① 粗细滑条（连续；拖动实时数值；右端笔尖预览） |
-| 1986 | ②③ 线型：实线 / 虚线 / 点线 |
-| 2027 | ④ 色板 |
-| 2128 | ① 饱和度（横）／明度（纵）方块 |
-| 2143 | ② 竖直色相条 |
-| 2160 | ③ 当前色预览 |
-| 2176 | 取色板两张缓存位图（色相/尺寸变了才重画） |
-| 2725 | 回放（墨迹 C） |
-| 3222 | 引擎侧悬停提示（Tooltip；2026-10-02） |
+
+## src/InkEngine/Rendering/Overlay.SelectionBar.cs（1,062 行）
+
+| 行 | 顶层类型 |
+| --- | --- |
+| 19 | `internal sealed partial class OverlayWindow` |
+
+| 行 | 段落 |
+| --- | --- |
+| 469 | ① 粗细滑条（连续；拖动实时数值；右端笔尖预览） |
+| 544 | ②③ 线型：实线 / 虚线 / 点线 |
+| 585 | ④ 色板 |
+| 686 | ① 饱和度（横）／明度（纵）方块 |
+| 701 | ② 竖直色相条 |
+| 718 | ③ 当前色预览 |
+| 734 | 取色板两张缓存位图（色相/尺寸变了才重画） |
 
 ## src/InkEngine/Rendering/Overlay.Ui.cs（1,442 行）
 
@@ -793,7 +827,7 @@
 | 1528 | `public static class UiTouchFling` |
 | 1615 | `public sealed class NullUi : IOverlayUi` |
 
-## src/InkEngine/Shapes/Engine.Library.cs（3,588 行）
+## src/InkEngine/Shapes/Engine.Library.cs（1,106 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -806,12 +840,21 @@
 | 189 | 整理模式的框选 / 排序 |
 | 202 | 触摸上下滚动（单指拖卡片区；点一下仍是选中） |
 | 211 | 页签拖动 / 滚动 |
-| 2492 | 整理模式 |
-| 2529 | 回收站（使用态） |
-| 2637 | 指针移动 / 抬起（整理、页签、滚动条） |
-| 2816 | 页签拖动 / 点击 |
-| 2884 | 整理模式：点击 / 框选 |
-| 2945 | 整理模式：拖把手排序 |
+
+## src/InkEngine/Shapes/Engine.Library.Input.cs（1,010 行）
+
+| 行 | 顶层类型 |
+| --- | --- |
+| 14 | `public partial class InkEngine` |
+
+| 行 | 段落 |
+| --- | --- |
+| 450 | 整理模式 |
+| 487 | 回收站（使用态） |
+| 595 | 指针移动 / 抬起（整理、页签、滚动条） |
+| 774 | 页签拖动 / 点击 |
+| 842 | 整理模式：点击 / 框选 |
+| 903 | 整理模式：拖把手排序 |
 
 ## src/InkEngine/Shapes/Engine.ShapeTools.cs（1,570 行）
 
@@ -894,25 +937,22 @@
 | 721 | ITextHost vtable |
 | 1070 | native helpers |
 
-## src/InkTeach/DevTools/App.Dev.ClickTarget.cs（4,588 行）
+## src/InkTeach/DevTools/App.Dev.AiShow.cs（1,035 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
-| 13 | `internal sealed partial class App` |
+| 14 | `internal sealed partial class App` |
 
 | 行 | 段落 |
 | --- | --- |
-| 15 | Click target (second process) + real pass-through test |
-| 185 | 归因：把几块分别关掉再量，看钱花在哪 |
-| 1029 | 拖动 / 改宽 / 点答案（走和真机同一条指针路径） |
-| 1105 | 普通文本框：同一套对象/存档/8 手柄 |
-| 3550 | 第一行：抛物线的四种开口（**先选朝向，再用"顶点 + 经过点"两点画**） |
-| 3568 | 第二行：双曲线两个方向 ＋ 正弦 / 余弦各一个周期 |
-| 3620 | 第三行：立体图形（2026-09-20 第五批，照 InkClass 的 case 6/7） |
-| 3693 | 上排：双曲线两档（**同一个几何**，只差那两条虚线在不在） |
-| 3706 | 下排：椭圆（带焦点）两档（**同一个椭圆**，只差那两条边在不在） |
-| 3838 | 合成触摸（自检注入用） |
-| 4584 | Teardown |
+| 56 | 拖动 / 改宽 / 点答案（走和真机同一条指针路径） |
+| 132 | 普通文本框：同一套对象/存档/8 手柄 |
+
+## src/InkTeach/DevTools/App.Dev.Smooth.cs（621 行）
+
+| 行 | 顶层类型 |
+| --- | --- |
+| 14 | `internal sealed partial class App` |
 
 ## src/InkTeach/DevTools/DwellProbe.cs（806 行）
 
@@ -935,7 +975,7 @@
 | 1707 | 两笔 → 双曲线：语料与辅助量（2026-09-26 三轮实测用的） |
 | 1989 | 小工具 |
 
-## src/InkTeach/Host/App.cs（4,134 行）
+## src/InkTeach/Host/App.cs（2,274 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -944,12 +984,6 @@
 | 行 | 段落 |
 | --- | --- |
 | 36 | Host hooks: everything here is a development tool, not engine code. |
-| 3570 | `--autosel`：**画完自动选中那一帧**（2026-09-22） |
-| 3611 | 第③轮（读数）那几张 |
-| 3749 | 圆 / 椭圆 / 三角形 / 平行四边形 / 抛物线 / 长方体：静止选中态 |
-| 3886 | 一条"已经转过 60°"的直线、静止选中（紧框改口径的第二个现场） |
-| 3923 | 旋转拖动中：真按真转（用户要看的就是这一帧） |
-| 4002 | 正在画一条直线：按住不放，拖到**原始 45.5°**（±1° 容差内 → 吸到 45°） |
 
 ## src/InkTeach/SelfTests/E2E/AppClassroomTests.cs（626 行）
 
@@ -1657,4 +1691,4 @@
 
 ---
 
-共 68 个文件。重跑：`powershell -ExecutionPolicy Bypass -File tools/gen-section-map.ps1`
+共 75 个文件。重跑：`powershell -ExecutionPolicy Bypass -File tools/gen-section-map.ps1`

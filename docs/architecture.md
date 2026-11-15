@@ -245,17 +245,19 @@ ADR-002 选择“扁平目录 + 单文件 2,000 行上限”，理由是避免�
 
 - **P0 完成**：`module-map` / `feature-specs` / `test-playbook` 落地；`baseline-pre` 46/46 PASS。
 - **P1 完成**：195 个文件按 12+5+3 个功能域 `git mv`，Git 全部识别为 `R100`；namespace 未改。
-- **P2 完成（主要巨石）**：
-  - `Model.cs` 9,444 → `Model.Types` 843 / `Model.Stroke` 967 / `Model.Stroke.Curves` 1,117 /
-    `Model.Stroke.Tangent` 2,553 / `Model.Stroke.Solids` 873 / `Model.EditActions` 910 /
-    `Model.InkDocument` 2,002 / `Model.LaserTrail` 175。
-  - `App.cs` 10,340 → `Host/App.cs` 3,940 / `Program` / `DevTools/App.Dev.{Render,Metrics,Input,ClickTarget}`。
-  - `Overlay.cs` 9,782 → `Rendering/Overlay` 1,242 + 6 个 partial（Frame/Content/Ui/Readout/Radial/Capture）。
-  - `FullUi.cs` 9,452 → `Shell/FullUi` 1,673 + `FullUi.Hit` + `Panels/FullUi.{Settings,More}`。
-  - `Engine.cs` 21,685 → `Core/Engine` 2,357 + `Engine.Host` 2,030 + `Engine.Selection` 3,276 +
-    `Input/Engine.Input` 3,220 + `Shapes/Engine.Library` 3,380 + `Engine.ShapeTools` +
-    `Rendering/Engine.{Cursor,UiBridge}` + `Platform/Engine.{Hotkey,Update,Keyboard,Radial}`。
-- **行为等价**：`baseline-post2/3/4` 均 **46/46 PASS**；`compare-baseline` 退出码 0。
-- **仍未降到 2,000 行以下**（下一步 P3）：`App.Dev.ClickTarget` 4,292、`App.cs` 3,940、
-  `Engine.Library` 3,380、`Engine.Selection` 3,276、`Engine.Input` 3,220、`Overlay.Readout` 3,201。
-  这些是单一功能域，按 `section-map` 的 banner 读取；继续拆时同样遵守 Move/Split 分离与逐步验证。
+- **P2 完成（细化到功能块）**：
+  - `Engine.Selection` 3,276 → 主 67 + `SelectionBar` 712（操作条九格：颜色/粗细/线型/取色器/菜单）
+    + `Selection.Vertex` 1,033 + `Selection.Gesture` 1,443 + `Beautify` 144 + `Actions` 161。
+  - `Engine.Library` 3,380 → 主 1,106 + `Library.Menu` 388 + `Library.Layout` 564 +
+    `Library.Input` 994 + `Library.Misc` 536。
+  - `Engine.Input` 3,220 → 主 1,948 + `Capture` 355 + `TouchGestures` 732 + `Clipboard` 490。
+  - `Overlay.Readout` 3,201 → 主 1,477 + `SelectionBar` 1,041 + `PptBar` 630 + `Toast` 318。
+  - `App.cs` 3,940 → 主 2,230 + `App.Dev.{Scroll,Ppt,Show,Cursor,ShapeShow}`（127–577）。
+  - `App.Dev.ClickTarget` 4,292 → 主 78 + `App.Dev.{Sheets,PageShow,AiShow,TextShow,Showcase,
+    Smooth,Geometry,Bench,Erase}`（65–1,019）。
+- **行为等价**：`baseline-post2/3/4/5` 均 **46/46 PASS**；`compare-baseline` 退出码 0。
+- **当前产品代码最大文件**：`Panels/FullUi.Settings.cs` 2,808、`Core/Selection.cs` 2,471、
+  `Ai/AiCard.cs` 2,415、`Model.Stroke.Tangent` 2,364、`Core/Engine.cs` 2,357。
+  全部 ≤2,808，多数 ≤1,200；同一功能域的代码在一个文件里，按 `section-map` 的 banner 读。
+- **仅剩自检未拆**：`SelfTests/E2E/PanelAndKeys` 5,146、`ShapeLibrary` 3,889、
+  `Diagnostics` 2,736。AI 改产品时不会读它们；按 ADR 保持现状。
