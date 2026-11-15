@@ -95,6 +95,15 @@ powershell -ExecutionPolicy Bypass -File tools/compare-baseline.ps1 `
 - `passtest` 必须 Normal 窗口启动；其余用 Hidden（见脚本注释）。
 - 套件会占用剪贴板 / 前台窗口，跑之前把无关窗口最小化。
 
+### 4.2 索引校验（拆完文件 / 发版前）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/check-module-map.ps1   # 地图引用的文件是否存在
+powershell -ExecutionPolicy Bypass -File tools/check-section-map.ps1  # section-map 行数是否过期
+```
+
+两个都返回 0 才算索引可用；`check-section-map` 报 STALE 时重跑 `tools/gen-section-map.ps1`。
+
 ## 5. 写测试的硬规则
 
 1. **一个测试只验一件事**；名字写清“模块_行为_预期”。

@@ -35,7 +35,7 @@ src/InkTeach/    Host/ DevTools/ SelfTests/{Unit,E2E}
 | 撤销 / 重做 | `InkEngine/Core/Model.EditActions.cs` | `EditAction` 及各 `*Action` | `--unittest EditAction` |
 | 文档 / 页 / 槽 | `InkEngine/Core/Model.InkDocument.cs` | `InkDocument` · `PageSlot` | `--edittest` |
 | 选择 / 变换 / 手柄 | `InkEngine/Core/Selection.cs` | 手柄顺序 / 紧框 / 变换矩阵 | `--seltest` / `--handletest` |
-| 选中操作条（九格） | `InkEngine/Core/Engine.SelectionBar.cs` | 颜色/粗细/线型 · 取色器 · 菜单 | `--seltest` |
+| 选中操作条（动作/外观） | `InkEngine/Core/Engine.SelectionBar.cs` | 只改外观 → `InkEngine/Rendering/Overlay.SelectionBar.cs`（`DrawSelectionBar` 段） | `--seltest` |
 | 图形端点编辑 | `InkEngine/Core/Engine.Selection.Vertex.cs` | `InkEngine/Core/Engine.Selection.Gesture.cs` · `InkEngine/Core/Engine.Selection.Actions.cs` | `--handletest` |
 | 空间索引 | `InkEngine/Core/SpatialGrid.cs` | 邻近查询 | `--seltest` |
 | 序列化（.inkb） | `InkEngine/Core/InkSerializer.cs` | `SaveStrokes` / `LoadStrokes` | `--savetest` |
@@ -70,7 +70,7 @@ src/InkTeach/    Host/ DevTools/ SelfTests/{Unit,E2E}
 | PPT / 回放条 | `InkEngine/Rendering/Overlay.PptBar.cs` | `InkEngine/Rendering/Overlay.Readout.cs` | `--ppttest` |
 | Toast / 提示 | `InkEngine/Rendering/Overlay.Toast.cs` | `InkEngine/Rendering/Overlay.Readout.cs` | `--paneltest` |
 | 呼出盘 | `InkEngine/Rendering/Overlay.Radial.cs` | 呼出盘 · `InkEngine/Platform/Engine.Radial.cs` | `--radialtest` |
-| 截图取景框 | `InkEngine/Rendering/Overlay.Capture.cs` | 截图模式 · `InkEngine/Export/ScreenCapture.cs` · `InkEngine/Input/Engine.Capture.cs` | `--capturetest` |
+| 截图取景框 | `InkEngine/Rendering/Overlay.Capture.cs` | 只改尺寸读数 → 同文件 `DrawCaptureOverlay` 段；改数据/确认路径才追 `ScreenCapture.cs` · `Engine.Capture.cs` | `--capturetest` |
 | 光标形状 | `InkEngine/Rendering/Cursors.cs` | `InkEngine/Rendering/Engine.Cursor.cs` 指针形状 | `--cursortest` |
 | SVG 路径 / 图标 | `InkEngine/Rendering/SvgPath.cs` | `InkEngine/Rendering/Icons.Paths.cs` | `--makeicon` |
 
@@ -80,7 +80,8 @@ src/InkTeach/    Host/ DevTools/ SelfTests/{Unit,E2E}
 | --- | --- | --- | --- |
 | 一笔识别成图形 | `InkEngine/Shapes/ShapeRecognize.cs` | `InkEngine/Shapes/PointCloudRecognizer.cs` | `--inktest` |
 | 图形卡目录 | `InkEngine/Shapes/ShapeCatalog.cs` | `InkEngine/Shapes/ShapePreview.cs` | `--shapepaneltest` |
-| 收藏库 | `InkEngine/Shapes/ShapeLibrary.cs` | `InkEngine/Shapes/Engine.Library.cs` · `InkEngine/Shapes/Engine.Library.Menu.cs` · `InkEngine/Shapes/Engine.Library.Layout.cs` · `InkEngine/Shapes/Engine.Library.Input.cs` | `--librarytest` |
+| 收藏库（拖拽排序） | `InkEngine/Shapes/Engine.Library.Input.cs` | 拖把手排序段 → `InkEngine/Shapes/ShapeLibrary.cs`（`ReorderBefore`）；改绘制/布局才追 `Engine.Library.Menu/Layout.cs` | `--librarytest` |
+| 收藏库（面板/菜单） | `InkEngine/Shapes/Engine.Library.cs` | `Engine.Library.Menu.cs` · `Engine.Library.Layout.cs` · `Engine.Library.Misc.cs` | `--librarytest` |
 | 收藏导入导出 | `InkEngine/Shapes/FavoriteTransfer.cs` | 设置页入口 | `--librarytest` |
 | 图形渲染 / 参数 | `InkEngine/Shapes/FigureRenderer.cs` | `InkEngine/Shapes/FigureParamBar.cs` | `--shapetest` |
 | AI 作图 | `InkEngine/Ai/AiPlotClient.cs` | `InkEngine/Shapes/PlotExpression.cs` · `PlotSampler` · `InkEngine/Shapes/PlotRenderer.cs` | `--plottest` |
@@ -176,7 +177,8 @@ src/InkTeach/    Host/ DevTools/ SelfTests/{Unit,E2E}
 | `docs/section-map.md` | `tools/gen-section-map.ps1` | 拆完文件、大改后、发版前 | 写，自动生成 |
 
 - 只改方法内部：两份都不用动。
-- 校验：`tools/check-module-map.ps1` 发版前跑。
+- 校验：`tools/check-module-map.ps1`（文件存在）+ `tools/check-section-map.ps1`
+  （section-map 行数是否过期），发版前一起跑。
 - **禁止**把行号抄进本文件。
 
 ## 6. 命名约定

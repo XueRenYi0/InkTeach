@@ -256,9 +256,11 @@ ADR-002 选择“扁平目录 + 单文件 2,000 行上限”，理由是避免�
   - `App.Dev.ClickTarget` 4,292 → 主 78 + `App.Dev.{Sheets,PageShow,AiShow,TextShow,Showcase,
     Smooth,Geometry,Bench,Erase}`（65–1,019）。
 - **行为等价**：`baseline-post2/3/4/5` 均 **46/46 PASS**；`compare-baseline` 退出码 0。
-- **当前产品代码最大文件**：`Panels/FullUi.Settings.cs` 2,808、`Core/Selection.cs` 2,471、
-  `Ai/AiCard.cs` 2,415、`Model.Stroke.Tangent` 2,364、`Core/Engine.cs` 2,357。
-  全部 ≤2,808，多数 ≤1,200；同一功能域的代码在一个文件里，按 `section-map` 的 banner 读。
+- **当前产品代码最大文件（`ReadAllLines` 总行数，含空行）**：`Core/Selection.cs` 3,368、
+  `Panels/FullUi.Settings.cs` 3,088、`Shapes/ShapeRecognize.cs` 2,922、`Ai/AiCard.cs` 2,757、
+  `Text/TextBoxEditing.cs` 2,659、`Core/Engine.cs` 2,636。
+  14 个产品文件在 2,000–3,368；其余 ≤2,000，多数 ≤600。
+  同一功能域的代码在一个文件里，按 `section-map` 的 banner 读。
 - **仅剩自检未拆**：`SelfTests/E2E/PanelAndKeys` 5,146、`ShapeLibrary` 3,889、
   `Diagnostics` 2,736。AI 改产品时不会读它们；按 ADR 保持现状。
 
