@@ -172,7 +172,7 @@ internal sealed partial class App
             PanelPerf();
             return null;
         }),
-        new("--panelshow", "<图> [--band] [--mini] [--more [--page N] [--clickrow N] [--langpick N]] [--cell N] [--shape 名字] [--zoom N] [--update]   界面出图（离屏；--more --page 0=启动器 1=设置；--clickrow 点设置第 N 行，--update 摆出新版本红点）", args =>
+        new("--panelshow", "<图> [--band] [--mini] [--more [--page N] [--clickrow N] [--langpick N] [--recent N]] [--cell N] [--shape 名字] [--zoom N] [--update]   界面出图（离屏；--more --page 0=启动器 1=设置；--clickrow 点设置第 N 行，--recent 塞 N 条最近文档，--update 摆出新版本红点）", args =>
         {
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;

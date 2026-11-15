@@ -220,6 +220,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SaveBoardAny() => _engine.SaveBoardAnyFromUi();
     public void OpenDocument() => _engine.OpenDocumentFromUi();
     public void OpenBoardAny() => _engine.OpenBoardAnyFromUi();
+    public bool OpenRecentDocument(string[] paths) => _engine.OpenRecentDocumentFromUi(paths);
     public void CloseDocument() => _engine.CloseDocumentFromUi();
     public void StartReplay() => _engine.StartReplayFromUi();
     public void StopReplay() => _engine.StopReplayFromUi();

@@ -49,6 +49,7 @@
 | 图形卡 / 图形库 | `InkEngine/Shapes/ShapeCatalog.cs` | `ShapePreview.cs` | `--shapepaneltest` |
 | 设置页 | `InkUi/Panels/FullUi.Settings.cs` | `InkEngine/Core/Settings.cs` | `--settingsaudit` |
 | 更多面板 / 日志页 | `InkUi/Panels/FullUi.MorePanel.cs` | `InkUi/Shell/FullUi.Interaction.cs` | `--paneltest` |
+| 最近文档（更多 → 最近文档） | `InkUi/Panels/FullUi.Pages.cs`（那一小条） | `InkEngine/Doc/DocImport.cs` 打开成功时记一条 · `Doc/DocStore.cs` 的 `RecentDocs` 线格式 | `--paneltest` / `--doctest` |
 | 键位 / 热键 | `InkEngine/Platform/KeyBindings.cs` | `InkEngine/Platform/Engine.Hotkey.cs` | `--keytest` |
 | 自动更新 | `InkEngine/Platform/Update.cs` | `InkEngine/Platform/Engine.Update.cs` | `--updatetest` |
 | 启动 / 模式分发 | `InkTeach/Host/App.cs` | `InkEngine/Core/Engine.Host.cs` | `--startupcheck` |

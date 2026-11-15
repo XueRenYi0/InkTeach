@@ -1,3 +1,6 @@
+// [职责] 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
+// [测试] --doctest
+
 using Vortice.Mathematics;
 
 namespace InkEngine;
@@ -305,6 +308,84 @@ public partial class InkEngine
     }
 
     /// <summary>
+    /// 「更多 → 最近文档」点某一行：**不弹对话框**，直接按上次那批路径重开。
+    /// 文件没了就跳过那一份（全没了只回一句提示，不抛、不关别的东西）。
+    /// 返回 true = 已经发起打开（面板可以关掉了）。
+    /// </summary>
+    internal bool OpenRecentDocumentFromUi(string[] paths)
+    {
+        if (PptMode) { SetInkStatus("放映中不开文档（先退出放映）"); return false; }
+        if (paths == null || paths.Length == 0) return false;
+
+        var live = new List<string>(paths.Length);
+        foreach (var p in paths)
+            if (!string.IsNullOrWhiteSpace(p) && System.IO.File.Exists(p)) live.Add(p);
+
+        if (live.Count == 0)
+        {
+            string name = paths.Length > 0 ? System.IO.Path.GetFileName(paths[0]) : "";
+            SetInkStatus(name.Length > 0 ? $"文件已经不在了：{name}" : "文件已经不在了");
+            Console.WriteLine("[最近文档] 文件已经不在了：" + string.Join("；", paths));
+            return false;
+        }
+
+        var err = OpenDocuments(live);
+        if (err != null) { SetInkStatus("打开失败：" + err); return false; }
+        PrepareAnnotateAfterOpen();
+
+        // 这一条里有文件已经没了：实际打开的那几条刚记成新的一条，
+        // 把原来那条（含已删文件）删掉——列表里同一份文档不会留两行。
+        if (live.Count != paths.Length)
+        {
+            try
+            {
+                var list = RecentDocs.Parse(GetUiPref(RecentDocs.PrefKey));
+                if (RecentDocs.RemoveSet(list, paths))
+                {
+                    SetUiPref(RecentDocs.PrefKey, RecentDocs.Format(list));
+                    FlushSettings();
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("[最近文档] 清理旧条目失败（不影响打开）：" + ex.Message); }
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// 打开成功后记一条「最近文档」（界面「更多 → 最近文档」读它）。
+    ///
+    /// 只认**文档**（图片 / PDF / PPT）：板书 .inkb 走的是"替换整块板书"，
+    /// 不在这个列表里重复出现（它有「历史板书」那条自己的入口）。
+    /// </summary>
+    private void RecordRecentDoc(IReadOnlyList<string> paths)
+    {
+        if (paths == null || paths.Count == 0) return;
+        try
+        {
+            bool any = false;
+            foreach (var p in paths)
+            {
+                if (string.IsNullOrWhiteSpace(p)) continue;
+                var ext = System.IO.Path.GetExtension(p);
+                if (DocImageSource.IsImage(p) || PptLaunch.IsPpt(p)
+                    || string.Equals(ext, ".pdf", StringComparison.OrdinalIgnoreCase))
+                { any = true; break; }
+            }
+            if (!any) return;
+
+            var list = RecentDocs.Parse(GetUiPref(RecentDocs.PrefKey));
+            RecentDocs.Push(list, paths, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            SetUiPref(RecentDocs.PrefKey, RecentDocs.Format(list));
+            // 打开文档是低频动作：直接落盘，别等退出时才写（崩溃也不丢）。
+            FlushSettings();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("[文档] 记「最近文档」失败（不影响打开）：" + ex.Message);
+        }
+    }
+
+    /// <summary>
     /// 打开文档**成功之后**的"准备批注"组合（2026-10-16 用户提议：
     /// "穿透模式里打开 PDF，屏幕上什么都不显示，这样才知道 PDF 打开了？"）：
     ///   · **在穿透里 → 自动退出穿透**：穿透下页位图是**全放掉**的（省内存）——
@@ -362,7 +443,10 @@ public partial class InkEngine
         {
             if (images.Count > 0 || pdfs.Count > 0) return "PPT 和图片/PDF 不能一起选（一次选一种）";
             if (ppts.Count > 1) return $"PPT 一次放一个（这次选了 {ppts.Count} 个）";
-            return LaunchPptShow(ppts[0]);
+            string msg = LaunchPptShow(ppts[0]);
+            // 放映喊起来了（含"退回普通打开"的兜底）才算打开成功 → 记「最近文档」。
+            if (msg == null) RecordRecentDoc(ppts);
+            return msg;
         }
 
         if (pdfs.Count == 0 && images.Count > 0) return OpenImageDocument(images);
@@ -378,6 +462,7 @@ public partial class InkEngine
     internal string OpenImageDocument(IReadOnlyList<string> files)
     {
         var specs = new List<DocPages.Spec>();
+        var opened = new List<string>(files.Count);       // 真的读出来的那些（最近文档只记它们）
         int ok = 0, bad = 0;
         int primaryW = Native.GetSystemMetrics(0);       // 页锚在主屏中心 → 按主屏宽铺页
         int primaryH = Native.GetSystemMetrics(1);
@@ -386,6 +471,7 @@ public partial class InkEngine
         {
             if (!DocImageSource.TryReadInfo(f, out int w, out int h)) { bad++; continue; }
             specs.AddRange(DocImageSource.PlanSpecs(f, w, h, layoutW, primaryH));
+            opened.Add(f);
             ok++;
         }
         if (specs.Count == 0 || ok == 0) return "这些图片都读不了（格式不支持或文件损坏）";
@@ -396,6 +482,7 @@ public partial class InkEngine
 
         string title = files.Count == 1 ? System.IO.Path.GetFileName(files[0]) : $"{ok} 张图片";
         StartDocView(specs, title, DocStore.KeyOf(files));
+        RecordRecentDoc(opened);           // 最近文档：一组图片算一份（读不了的别记）
         if (bad > 0) Console.WriteLine($"    [文档] 有 {bad} 个文件读不了，已跳过");
         return null;
     }
@@ -455,6 +542,7 @@ public partial class InkEngine
         _pdfDoc = doc;
 
         StartDocView(specs, System.IO.Path.GetFileName(path), DocStore.KeyOf(new[] { path }));
+        RecordRecentDoc(new[] { path });   // 最近文档：PDF 一份
         return null;
     }
 

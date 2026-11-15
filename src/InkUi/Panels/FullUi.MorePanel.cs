@@ -1500,6 +1500,16 @@ public sealed partial class FullUi
                 // 版本号是运行时拼进去的；模板留在表里，提示出口再格式化。
                 return (t.Label, "", Loc.T(t.Hint, ProductInfo.Version));
             }
+            // 最近文档：全名 + 完整路径（列表里名字被省略号截过，这里给全）
+            if (hit >= MoreHitRecent && hit < MoreHitRecent + MoreRecentMax)
+            {
+                var live = RecentDocsVisible();
+                int i = hit - MoreHitRecent;
+                if (i >= live.Count || live[i].Paths.Length == 0) return default;
+                var doc = live[i];
+                string title = RecentDocTitle(doc);
+                return (title, "", string.Join("；", doc.Paths));
+            }
             if (hit >= MoreHitRow && hit < MoreHitRow + Rows.Length)
             {
                 int i = hit - MoreHitRow;
@@ -1604,6 +1614,8 @@ public sealed partial class FullUi
     private RectF TipAnchor(int id)
     {
         if (id == -2) return BallRect();
+        if (id >= 1000 + MoreHitRecent && id < 1000 + MoreHitRecent + MoreRecentMax)
+            return RecentRowRect(id - 1000 - MoreHitRecent);      // 「最近文档」的行
         if (id >= 0 && id < Cells.Length)
         {
             int pos = PosOf(id);
@@ -1633,7 +1645,9 @@ public sealed partial class FullUi
         float titleW = titleOnly + (key.Length == 0 ? 0f
                                   : 12f + _widgets.Measure(key, Tokens.TipTitleSize));
         float noteW = note.Length == 0 ? 0f : _widgets.Measure(note, Tokens.TipNoteSize);
-        float w = MathF.Max(titleW, noteW) + Tokens.TipPadX * 2f;
+        // 完整路径可能很长：卡最宽只到屏幕内（多出来的由 DrawTip 用省略号收口）。
+        float maxW = MathF.Max(120f, _screen.MaxX - _screen.MinX - 8f);
+        float w = MathF.Min(MathF.Max(titleW, noteW) + Tokens.TipPadX * 2f, maxW);
         float h = note.Length == 0
             ? Tokens.TipTitleSize + Tokens.TipPadY * 2f + 4f
             : Tokens.TipTitleSize + 2f + Tokens.TipNoteSize + Tokens.TipPadY * 2f + 4f;
@@ -1644,10 +1658,21 @@ public sealed partial class FullUi
         if (x0 < lo) { x1 += lo - x0; x0 = lo; }
         if (x1 > hi) { x0 -= x1 - hi; x1 = hi; }
 
-        var panel = PanelRect();
         float gap = Tokens.TipGap + (1f - _tipFade.Value) * 3f;    // 淡入时上浮 3px
-        float top = panel.MinY - gap - h;
-        if (top < _screen.MinY + 4f) top = panel.MaxY + gap;
+        float top;
+        if (_tipTarget >= 1000)
+        {
+            // 「更多」面板里的行（最近文档）：贴着**那一行**，不是贴着工具条。
+            top = anchor.MinY - gap - h;
+            if (top < _screen.MinY + 4f) top = anchor.MaxY + gap;
+        }
+        else
+        {
+            var panel = PanelRect();
+            top = panel.MinY - gap - h;
+            if (top < _screen.MinY + 4f) top = panel.MaxY + gap;
+        }
+        if (top + h > _screen.MaxY - 4f) top = MathF.Max(_screen.MinY + 4f, _screen.MaxY - 4f - h);
         return new RectF { MinX = x0, MinY = top, MaxX = x1, MaxY = top + h };
     }
 
@@ -1663,22 +1688,25 @@ public sealed partial class FullUi
         bool layered = BeginFade(ctx, _tipFade.Value);
         DrawCard(ctx, box, 8f);
 
+        float innerW = box.MaxX - box.MinX - Tokens.TipPadX * 2f;
         var line1 = new RectF
         {
             MinX = box.MinX + Tokens.TipPadX, MinY = box.MinY + Tokens.TipPadY,
             MaxX = box.MaxX - Tokens.TipPadX, MaxY = box.MinY + Tokens.TipPadY + Tokens.TipTitleSize + 2f,
         };
-        _widgets.Text(ctx, title, line1, Tokens.TipTitleSize, Brush(ctx, InkCol), center: false);
+        float keyW = key.Length == 0 ? 0f : 12f + _widgets.Measure(Loc.Tr(key), Tokens.TipTitleSize);
+        string titleShown = Ellipsize(Loc.Tr(title), MathF.Max(24f, innerW - keyW), Tokens.TipTitleSize);
+        _widgets.Text(ctx, titleShown, line1, Tokens.TipTitleSize, Brush(ctx, InkCol), center: false);
         if (key.Length != 0)
         {
-            float titleOnly = _widgets.Measure(title, Tokens.TipTitleSize);
+            float titleOnly = _widgets.Measure(titleShown, Tokens.TipTitleSize);
             _widgets.Text(ctx, key,
                           new RectF { MinX = line1.MinX + titleOnly + 12f, MinY = line1.MinY,
                                       MaxX = line1.MaxX, MaxY = line1.MaxY },
                           Tokens.TipTitleSize, Brush(ctx, MutedCol), center: false);
         }
         if (note.Length != 0)
-            _widgets.Text(ctx, note,
+            _widgets.Text(ctx, Ellipsize(Loc.Tr(note), innerW, Tokens.TipNoteSize),
                           new RectF { MinX = line1.MinX, MinY = line1.MaxY,
                                       MaxX = line1.MaxX, MaxY = box.MaxY - Tokens.TipPadY },
                           Tokens.TipNoteSize, Brush(ctx, MutedCol), center: false);

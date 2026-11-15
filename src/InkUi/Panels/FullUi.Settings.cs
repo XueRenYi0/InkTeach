@@ -2349,6 +2349,12 @@ public sealed partial class FullUi
     private const float MoreCloseSize = 44f;
     private const float MoreProfileGap = 8f;
     private const float MoreChipTopGap = 10f;
+
+    // 「最近文档」：贴在墨迹组下面的一小条（2026-11-15）。
+    // 行高 34、行距 4 → 3 行正好 110；**标题借用 `MoreGroupGap` 那条缝**，不另占高度。
+    private const float MoreRecentRowH = 34f;
+    private const float MoreRecentRowGap = 4f;
+    private const int MoreRecentMax = 3;
     /// <summary>钉住宫格有几行（按 Cells 数量算；加新格不会再把后面的组头顶穿）。</summary>
     private static int MoreChipRows
         => Math.Max(1, (Cells.Length - 1 + MoreChipCols - 1) / MoreChipCols);
@@ -2365,6 +2371,7 @@ public sealed partial class FullUi
     private const int MoreHitRow = 60;        // 60+Rows 下标（设置子页的行）
     private const int MoreHitTile = 140;      // 140+启动器格子（0..5：计时/点名/分组 保存/打开/回放）
     private const int MoreHitBottom = 200;    // 200+底栏（0..4：设置/日志/检查更新/重启/退出）
+    private const int MoreHitRecent = 210;    // 210..212「最近文档」三行（避开 200..204 与 300+）
     private const int MoreHitLogNote = 300;   // 「日志与反馈」：问题输入框
     private const int MoreHitLogUpload = 301; // 上传日志
     private const int MoreHitLogExport = 302; // 只导出 zip
@@ -2622,12 +2629,17 @@ public sealed partial class FullUi
         };
     }
 
-    /// <summary>启动器高：两组（课堂/墨迹）各若干行 tile ＋ 状态行 ＋ 底栏一行。
+    /// <summary>启动器高：两组（课堂/墨迹）各若干行 tile ＋ 「最近文档」＋ 状态行 ＋ 底栏一行。
     /// ⚠ 每组的行数要用 <see cref="HubRows"/>（宽度决定）真实算——旧式子按
     /// `(头高+格高+组距)` 估的、漏了每行的**格距**（MoreTileGap），面板比内容矮
     /// 2×格距，底行正好贴死在面板底边（2026-10-09 用户报"最下面一行贴着底边、
-    /// 下边框被切"，出图量出下边距=0）。</summary>
-    private float MoreHomeH()
+    /// 下边框被切"，出图量出下边距=0）。
+    ///
+    /// 2026-11-15：「最近文档」按**真显示几行**加高（0 条 = 完全不变；3 条 = +110）。</summary>
+    private float MoreHomeH() => MoreHomeFixedH() + RecentDocsBlockH() + RecentDocsBottomGap;
+
+    /// <summary>启动器的固定部分（不含「最近文档」）：0 条最近文档时面板就是它。</summary>
+    private float MoreHomeFixedH()
         => MorePad * 2 + MoreHeaderH + 8
            + MoreGroupHeadH + HubRows(0) * (MoreTile + MoreTileGap) + MoreGroupGap
            + MoreGroupHeadH + HubRows(1) * (MoreTile + MoreTileGap) + MoreGroupGap

@@ -486,6 +486,17 @@ internal sealed partial class App
         Check("标题 = 文件名", DocView.Title == "long.png", DocView.Title);
         Check("状态行报页数", InkStatus.Contains($"{expectPages} 页"), InkStatus);
 
+        // 「最近文档」（2026-11-15）：打开成功 → 写进 ui 偏好（界面「更多」读它）。
+        // 判据用"第一条就是刚打开的那份"，不写死绝对条数（别的用例也可能开过文档）。
+        {
+            var rec = RecentDocs.Parse(GetUiPref(RecentDocs.PrefKey));
+            bool recTop = rec.Count >= 1 && rec[0].Paths.Length == 1
+                       && string.Equals(System.IO.Path.GetFullPath(rec[0].PrimaryPath),
+                                        System.IO.Path.GetFullPath(pLong), StringComparison.OrdinalIgnoreCase);
+            Check("打开成功后记进「最近文档」并排第一", recTop,
+                  rec.Count == 0 ? "(空)" : rec[0].PrimaryPath);
+        }
+
         SettleFrames(300);
         Check("推进视口后页位图真的生成了", DocView.ResidentPages >= 1, $"驻留={DocView.ResidentPages}");
         Check("页位图记进了 ImageData 账", ImageData.LiveImages > imgBefore,
@@ -506,6 +517,29 @@ internal sealed partial class App
 
         var errC = OpenDocuments(new[] { System.IO.Path.Combine(dir, "no-such-file.png") });
         Check("全读不了 ⇒ 一句提示、状态不动", errC != null && DocView.Count == 1, errC ?? "(没报错)");
+
+        // 「最近文档」的一条**已经没有文件了**：只回一句提示，不动当前文档、不抛。
+        {
+            int before = DocView.Count;
+            string gone = System.IO.Path.Combine(dir, "已删除的课件.png");
+            bool okGone = OpenRecentDocumentFromUi(new[] { gone });
+            Check("最近文档：文件没了 = false + 提示，不动当前文档",
+                  !okGone && DocView.Count == before && InkStatus.Contains("文件已经不在了"),
+                  $"ok={okGone} Count={DocView.Count} 状态={InkStatus}");
+        }
+
+        // 「最近文档」点一行 = 不弹对话框直接重开；打开过的那份会被提到最前。
+        {
+            var recBefore = RecentDocs.Parse(GetUiPref(RecentDocs.PrefKey));
+            bool ok = OpenRecentDocumentFromUi(new[] { pFlag });
+            var recAfter = RecentDocs.Parse(GetUiPref(RecentDocs.PrefKey));
+            Check("最近文档：按路径直接重开（无对话框）",
+                  ok && DocView.Title == "flag.png", $"ok={ok} 标题={DocView.Title}");
+            Check("最近文档：重开把这一份提到最前",
+                  recAfter.Count >= recBefore.Count
+                  && recAfter[0].PrimaryPath.EndsWith("flag.png", StringComparison.OrdinalIgnoreCase),
+                  recAfter.Count == 0 ? "(空)" : recAfter[0].PrimaryPath);
+        }
 
         var errD = OpenDocuments(new[] { "a.pdf", pFlag });
         Check("图片和 PDF 混选 ⇒ 提示重选", errD != null, errD ?? "(没报错)");
@@ -532,6 +566,16 @@ internal sealed partial class App
         SettleFrames(300);
         Check("多选图片：页位图能上屏（至少一页驻留）", DocView.ResidentPages >= 1,
               $"驻留={DocView.ResidentPages}");
+
+        // 多选图片 = 「最近文档」里的**一份**：同一组文件（选择顺序不同）只留一条。
+        {
+            OpenDocuments(new[] { pLong, pFlag });     // 反着再开一次
+            var rec = RecentDocs.Parse(GetUiPref(RecentDocs.PrefKey));
+            int groups = rec.Count(e => e.Paths.Length >= 2);
+            Check("最近文档：多选图片算一份、同组不重复",
+                  groups == 1 && rec.Count > 0 && rec[0].Paths.Length == 2,
+                  $"两条以上的条目 = {groups}；首条 {rec.Count} / {(rec.Count > 0 ? rec[0].Paths.Length : 0)} 个文件");
+        }
 
         // 穿透里打开文档：自动退穿透 + 切回「笔」（2026-10-16 用户提议"这样才知道打开了"）
         {

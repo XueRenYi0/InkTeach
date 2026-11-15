@@ -2356,6 +2356,148 @@ internal sealed partial class App
             }
             Check("启动器：底栏每一格都进命中表（含第 5 格「退出」）", hitOk, hitDetail);
 
+            // ---- 「最近文档」：0 / 1 / 3 / 5+ 四种状态、命中、跳过缺失、点一行打开 ----
+            // 判据只用"数得出来的东西"：显示行数、面板增高量、命中码、状态位。
+            {
+                string rdir = Path.Combine(Path.GetTempPath(), "inkprobe_recent");
+                static string TinyPng(string p)
+                {
+                    try
+                    {
+                        var d = Path.GetDirectoryName(p);
+                        if (!string.IsNullOrEmpty(d)) Directory.CreateDirectory(d);
+                        // 1×1 PNG：不需要 GDI+ 写盘，打开时 GDI+ 能读就行。
+                        File.WriteAllBytes(p, Convert.FromBase64String(
+                            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="));
+                        return p;
+                    }
+                    catch { return p; }
+                }
+                string[] rp =
+                {
+                    TinyPng(Path.Combine(rdir, "二次函数与图像 第 3 课时 课堂练习（学生版）.png")),
+                    TinyPng(Path.Combine(rdir, "期中试卷讲解.png")),
+                    TinyPng(Path.Combine(rdir, "板书拍照.png")),
+                    TinyPng(Path.Combine(rdir, "第四课.png")),
+                    TinyPng(Path.Combine(rdir, "作业讲评.png")),
+                };
+                string rGone = Path.Combine(rdir, "已删除的课件.png");
+                if (File.Exists(rGone)) File.Delete(rGone);
+
+                ui.SeedRecentDocsForTest();
+                SettleFrames(260);
+                float h0 = ui.MoreHomeHForTest;
+                Check("最近文档：0 条时整条不出现（面板高度不变）",
+                      ui.RecentDocsShownForTest == 0,
+                      $"显示 {ui.RecentDocsShownForTest} 行，面板高 {h0:F0}");
+
+                ui.SeedRecentDocsForTest(rp[0]);
+                SettleFrames(260);
+                float h1 = ui.MoreHomeHForTest;
+                var rrow0 = ui.RecentRowRectForTest(0);
+                var rbot0 = ui.HubBottomRectForTest(0);
+                var rpanel = ui.MoreRectForTest;
+                int rhit0 = ui.MoreHitAtForTest((rrow0.MinX + rrow0.MaxX) * 0.5f,
+                                                (rrow0.MinY + rrow0.MaxY) * 0.5f);
+                Check("最近文档：1 条 = 一行、面板只高 38",
+                      ui.RecentDocsShownForTest == 1 && MathF.Abs((h1 - h0) - 38f) < 1.5f,
+                      $"显示 {ui.RecentDocsShownForTest} 行，高 {h0:F0} → {h1:F0}");
+                Check("最近文档：那一行在墨迹组和底栏之间、命中码 210",
+                      rhit0 == ui.MoreHitRecentBaseForTest
+                      && rrow0.MinY < rbot0.MinY && rrow0.MaxY <= rbot0.MinY,
+                      $"命中 {rhit0}（应 {ui.MoreHitRecentBaseForTest}）；行 {rrow0.MinY:F0}-{rrow0.MaxY:F0}，底栏顶 {rbot0.MinY:F0}");
+                Check("最近文档：行在面板矩形内（不被切）",
+                      rrow0.MinX >= rpanel.MinX && rrow0.MaxX <= rpanel.MaxX
+                      && rrow0.MinY >= rpanel.MinY && rrow0.MaxY <= rpanel.MaxY,
+                      $"行 {rrow0}，面板 {rpanel}");
+
+                ui.SeedRecentDocsForTest(rp[0], rp[1], rp[2]);
+                SettleFrames(260);
+                float h3 = ui.MoreHomeHForTest;
+                bool rHits = true;
+                string rHitDetail = "3/3";
+                bool rInside = true;
+                for (int i = 0; i < 3; i++)
+                {
+                    var r = ui.RecentRowRectForTest(i);
+                    int c = ui.MoreHitAtForTest((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
+                    if (c != ui.MoreHitRecentBaseForTest + i)
+                    {
+                        rHits = false;
+                        rHitDetail = $"第 {i} 行命中 {c}（应 {ui.MoreHitRecentBaseForTest + i}）";
+                    }
+                    if (r.MinX < rpanel.MinX || r.MaxX > rpanel.MaxX
+                        || r.MinY < rpanel.MinY || r.MaxY > rpanel.MaxY) rInside = false;
+                    if (r.MaxY > ui.HubBottomRectForTest(0).MinY) rInside = false;
+                }
+                Check("最近文档：3 条 = 三行、面板只高 114",
+                      ui.RecentDocsShownForTest == 3 && MathF.Abs((h3 - h0) - 114f) < 1.5f,
+                      $"显示 {ui.RecentDocsShownForTest} 行，高 {h0:F0} → {h3:F0}");
+                Check("最近文档：三行命中码 210..212、全在面板内且不压底栏",
+                      rHits && rInside, rHitDetail);
+
+                ui.SeedRecentDocsForTest(rp[0], rp[1], rp[2], rp[3], rp[4]);
+                SettleFrames(260);
+                Check("最近文档：多于 3 条只显示最新 3 条（没有内部滚动）",
+                      ui.RecentDocsShownForTest == 3
+                      && MathF.Abs(ui.MoreHomeHForTest - h3) < 1.5f,
+                      $"显示 {ui.RecentDocsShownForTest} 行，高 {ui.MoreHomeHForTest:F0}");
+
+                // 长中文文件名：只截成一行 + 省略号（不溢出、不换行）
+                {
+                    string longName = new string('长', 60) + ".pdf";
+                    string fitted = ui.EllipsizeForTest(longName, 120f, 12.5f);
+                    Check("最近文档：长中文文件名截成一行 + 省略号",
+                          fitted.EndsWith("…", StringComparison.Ordinal)
+                          && fitted.Length < longName.Length,
+                          $"截后 {fitted.Length} 字：{fitted}");
+                    var rtip = ui.TipContentForTest(1000 + ui.MoreHitRecentBaseForTest);
+                    Check("最近文档：提示里给全名 + 完整路径",
+                          rtip.Title != null && rtip.Note.Contains("inkprobe_recent", StringComparison.OrdinalIgnoreCase),
+                          $"标题={rtip.Title}，说明={rtip.Note}");
+                }
+
+                ui.SeedRecentDocsForTest(rp[0], rGone);
+                SettleFrames(260);
+                Check("最近文档：文件已经不在的那条直接跳过",
+                      ui.RecentDocsShownForTest == 1,
+                      $"显示 {ui.RecentDocsShownForTest} 行");
+
+                ui.SeedRecentDocsForTest(rGone);
+                SettleFrames(260);
+                Check("最近文档：只剩缺失文件 = 整条不出现",
+                      ui.RecentDocsShownForTest == 0,
+                      $"显示 {ui.RecentDocsShownForTest} 行");
+
+                // 点第二行（rp[0]）→ 关面板、真的打开、并提到最前
+                ui.SeedRecentDocsForTest(rp[1], rp[0]);
+                SettleFrames(280);
+                var rclick = ui.RecentRowRectForTest(1);
+                ClickPhysical((rclick.MinX + rclick.MaxX) * 0.5f * DpiScale,
+                              (rclick.MinY + rclick.MaxY) * 0.5f * DpiScale);
+                SettleFrames(450);
+                var rrec = RecentDocs.Parse(Host.GetPref(RecentDocs.PrefKey));
+                Check("最近文档：点一行 = 关面板并打开这份文档",
+                      !ui.MoreOpenForTest && Host.State.DocOpen,
+                      $"面板={ui.MoreOpenForTest} 文档={Host.State.DocOpen} 标题={DocView.Title}");
+                Check("最近文档：重开的那份被提到最前",
+                      rrec.Count >= 1
+                      && string.Equals(System.IO.Path.GetFullPath(rrec[0].PrimaryPath),
+                                       System.IO.Path.GetFullPath(rp[0]), StringComparison.OrdinalIgnoreCase),
+                      rrec.Count == 0 ? "(空)" : rrec[0].PrimaryPath);
+
+                Host.Commands.CloseDocument();
+                SettleFrames(200);
+                ui.SeedRecentDocsForTest();          // 清掉测试数据，后面的用例不受影响
+                var moreAgain = ui.CellRectForTest(14);
+                ClickPhysical((moreAgain.MinX + moreAgain.MaxX) * 0.5f * DpiScale,
+                              (moreAgain.MinY + moreAgain.MaxY) * 0.5f * DpiScale);
+                SettleFrames(300);
+                Check("最近文档：关文档后「更多」还能正常打开",
+                      ui.MoreOpenForTest && ui.MorePageForTest == 0,
+                      $"面板={ui.MoreOpenForTest} 页={ui.MorePageForTest}");
+            }
+
             // 「日志」格（2026-11-02）：先打开「日志与反馈」页，让用户可选填问题；
             // 空着也能上传。自检档不实际上传，只检查页面和几何。
             var logTile = ui.HubBottomRectForTest(1);

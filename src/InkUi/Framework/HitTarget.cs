@@ -15,6 +15,7 @@ public enum HitKind
     HelpTab,
     HubTile,
     BottomTile,
+    RecentDoc,
     LogButton,
     ToolCell,
     BandSegment,

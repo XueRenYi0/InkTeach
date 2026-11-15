@@ -279,6 +279,39 @@ internal sealed partial class App
                     Console.WriteLine($"  [panelshow] uisize={uiArg}");
                 }
             }
+            // --recent N：往「最近文档」里塞 N 条假记录（出图 / 验收用）。
+            // 文件真的建在临时目录——面板会跳过"文件已经不在了"的条目，不建就什么都看不见。
+            // 产品里没有这个入口（和 --picker 的 seed 同一类）。
+            {
+                var argvR = Environment.GetCommandLineArgs();
+                int rci = Array.IndexOf(argvR, "--recent");
+                if (rci >= 0 && rci + 1 < argvR.Length && int.TryParse(argvR[rci + 1], out int recentN))
+                {
+                    string dir = Path.Combine(Path.GetTempPath(), "InkTeach-recent-demo");
+                    Directory.CreateDirectory(dir);
+                    var demo = new (string Name, string Ext)[]
+                    {
+                        ("二次函数与图像 第 3 课时 课堂练习（学生版）.pdf", "pdf"),
+                        ("期中试卷讲解.pptx", "pptx"),
+                        ("板书拍照 2026-11-12.png", "png"),
+                        ("第四课 光的折射.pdf", "pdf"),
+                        ("作业讲评.jpg", "jpg"),
+                    };
+                    int take = Math.Clamp(recentN, 0, demo.Length);
+                    var seeded = new string[take];
+                    for (int i = 0; i < take; i++)
+                    {
+                        seeded[i] = Path.Combine(dir, demo[i].Name);
+                        try
+                        {
+                            if (!File.Exists(seeded[i])) File.WriteAllBytes(seeded[i], Array.Empty<byte>());
+                        }
+                        catch { /* 出图用途：建不出来就少一条，不影响其它 */ }
+                    }
+                    ui.SeedRecentDocsForTest(seeded);
+                    Console.WriteLine($"  [panelshow] recent={take}");
+                }
+            }
             // --more [--page N]：出**中央「更多」面板**（0 课堂 / 1 墨迹 / 2 设置）。
             // 面板打开时 QueryBounds 是整块屏幕，截图范围在下面单独裁（见 shot 那一段）。
             if (_panelShowMore)

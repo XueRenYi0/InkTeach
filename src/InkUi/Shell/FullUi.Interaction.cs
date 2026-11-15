@@ -94,10 +94,31 @@ public sealed partial class FullUi
         MaxX = MoreLeftX() + MoreContentW(), MinY = HubBottomRect(0).MinY - 8f - MoreStatusH,
     };
 
+    /// <summary>「最近文档」实际显示几条：最多 3 条；**矮屏放不下就少显示几行**，
+    /// 宁可不显示也不让底栏被面板切掉（0 条 = 整条不出现）。
+    ///
+    /// 放这里（不是 Pages.cs）：它读 `_work`，而 ADR-005 要求这个字段的引用面收住
+    ///（state-map 会报"新字段被 >5 个文件引用"）。绘制、命中、高度都读这一份判据。</summary>
+    private int RecentDocsShown
+    {
+        get
+        {
+            int want = Math.Min(RecentDocsVisible().Count, MoreRecentMax);
+            if (want <= 0) return 0;
+            // 与 PageHost.MaxHeightMargin 同源：面板最高 = 工作高 - 24。
+            float avail = (_work.MaxY - _work.MinY) - 24f - MoreHomeFixedH();
+            if (avail < MoreRecentRowH) return 0;
+            int fit = (int)MathF.Floor((avail + MoreRecentRowGap) / (MoreRecentRowH + MoreRecentRowGap));
+            return Math.Clamp(fit, 0, want);
+        }
+    }
+
     private RectF HubBottomRect(int i)
     {
         var head = HubHeadRect(1);
-        float y = head.MaxY + HubRows(1) * (MoreTile + MoreTileGap) + MoreGroupGap + MoreStatusH + 8f;
+        // 墨迹组 → 「最近文档」（标题借组距那条缝；0 条时高度 0）→ 状态行 → 底栏。
+        float y = head.MaxY + HubRows(1) * (MoreTile + MoreTileGap)
+                  + MoreGroupGap + RecentDocsBlockH() + RecentDocsBottomGap + MoreStatusH + 8f;
         // **五格也要放得下**（2026-10-17 加「日志」）：窄面板上按内容宽均分，不超出。
         float tw = MathF.Min(MoreTile,
             (MoreContentW() - (MoreBottomTiles.Length - 1) * MoreTileGap) / MoreBottomTiles.Length);
@@ -389,6 +410,12 @@ public sealed partial class FullUi
         {
             int code = hit - MoreHitTile;
             return new HitTarget(HitKind.HubTile, HubActionId(code), code);
+        }
+
+        if (hit >= MoreHitRecent && hit < MoreHitRecent + MoreRecentMax)
+        {
+            int i = hit - MoreHitRecent;
+            return new HitTarget(HitKind.RecentDoc, $"more.recent.doc{i}", i);
         }
 
         if (hit >= MoreHitBottom && hit < MoreHitBottom + MoreBottomTiles.Length)
@@ -1398,6 +1425,8 @@ public sealed partial class FullUi
             { _morePress = hit; pressRow = true; }
             if (hit >= MoreHitTile && hit <= MoreHitTile + HubTileTotal - 1)
             { _morePress = hit; pressRow = true; }
+            if (hit >= MoreHitRecent && hit <= MoreHitRecent + MoreRecentMax - 1)
+            { _morePress = hit; pressRow = true; }
             if (hit >= MoreHitBottom && hit <= MoreHitBottom + MoreBottomTiles.Length - 1)
             { _morePress = hit; pressRow = true; }
             if (pressRow)
@@ -1854,6 +1883,8 @@ public sealed partial class FullUi
                 ActivateRow(pressed - MoreHitRow);
             else if (pressed >= MoreHitTile && pressed <= MoreHitTile + HubTileTotal - 1 && hit == pressed)
                 ActivateHub(pressed - MoreHitTile);
+            else if (pressed >= MoreHitRecent && pressed <= MoreHitRecent + MoreRecentMax - 1 && hit == pressed)
+                ActivateRecent(pressed - MoreHitRecent);
             else if (pressed >= MoreHitBottom && pressed <= MoreHitBottom + MoreBottomTiles.Length - 1 && hit == pressed)
                 ActivateBottom(pressed - MoreHitBottom);
             Invalidate();

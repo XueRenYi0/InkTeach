@@ -763,6 +763,12 @@ public interface IEngineCommands
     void OpenBoardAny();
 
     /// <summary>
+    /// 「更多 → 最近文档」点某一行：按上次那批完整路径**直接重开**（不弹对话框）。
+    /// 文件没了就跳过；全没了只回一句提示。返回 true = 已经发起打开。
+    /// </summary>
+    bool OpenRecentDocument(string[] paths);
+
+    /// <summary>
     /// **关闭文档**：页位图 / 解码缓存 / PDF 文档全放（**批注留在画布上**，不跟着走）。
     /// 当前没有文档时只回一句提示。
     /// </summary>
