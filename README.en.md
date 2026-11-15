@@ -15,11 +15,11 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 
-> **Latest 9.9.0 (2026-11-15)**: anonymous device stats are now **on by default with no modal** —
+> **Latest 9.9.1 (2026-11-15)**: anonymous device stats are now **on by default with no modal** —
 > country/region only, **no IP, province or city**, and a single 6-second non-blocking notice.
 > Off by default in the EU / UK / Switzerland; turn it off under **Settings → About**, which also
-> deletes this device's card. Log upload stays a separate consent. The app and installer still
-> support 10 languages.
+> deletes this device's card. Log upload stays a separate consent. 9.9.1 fixes the update badge
+> landing on the redo cell in the expanded toolbar.
 >
 > *This English README is a summary. The Chinese [README.md](README.md) is the authoritative, most
 > current version.*

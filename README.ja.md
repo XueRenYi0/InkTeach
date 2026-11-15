@@ -4,7 +4,7 @@
 
 **InkTeach は、PPT / WPS / PDF / 画像 / 任意のアプリの上に直接書き込める Windows 用の透明アノテーション層です。** 下のファイルは変更されません。ペン、蛍光ペン、レーザーポインター、スクリーンショット、静止して図形化、数学図形カード 41 枚、オブジェクト吸着、お気に入り、タイマー、ランダム点名に対応。**UI は 10 言語**です。
 
-## ダウンロード（9.9.0）
+## ダウンロード（9.9.1）
 
 - インストーラー：[GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest) ｜ [GitCode ミラー](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 - ポータブル zip：[GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest)

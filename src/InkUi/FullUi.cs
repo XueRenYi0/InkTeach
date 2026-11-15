@@ -7369,7 +7369,7 @@ public sealed partial class FullUi : IOverlayUi
 
         if (cellsA > 0.004f)
         {
-            int pos = PosOf(13);                 // 主条最后一格「更多」
+            int pos = PosOf(14);                 // 主条最后一格「更多」（13 是重做）
             if (pos >= 0)
             {
                 var cr = CellRect(pos);
