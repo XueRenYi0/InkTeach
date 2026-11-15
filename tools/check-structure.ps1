@@ -66,6 +66,9 @@ foreach ($f in $files) {
         if ($end -ge 0 -and ($end - $open + 1) -gt 120) { $heavy++ }
     }
     if ($heavy -gt 0) { $heavyMethods[$rel] = $heavy }
+    # 模式表文件（App.Modes.*.cs）是数据表：一个方法里放 N 个 lambda，不算逻辑方法。
+    # 见 ADR-005 D2/D6 的施工例外。
+    if ($rel -match '/App\.Modes\.') { $heavyMethods.Remove($rel) }
 
     # 5. 空 catch（按行判断；多行形式在 fix 时已补成同行注释）
     for ($i = 0; $i -lt $lines.Length; $i++) {

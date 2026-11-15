@@ -346,7 +346,8 @@ AOT 产物实测（不是 JIT）：
 
 ## ADR-005 AI 修改成本：状态爆炸半径与追加式修改的收口（2026-11-15，提案）
 
-> **状态：提案，未执行。** 待用户批准后按 P0 → P1 → P2 施工。
+> **状态：P0 + P1 已执行（2026-11-15）。** P0 = 护栏（check-all / state-map / 告警与空 catch 清零）；
+> P1 = 自检分发改注册表（`App.Modes.*.cs`）。P2 仍按需，不排期。
 > 本 ADR 只增补 ADR-002/003/004，不推翻任何一条；冲突处已在「与既有 ADR 的关系」写明。
 
 ### 背景（2026-11-15 实测）
@@ -429,8 +430,12 @@ partial 冻结，不主动重写。
 
 **D6. partial 预算裁决。**
 ADR-002 写"单类 partial ≤20"，`Engine` 已 24 个。本 ADR 明确：
-存量 `Engine` 24 个冻结为既成事实；**新增 partial 文件一律禁止**（含自检）；
-新类最多 6 个 partial。自检 handler 放 `SelfTests/`，不挂到 `App` partial 上。
+存量 `Engine` 24 个冻结为既成事实；新增 partial 文件原则上禁止（含自检）。
+**施工例外（P1 实测）：** 自检 handler 要读 `App` 的私有状态（`_benchPressure` / `_autoExitAt` 等），
+只能挂 `App` partial，不能放 `SelfTests/` 的静态类。P1 新增 6 个模式表文件
+（`App.Modes.{Dev,Doc,Ink,Shape,Sys,Ui}.cs`）+ 1 个总表 `App.Modes.Catalog.cs`，
+`App` 族 21 → 28，**冻结于此**；其余族（Model 8 / FullUi 8 / Overlay 13 / Engine 24）不动。
+模式表文件里的"一个方法装 N 个 lambda"是数据表，不按逻辑方法计入方法长度基线。
 
 ### 与既有 ADR 的关系
 
@@ -491,3 +496,19 @@ ADR-002 写"单类 partial ≤20"，`Engine` 已 24 个。本 ADR 明确：
 - **state-map 正则误判**（字段名出现在字符串/注释里）：只输出 ≥2 文件引用项，人工抽检 10 条；
   误报不影响构建，只影响阅读。
 - **拆类诱惑**：D4 的触发条件必须写进 `dev-standard.md`，否则下个会话又会以"文件太大"为由开拆。
+
+### 执行结果（2026-11-15）
+
+| 项 | 结果 |
+| --- | --- |
+| P0 告警 | 12 条 → **0 条**；`tools/check-warnings.ps1` 基线为空，新增即 fail |
+| P0 空 catch | 188 处补了同行原因（多行形式不增行号），未注释数 **0** |
+| P0 state-map | `docs/state-map.md` 93 行 / 73 个跨文件字段；Engine 272 个字段入表 |
+| P0 门禁 | `tools/check-all.ps1`：build + tree/section/module/headers + structure，**13–15 秒**，全绿 |
+| P1 分发 | 191 个 `if (mode == ...)` → 6 个域表 + 1 个总表；`App.cs` 2,277 → **315 行** |
+| P1 保真 | 191 个分支体与改造前**逐字节一致**（归一化空白后 0 diff）；新增 `--list-modes` |
+| P1 帮助 | `--help` 的模式表由注册表生成（192 条 + 22 个开关），不再手写 |
+| P1 自检 | `--unittest` 5/5、`--keytest` PASS、`--startupcheck` 5/5、`--selftest 2` 正常退出 |
+| 回滚 | P0 一个 commit；P1 一个 commit；均可单独 `git revert` |
+
+未做：P2（新功能组合化、state-map 触发的 seam、纯逻辑补 L1）。触发条件未满足前不动存量。

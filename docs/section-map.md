@@ -975,15 +975,11 @@
 | 1710 | 两笔 → 双曲线：语料与辅助量（2026-09-26 三轮实测用的） |
 | 1992 | 小工具 |
 
-## src/InkTeach/Host/App.cs（2,277 行）
+## src/InkTeach/Host/App.Modes.Ink.cs（614 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
-| 20 | `internal sealed partial class App : InkEngine.InkEngine` |
-
-| 行 | 段落 |
-| --- | --- |
-| 39 | Host hooks: everything here is a development tool, not engine code. |
+| 15 | `internal sealed partial class App` |
 
 ## src/InkTeach/SelfTests/E2E/AppClassroomTests.cs（629 行）
 

@@ -22,6 +22,7 @@
 
 | 需求 / 功能 | 首读 | 下一跳 | 测试 |
 | --- | --- | --- | --- |
+| 新增/修改自检模式 | `InkTeach/Host/App.Modes.<域>.cs`（Dev/Doc/Ink/Shape/Sys/Ui） | `App.Modes.Catalog.cs`（总表）· `--list-modes` | 该模式自身 |
 | 操作条颜色/粗细/线型 | `InkEngine/Core/Engine.SelectionBar.cs` | 外观 `InkEngine/Rendering/Overlay.SelectionBar.cs` | `--seltest` |
 | 操作条按钮动作 | `InkEngine/Core/Engine.SelectionBar.Actions.cs` | `Engine.SelectionBar.cs` | `--seltest` |
 | 框选/套索/拖动/对齐 | `InkEngine/Core/Engine.Selection.Gesture.cs` | `InkEngine/Core/Selection.cs` | `--seltest` / `--lassotest` |

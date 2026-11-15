@@ -220,12 +220,19 @@
       - `UiProbe.cs` 120 行
 
     **InkTeach/Host/**
-      - `App.cs` 2,277 行 — 宿主启动、参数分发、模式路由、用法帮助。
+      - `App.cs` 344 行 — 宿主启动、参数分发、模式路由、用法帮助。
       - `App.Dev.Cursor.cs` 538 行
       - `App.Dev.Ppt.cs` 249 行
       - `App.Dev.Scroll.cs` 147 行
       - `App.Dev.ShapeShow.cs` 597 行
       - `App.Dev.Show.cs` 429 行
+      - `App.Modes.Catalog.cs` 46 行 — 自检模式注册表：总表与查找（ADR-005 D2）。
+      - `App.Modes.Dev.cs` 188 行 — 自检模式注册表：Dev 域（ADR-005 D2）。新增模式只改本文件。
+      - `App.Modes.Doc.cs` 80 行 — 自检模式注册表：Doc 域（ADR-005 D2）。新增模式只改本文件。
+      - `App.Modes.Ink.cs` 614 行 — 自检模式注册表：Ink 域（ADR-005 D2）。新增模式只改本文件。
+      - `App.Modes.Shape.cs` 244 行 — 自检模式注册表：Shape 域（ADR-005 D2）。新增模式只改本文件。
+      - `App.Modes.Sys.cs` 575 行 — 自检模式注册表：Sys 域（ADR-005 D2）。新增模式只改本文件。
+      - `App.Modes.Ui.cs` 398 行 — 自检模式注册表：Ui 域（ADR-005 D2）。新增模式只改本文件。
       - `Program.cs` 545 行
 
       **InkTeach/SelfTests/E2E/**

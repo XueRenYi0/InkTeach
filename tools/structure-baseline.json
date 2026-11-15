@@ -42,7 +42,6 @@
                          "src/InkTeach/DevTools/App.Dev.AiShow.cs",
                          "src/InkTeach/DevTools/DwellProbe.cs",
                          "src/InkTeach/DevTools/RecoProbe.cs",
-                         "src/InkTeach/Host/App.cs",
                          "src/InkTeach/SelfTests/E2E/BoardAndLaser.cs",
                          "src/InkTeach/SelfTests/E2E/Diagnostics.cs",
                          "src/InkTeach/SelfTests/E2E/Documents.cs",
@@ -69,7 +68,7 @@
                          "src/InkTeach/SelfTests/E2E/SettingsAudit.cs":  1,
                          "src/InkTeach/SelfTests/E2E/ImageCardTest.cs":  1,
                          "src/InkUi/Shell/FullUi.Interaction.cs":  5,
-                         "src/InkTeach/Host/App.cs":  2,
+                         "src/InkEngine/Text/TextBoxEditing.cs":  1,
                          "src/InkEngine/Rendering/Overlay.Capture.cs":  1,
                          "src/InkUi/Panels/FullUi.Settings.cs":  1,
                          "src/InkTeach/SelfTests/E2E/PptStorage.cs":  4,
@@ -136,7 +135,6 @@
                          "src/InkEngine/Text/HandwritingReplace.cs":  1,
                          "src/InkEngine/Shapes/Engine.Library.Input.cs":  1,
                          "src/InkTeach/SelfTests/E2E/SnapTest.cs":  1,
-                         "src/InkEngine/Text/TextBoxEditing.cs":  1,
                          "src/InkTeach/SelfTests/E2E/OverlayAudit.cs":  1,
                          "src/InkTeach/SelfTests/E2E/Backup.cs":  1,
                          "src/InkTeach/DevTools/App.Dev.PageShow.cs":  1,
@@ -146,7 +144,7 @@
                      },
     "partialCounts":  {
                           "Model":  8,
-                          "App":  21,
+                          "App":  28,
                           "Engine":  24,
                           "Overlay":  13,
                           "FullUi":  8
