@@ -16,10 +16,13 @@
 
 param(
     [string]$OutDir = 'reports/func',
-    [string]$AppRoot = 'D:\文件集中\code\批注',
+    [string]$AppRoot = '',
     [string]$Exe = '',
     [string[]]$Only = @()
 )
+
+# 默认从脚本位置推导仓库根（2026-11-15：旧机器硬编码 D:\文件集中\code\批注，换机器就跑不了）。
+if (-not $AppRoot) { $AppRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path }
 
 $ErrorActionPreference = 'Continue'
 $exe = if ($Exe) { $Exe } else { Join-Path $AppRoot 'src\InkTeach\bin\Release\net10.0-windows\InkTeach.exe' }
@@ -107,7 +110,9 @@ foreach ($c in $cases) {
     }
     $sw.Stop()
 
-    $text = (Get-Content $out -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $err -Raw -ErrorAction SilentlyContinue)
+    # 子进程重定向文件是 UTF-8（App 的 Console 输出统一 UTF-8）；按 UTF-8 读，
+    # 否则中文关键词（通过/失败）会乱码，导致整条用例被误判成 DATA。
+    $text = (Get-Content $out -Raw -Encoding UTF8 -ErrorAction SilentlyContinue) + "`n" + (Get-Content $err -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)
 
     # 判定规则：光看"失败"两个字会误判（自检里本来就写着"0 项失败"），
     # 所以必须看**数字**和独立的标记。

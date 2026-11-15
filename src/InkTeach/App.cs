@@ -10067,6 +10067,12 @@ internal static class Program
         // 从 PowerShell 跑无参数的 exe，根本走不到 → 还是乱。见 SetupConsoleOutput。
         SetupConsoleOutput();
 
+        // **L1 纯逻辑测试**（`--unittest [过滤词]`）：不建窗口、不装日志、不抢单实例。
+        // 放在 DiagLog.Install 之前是故意的：测试绝不往用户日志目录写东西；
+        // 隔离由 UnitTestRunner.ApplyIsolation 负责（临时 settings/板书/历史）。
+        if (args.Length > 0 && args[0] == "--unittest")
+            return UnitTestRunner.Run(args);
+
         // **运行日志**（2026-10-16 用户定）：接住全仓的 Console 诊断输出、落
         // `%LOCALAPPDATA%\InkTeach\Logs`（限流 + 轮转，绝不拖慢书写）。
         // ⚠ 装在这里是关键：必须在"接父进程控制台"**之后**——tee 要包住最终的 stdout，
