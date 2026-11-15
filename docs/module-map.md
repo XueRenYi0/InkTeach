@@ -4,7 +4,7 @@
 > 不整文件通读。表里没有的功能再 `grep`；查完把新入口补回本表（同一个 commit）。
 >
 > 行号不写在这里：`docs/section-map.md`（脚本自动生成）或 `grep -n "锚点"`。
-> 目录迁移进度见第 4 节；**迁移中的文件仍可能在项目根目录**，按文件名 grep 最稳。
+> 2026-11-15 已完成按功能域分目录（纯 `git mv`，namespace 不变）；目录见第 4 节。
 
 ## 1. 分层与目标目录
 
@@ -152,10 +152,10 @@ src/InkTeach/    Host/ DevTools/ SelfTests/{Unit,E2E}
 
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
-| `Input/`、`Prediction/`、`Doc/`、`Framework/` | 已存在 | 沿用，不再改路径 |
-| 其余 10 个 InkEngine 目录 | 待迁移 | 按 ADR-003 顺序，一个模块一个 `git mv` commit |
-| `InkUi/Shell|Panels|Ai|Design` | 待迁移 | 同上 |
-| `InkTeach/Host|DevTools|SelfTests/Unit` | 待迁移 | `SelfTests/E2E` 保留现有文件 |
+| `Core/`、`Rendering/`、`Shapes/`、`Text/`、`Ai/`、`Ppt/`、`Classroom/`、`Replay/`、`Export/`、`Platform/` | 已迁移 | 2026-11-15，纯 `git mv`，namespace 不变 |
+| `Input/`、`Prediction/`、`Doc/` | 已存在 | 沿用，未改路径 |
+| `InkUi/Shell|Panels|Ai|Design` | 已迁移 | 同上 |
+| `InkTeach/Host|DevTools|SelfTests/{Unit,E2E}` | 已迁移 | 同上；E2E 保留现有 53 个文件 |
 
 迁移规则：
 - **Move 与 Split 分离**：一个 commit 只搬家，不改内容；切文件下一个 commit。

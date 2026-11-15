@@ -1,8 +1,8 @@
-$repo = "C:\Users\LHL-XZX\Desktop\软件\InkTeach"
+$repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$appPath = "$repo\src\InkTeach\App.cs"
-$outDir = "$repo\src\InkTeach\SelfTests"
+$appPath = "$repo\src\InkTeach\Host\App.cs"
+$outDir = "$repo\src\InkTeach\SelfTests\E2E"
 
 $groups = [ordered]@{
   'Navigation'   = @('CameraTest','WheelTest','PageTest','CoordTest','ScrollWriteTest','ScrollFlashTest','SmoothFlashTest','PrevFlashTest')

@@ -41,7 +41,10 @@ $other = @($changed | Where-Object { $code -notcontains $_ -and $docs -notcontai
 $map = @(
     @{ P = 'src/InkEngine/Prediction'; D = '调研/优化记录/预测-DL集成方案.md；调研/调研-压感数据与墨迹预测.md' },
     @{ P = 'src/InkEngine/Input';      D = '调研/调研-压感数据与墨迹预测.md；调研/调研-输入栈与RTS可行性.md' },
-    @{ P = 'src/InkEngine/Overlay';    D = '调研/调研-系统墨迹两条路线-委托轨迹与桌面宿主.md；调研/实测-委托墨迹轨迹-2026-10-11.md' },
+    @{ P = 'src/InkEngine/Rendering';  D = '调研/调研-系统墨迹两条路线-委托轨迹与桌面宿主.md；调研/实测-委托墨迹轨迹-2026-10-11.md' },
+    @{ P = 'src/InkEngine/Shapes';     D = '调研/计划-图形工具.md；调研/优化记录/发版历史.md' },
+    @{ P = 'src/InkEngine/Text';       D = '调研/AI-图片识别成题卡-2026-11-10.md；调研/优化记录/发版历史.md' },
+    @{ P = 'src/InkEngine/Ai';         D = '调研/AI-图片识别成题卡-2026-11-10.md；调研/优化记录/发版历史.md' },
     @{ P = 'src/InkEngine';            D = '调研/延时-实测与优化.md；调研/对标-微软墨迹栈与我们的架构.md；调研/优化记录/发版历史.md' },
     @{ P = 'src/InkTeach';             D = 'README.md（使用说明 / 快捷键 / 数据目录）；调研/开发笔记.md' },
     @{ P = 'src/InkUi';                D = 'README.md（界面 / 设置页）；调研/开发笔记.md' },

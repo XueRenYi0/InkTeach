@@ -3,7 +3,7 @@
 
 用法：
     pwsh tools/gen-ui-icons.ps1                      # → tools/design-sheet/IconPaths.g.cs（默认）
-    pwsh tools/gen-ui-icons.ps1 -Out src/InkUi/Icons.g.cs -Namespace InkUi -Class PanelIcons
+    pwsh tools/gen-ui-icons.ps1 -Out src/InkUi/Design/Icons.g.cs -Namespace InkUi -Class PanelIcons
 
 和 tools/gen-fluent-icons.ps1 / gen-icons.ps1 同一套路：只从上游 SVG 里取
 path 的 d 数据，不引入任何运行时代码；下载走 jsDelivr 镜像（国内直连

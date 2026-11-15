@@ -21,7 +21,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$outFile = Join-Path $repoRoot 'src/InkEngine/Icons.Paths.cs'
+$outFile = Join-Path $repoRoot 'src/InkEngine/Rendering/Icons.Paths.cs'
 $cacheDir = Join-Path ([System.IO.Path]::GetTempPath()) 'fluent-icons'
 New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
 
