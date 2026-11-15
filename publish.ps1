@@ -16,6 +16,7 @@
 #    .\publish.ps1 -Jit            # 附带：JIT/自包含版（保稳选项；产物大、启动稍慢）
 #    .\publish.ps1 -SingleFile     # JIT 单文件版（AOT 产物本身就是单文件，会被忽略）
 #    .\publish.ps1 -NoZip          # 不压 zip
+#    .\publish.ps1 -SkipChecks     # 跳过 ADR-005 门禁（只给演练；正式发版不要加）
 #
 #  发版前置检查（2026-10-12 新规矩）：运行时自动做"代码 vs 文档对账"（tools\doc-audit.ps1），
 #  清单落 dist\doc-audit-v<ver>.md，发布前逐项核对；-StrictDocs 在"代码有改动但文档零更新"时直接停。

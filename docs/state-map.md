@@ -1,6 +1,6 @@
 # 状态地图（自动生成，勿手改）
 
-> 生成：2026-11-15 17:15 ／ 脚本：`tools/gen-state-map.ps1` ／ ADR-005 D4
+> 生成：2026-11-15 17:31 ／ 脚本：`tools/gen-state-map.ps1` ／ ADR-005 D4
 > 用法：改一个私有字段前，先在这里查它被哪些同族文件读写；只列被 >=2 个文件引用的字段。
 > 它降低定位成本，不降低验证成本；拆不拆类看 ADR-005 D4 的触发条件，不按行数。
 
@@ -29,16 +29,16 @@
 | `_autoSelCollapsed` | 5 | Engine.cs, Engine.Selection.Gesture.cs, Engine.Hotkey.cs, Engine.Library.Layout.cs, Engine.Library.Pair.cs | 6 |
 | `_capturePressHandled` | 5 | Engine.cs, Engine.Capture.cs, Engine.Input.cs, Engine.Library.Pair.cs, Engine.ShapeTools.cs | 5 |
 
-## App（21 文件 / 18 字段 / 9 个跨文件字段）
+## App（28 文件 / 19 字段 / 9 个跨文件字段）
 
 | 字段 | 引用文件 | 主要文件 | 写入点 |
 | --- | --- | --- | --- |
 | `_clickTargetHwnd` | 2 | App.Dev.ClickTarget.cs, App.cs | 3 |
 | `_selfCheckMode` | 2 | App.Dev.Showcase.cs, App.cs | 3 |
-| `_benchSpread` | 2 | App.Dev.Render.cs, App.cs | 1 |
-| `_benchPressure` | 2 | App.Dev.Render.cs, App.cs | 1 |
+| `_benchSpread` | 2 | App.Dev.Render.cs, App.Modes.Shape.cs | 1 |
+| `_benchPressure` | 2 | App.Dev.Render.cs, App.Modes.Shape.cs | 1 |
 | `_panelShowMore` | 2 | App.Dev.PageShow.cs, App.cs | 1 |
-| `_benchPts` | 2 | App.Dev.Render.cs, App.cs | 1 |
+| `_benchPts` | 2 | App.Dev.Render.cs, App.Modes.Shape.cs | 1 |
 | `_panelShowBand` | 2 | App.Dev.PageShow.cs, App.cs | 1 |
 | `_clickLogFile` | 2 | App.Dev.ClickTarget.cs, App.cs | 1 |
 | `_panelShowMini` | 2 | App.Dev.PageShow.cs, App.cs | 1 |
