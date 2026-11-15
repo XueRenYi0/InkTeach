@@ -90,7 +90,7 @@ public partial class InkEngine
         if (BoardOn)
         {
             int idx = Math.Clamp(page - 1, 0, Math.Max(0, BoardPageCount - 1));
-            float want = ClampOffset(_virtualY - idx * PageHeightCanvas);
+            float want = ClampOffset(_virtualY - idx * PageHeightCanvas * ViewScaleSafe);
             if (Math.Abs(want - ViewOffsetY) < 1f) return;
             if (!ClientAreaAnimationOn)
             {
@@ -113,7 +113,7 @@ public partial class InkEngine
         if (!PptMode && DocView.IsOpen)
         {
             int idx = Math.Clamp(page - 1, 0, Math.Max(0, DocView.Count - 1));
-            float want = ClampOffset(_virtualY - DocView.TopOf(idx));
+            float want = ClampOffset(_virtualY - DocView.TopOf(idx) * ViewScaleSafe);
             if (Math.Abs(want - ViewOffsetY) >= 1f)
             {
                 DocView.PinPage(idx);

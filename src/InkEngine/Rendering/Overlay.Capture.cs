@@ -62,9 +62,10 @@ internal sealed partial class OverlayWindow
             var bmp = EnsureFrozenBitmap(app);
             if (bmp != null)
                 _ctx.DrawBitmap(bmp,
-                    new Vortice.RawRectF(app.CaptureFrozenX, app.CaptureFrozenY - app.ViewOffsetY,
-                                         app.CaptureFrozenX + app.CaptureFrozenW,
-                                         app.CaptureFrozenY - app.ViewOffsetY + app.CaptureFrozenH),
+                    new Vortice.RawRectF(app.ScreenToCanvasX(app.CaptureFrozenX),
+                                         app.ScreenToCanvasY(app.CaptureFrozenY),
+                                         app.ScreenToCanvasX(app.CaptureFrozenX + app.CaptureFrozenW),
+                                         app.ScreenToCanvasY(app.CaptureFrozenY + app.CaptureFrozenH)),
                     1f, Vortice.Direct2D1.InterpolationMode.NearestNeighbor, null, null);
         }
 
@@ -277,9 +278,10 @@ internal sealed partial class OverlayWindow
             var bmp = EnsureFrozenBitmap(app);
             if (bmp != null)
                 _ctx.DrawBitmap(bmp,
-                    new Vortice.RawRectF(app.CaptureFrozenX, app.CaptureFrozenY - app.ViewOffsetY,
-                                         app.CaptureFrozenX + app.CaptureFrozenW,
-                                         app.CaptureFrozenY - app.ViewOffsetY + app.CaptureFrozenH),
+                    new Vortice.RawRectF(app.ScreenToCanvasX(app.CaptureFrozenX),
+                                         app.ScreenToCanvasY(app.CaptureFrozenY),
+                                         app.ScreenToCanvasX(app.CaptureFrozenX + app.CaptureFrozenW),
+                                         app.ScreenToCanvasY(app.CaptureFrozenY + app.CaptureFrozenH)),
                     1f, Vortice.Direct2D1.InterpolationMode.NearestNeighbor, null, null);
         }
 

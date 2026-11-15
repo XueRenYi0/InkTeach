@@ -280,12 +280,25 @@ internal sealed partial class OverlayWindow : IDisposable
     private static long s_frameNo;
 
     /// <summary>
-    /// 画布坐标 → 窗口坐标。**相机在这里生效**：渲染的每一处变换都要用它，
+    /// 画布坐标 → 窗口坐标。**相机在这里生效**：先缩放、再平移。渲染的每一处变换都要用它，
     /// 漏掉任何一处，那一处的东西就不会跟着滚动（典型症状：笔迹滚了、
     /// 性能面板没滚，或者反过来）。
     /// </summary>
     private Matrix3x2 CanvasToWindow =>
-        Matrix3x2.CreateTranslation(-OriginX + ViewOffsetX, -OriginY + ViewOffsetY);
+        Matrix3x2.CreateScale(ViewScaleSafe)
+        * Matrix3x2.CreateTranslation(-OriginX + ViewOffsetX, -OriginY + ViewOffsetY);
+
+    /// <summary>窗口/屏幕 X → 画布 X（<see cref="CanvasToWindow"/> 的逆）。</summary>
+    private float WindowToCanvasX(float wx) => (wx + OriginX - ViewOffsetX) / ViewScaleSafe;
+
+    /// <summary>窗口/屏幕 Y → 画布 Y（<see cref="CanvasToWindow"/> 的逆）。</summary>
+    private float WindowToCanvasY(float wy) => (wy + OriginY - ViewOffsetY) / ViewScaleSafe;
+
+    /// <summary>画布 X → 窗口/屏幕 X（<see cref="CanvasToWindow"/> 同一条式子）。</summary>
+    private float CanvasToWindowX(float cx) => cx * ViewScaleSafe + ViewOffsetX - OriginX;
+
+    /// <summary>画布 Y → 窗口/屏幕 Y（<see cref="CanvasToWindow"/> 同一条式子）。</summary>
+    private float CanvasToWindowY(float cy) => cy * ViewScaleSafe + ViewOffsetY - OriginY;
 
     /// <summary>
     /// 当前**看得见的那块画布**（画布坐标）。
@@ -299,14 +312,19 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private RectF VisibleCanvasRect => new()
     {
-        MinX = OriginX - ViewOffsetX,
-        MinY = OriginY - ViewOffsetY,
-        MaxX = OriginX - ViewOffsetX + Width,
-        MaxY = OriginY - ViewOffsetY + Height,
+        MinX = WindowToCanvasX(OriginX),
+        MinY = WindowToCanvasY(OriginY),
+        MaxX = WindowToCanvasX(OriginX + Width),
+        MaxY = WindowToCanvasY(OriginY + Height),
     };
 
-    /// <summary>相机偏移（由引擎每帧写进来；见 InkEngine.ViewOffsetY）。</summary>
+    /// <summary>相机缩放 / 偏移（由引擎每帧写进来；见 InkEngine.ViewScale / ViewOffsetY）。</summary>
     internal float ViewOffsetX, ViewOffsetY;
+
+    /// <summary>相机缩放；阶段 1 恒为 1f（渲染层先铺好，不启用）。</summary>
+    internal float ViewScale = 1f;
+
+    private float ViewScaleSafe => ViewScale > 0f ? ViewScale : 1f;
     public IntPtr Hwnd;
     public int OriginX, OriginY, Width, Height;
     public uint Dpi = 96;

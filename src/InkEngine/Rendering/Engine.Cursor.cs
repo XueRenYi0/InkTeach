@@ -155,12 +155,10 @@ public partial class InkEngine
             return true;
         var menu = SelectionMenuRectNow();
         if (!menu.IsEmpty && menu.Contains(PointerX, PointerY)) return true;
-        // 画布坐标 → 屏幕坐标只差一个垂直滚动量（ScreenToCanvas 就是 `y -= ViewOffsetY`），
-        // x 没有滚动、直接用。
-        return PptBarContains(PointerX, PointerY + ViewOffsetY)
-            || TimerCardContains(PointerX, PointerY + ViewOffsetY)
-            || RollCardContains(PointerX, PointerY + ViewOffsetY)
-            || (Tool == Tool.Marquee && TextBoxContains(PointerX, PointerY + ViewOffsetY));
+        // 画布坐标 → 屏幕坐标走相机（阶段 1 = `y + ViewOffsetY`、x 不变）。
+        float sx = CanvasToScreenX(PointerX), sy = CanvasToScreenY(PointerY);
+        return PptBarContains(sx, sy) || TimerCardContains(sx, sy) || RollCardContains(sx, sy)
+            || (Tool == Tool.Marquee && TextBoxContains(sx, sy));
     }
 
     /// <summary>
@@ -509,13 +507,14 @@ public partial class InkEngine
     internal void ClampViewOffset()
     {
         ViewOffsetY = ClampOffset(ViewOffsetY);
+        ViewOffsetX = ClampOffsetX(ViewOffsetX);
     }
 
     /// <summary>把一个相机偏移夹进合法范围（翻页要"先算目标再决定动不动"，所以抽出来）。</summary>
     private float ClampOffset(float y)
     {
         var extent = CanvasExtent;
-        float lowest = _virtualH - extent.MaxY;
+        float lowest = _virtualH / ViewScaleSafe - extent.MaxY;
         if (y > 0f) y = 0f;
         if (y < lowest) y = lowest;
         return y;
@@ -553,11 +552,11 @@ public partial class InkEngine
             // 箭头按**页顶**走，不按“当前偏移 ± 一屏”走：自由滚到半页时，
             // 上一屏先回本页页顶，再上一屏才退到上一页。
             int cur = Math.Max(1, ScreenIndex);
-            float curTop = _virtualY - (cur - 1) * PageHeightCanvas;
-            bool atTop = Math.Abs(ViewOffsetY - curTop) <= PageHeightCanvas * 0.10f;
+            float curTop = _virtualY - (cur - 1) * PageHeightCanvas * ViewScaleSafe;
+            bool atTop = Math.Abs(ViewOffsetY - curTop) <= PageHeightCanvas * ViewScaleSafe * 0.10f;
             int target = down ? cur + 1 : (atTop ? cur - 1 : cur);
             target = Math.Max(1, target);
-            want = ClampOffset(_virtualY - (target - 1) * PageHeightCanvas);
+            want = ClampOffset(_virtualY - (target - 1) * PageHeightCanvas * ViewScaleSafe);
         }
         else if (DocView.IsOpen)
         {
@@ -579,11 +578,11 @@ public partial class InkEngine
             {
                 // 往上：先回本页页顶；已经在页顶（差不到 1/10 屏）才去上一页
                 float intoPage = vp.MinY - DocView.TopOf(cur);
-                target = intoPage > _virtualH * 0.12f ? cur : cur - 1;
+                target = intoPage > PageHeightCanvas * 0.12f ? cur : cur - 1;
             }
             target = Math.Clamp(target, 0, DocView.Count - 1);
             docTarget = target;
-            want = ClampOffset(_virtualY - DocView.TopOf(target));
+            want = ClampOffset(_virtualY - DocView.TopOf(target) * ViewScaleSafe);
         }
         else
         {
@@ -640,7 +639,7 @@ public partial class InkEngine
     }
 
     /// <summary>当前在第几屏（1 起）。相机偏移除以视口高 + 1。</summary>
-    internal int ScreenIndex => (int)Math.Round(-ViewOffsetY / Math.Max(1f, _virtualH)) + 1;
+    internal int ScreenIndex => (int)Math.Round(-ViewOffsetY / Math.Max(1f, PageHeightCanvas)) + 1;
 
     /// <summary>
     /// 白板自己的页数：内容最远到第几屏，至少当前屏；空白板至少 1 页。
@@ -650,7 +649,7 @@ public partial class InkEngine
     {
         get
         {
-            float h = Math.Max(1f, _virtualH);
+            float h = Math.Max(1f, PageHeightCanvas);
             int last = 1;
             foreach (var s in Doc.Strokes)
             {
@@ -671,7 +670,7 @@ public partial class InkEngine
     /// 页界线（白板模式下画的那条淡线）按这两个值算，所以它**固定在画布上**、
     /// 不随相机动——能被烘进分块缓存，平时零成本。
     /// </summary>
-    internal float PageHeightCanvas => _virtualH;
+    internal float PageHeightCanvas => _virtualH / ViewScaleSafe;
     internal float PageTopCanvas => _virtualY;
     /// <summary>底纹的横向锚点（第一页的左边界）——和页界线共用同一个原点。</summary>
     internal float PageLeftCanvas => _virtualX;
@@ -743,7 +742,7 @@ public partial class InkEngine
         if (sb.MaxTravel <= 0.001f) return;
         float frac = Math.Clamp((thumbTop - sb.Top) / sb.MaxTravel, 0f, 1f);
         float viewTop = sb.ExtentMinY + frac * (sb.ExtentH - w.Height);
-        ViewOffsetY = w.OriginY - viewTop;
+        ViewOffsetY = w.OriginY - viewTop * (w.ViewScale > 0f ? w.ViewScale : 1f);
         ClampViewOffset();
         ScrollBarActiveAtMs = NowMs;
         _dirty = true;

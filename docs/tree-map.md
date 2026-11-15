@@ -8,7 +8,7 @@
     **InkEngine/Ai/**
       - `AiApiSettings.cs` 37 行
       - `AiApiUi.cs` 189 行
-      - `AiCard.cs` 2,760 行 — AI 题卡：题干/答案/图形/交互。
+      - `AiCard.cs` 2,761 行 — AI 题卡：题干/答案/图形/交互。
       - `AiPlotClient.cs` 343 行
       - `AiQuestionClient.cs` 509 行
       - `OcrClient.cs` 623 行 — OCR 客户端：图片 → 逐行文字（OpenAI 兼容）。
@@ -22,15 +22,15 @@
     **InkEngine/Core/**
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 156 行
-      - `Engine.cs` 2,639 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
-      - `Engine.Host.cs` 2,217 行 — 启动、消息循环、窗口过程（WndProc）。
+      - `Engine.cs` 2,686 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
+      - `Engine.Host.cs` 2,223 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
       - `Engine.Selection.Gesture.cs` 1,462 行 — 框选/套索/拖动/对齐吸附/美化入口。
       - `Engine.Selection.Vertex.cs` 1,052 行 — 图形端点编辑：起手/拖动/吸附/读数/提交。
       - `Engine.SelectionBar.Actions.cs` 180 行 — 操作条按钮动作分发（RunBarAction / RunBarButton）。
       - `Engine.SelectionBar.cs` 731 行 — 选中操作条的状态与动作：颜色/粗细/线型/锁定/层级/取色器/菜单。
-      - `InkFile.cs` 346 行
+      - `InkFile.cs` 347 行
       - `InkHistory.cs` 97 行
       - `InkSerializer.cs` 882 行 — .inkb 序列化：笔画/图像/块格式。
       - `Model.EditActions.cs` 920 行 — 撤销/重做动作（Add/Remove/Erase/Transform/SetProp 等）。
@@ -125,14 +125,14 @@
     **InkEngine/Rendering/**
       - `CanvasTiles.cs` 444 行
       - `Cursors.cs` 505 行
-      - `Engine.Cursor.cs` 800 行 — 光标形状与滚动条交互。
-      - `Engine.UiBridge.cs` 991 行 — 引擎 ↔ 界面边界：IOverlayUi 命令转发。
+      - `Engine.Cursor.cs` 799 行 — 光标形状与滚动条交互。
+      - `Engine.UiBridge.cs` 992 行 — 引擎 ↔ 界面边界：IOverlayUi 命令转发。
       - `GlyphFill.cs` 341 行
       - `Icons.Paths.cs` 142 行
       - `LegacyOverlayLayer.cs` 74 行
-      - `Overlay.Capture.cs` 787 行 — 截图取景框绘制：遮罩/准线/读数/手柄。
-      - `Overlay.Content.cs` 575 行
-      - `Overlay.cs` 1,363 行 — 覆盖层主文件：窗口/初始化/生命周期。
+      - `Overlay.Capture.cs` 789 行 — 截图取景框绘制：遮罩/准线/读数/手柄。
+      - `Overlay.Content.cs` 577 行
+      - `Overlay.cs` 1,381 行 — 覆盖层主文件：窗口/初始化/生命周期。
       - `Overlay.Frame.cs` 1,638 行 — 覆盖层帧渲染：内容/界面/装饰合成。
       - `Overlay.PptBar.cs` 705 行 — PPT 条/回放条/滚动条绘制。
       - `Overlay.Radial.cs` 657 行 — 呼出盘绘制。
@@ -292,7 +292,8 @@
         - `Touch.cs` 1,271 行 — 触摸手势 E2E。
 
       **InkTeach/SelfTests/Unit/**
-        - `UnitTestRunner.cs` 131 行
+        - `UnitTestRunner.cs` 135 行
+        - `UnitTests.Camera.cs` 65 行
         - `UnitTests.Core.cs` 92 行
 
     **InkUi/Ai/**

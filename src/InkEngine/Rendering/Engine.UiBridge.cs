@@ -763,6 +763,7 @@ public partial class InkEngine
             Doc.Clear();
             // 清完整槽后回第 1 屏；否则会停在一个已经没有内容的空屏上。
             ViewOffsetY = 0f;
+            ViewOffsetX = 0f;
             _pageScroll[InkDocument.BoardPageKey] = 0f;
             _camAnimating = false;
             _dirty = true;

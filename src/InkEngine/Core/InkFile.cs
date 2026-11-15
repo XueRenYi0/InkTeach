@@ -230,6 +230,7 @@ public partial class InkEngine
         BoardOn = true;
         Doc.Selected.Clear();
         ViewOffsetY = 0f;
+        ViewOffsetX = 0f;
         foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
         _pageScroll.Clear();
         Doc.InvalidateAll();

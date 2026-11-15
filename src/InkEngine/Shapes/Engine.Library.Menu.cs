@@ -81,12 +81,12 @@ public partial class InkEngine
         var anchor = m.Menu;                 // 画布坐标
         var uiBar = UiBarBoundsNow();
         // 屏幕边界先换成画布坐标，再和 anchor 比；不然滚动白板后菜单会跑。
-        float screenMinX = screen.MinX * dpi;
-        float screenMaxX = screen.MaxX * dpi;
-        float screenMinY = screen.MinY * dpi - ViewOffsetY;
-        float screenMaxY = screen.MaxY * dpi - ViewOffsetY;
+        float screenMinX = ScreenToCanvasX(screen.MinX * dpi);
+        float screenMaxX = ScreenToCanvasX(screen.MaxX * dpi);
+        float screenMinY = ScreenToCanvasY(screen.MinY * dpi);
+        float screenMaxY = ScreenToCanvasY(screen.MaxY * dpi);
         float bottom = uiBar.IsEmpty ? screenMaxY - 8f * dpi
-                                     : uiBar.MinY * dpi - ViewOffsetY - 8f * dpi;
+                                     : ScreenToCanvasY(uiBar.MinY * dpi) - 8f * dpi;
         float x = Math.Clamp(anchor.MinX, screenMinX + 8f * dpi,
                              MathF.Max(screenMinX + 8f * dpi, screenMaxX - 8f * dpi - w));
         float y = anchor.MaxY + 6f * dpi;

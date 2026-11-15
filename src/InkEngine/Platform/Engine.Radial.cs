@@ -199,8 +199,8 @@ public partial class InkEngine
     {
         if (!PassThrough) return;             // 正常模式有真鼠标消息，别去抢
         if (!Native.GetCursorPos(out var p)) return;
-        PointerX = p.X;
-        PointerY = p.Y - ViewOffsetY;         // 屏幕 → 画布（和 BeginCaptureMode 同一句）
+        PointerX = ScreenToCanvasX(p.X);
+        PointerY = ScreenToCanvasY(p.Y);         // 屏幕 → 画布（相机）
         PointerInside = true;
     }
 

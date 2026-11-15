@@ -49,8 +49,8 @@ public partial class InkEngine
             if (_textBoxEditStroke != null)
             {
                 var b = _textBoxEditStroke.PaddedBounds;
-                inside = screenX >= b.MinX && screenX <= b.MaxX
-                      && screenY >= b.MinY + ViewOffsetY && screenY <= b.MaxY + ViewOffsetY;
+                inside = screenX >= CanvasToScreenX(b.MinX) && screenX <= CanvasToScreenX(b.MaxX)
+                      && screenY >= CanvasToScreenY(b.MinY) && screenY <= CanvasToScreenY(b.MaxY);
             }
             if (!inside && !UiContains(screenX, screenY))
                 EndTextBoxEditFromUi(true);

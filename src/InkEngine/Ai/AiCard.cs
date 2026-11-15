@@ -1523,15 +1523,16 @@ public partial class InkEngine
         card.SetWidth(Math.Clamp(560f * u, minW, maxW));
         _ = card.EnsureLayout();
 
-        float cx = (screen.MinX + screen.MaxX) * 0.5f;
-        float cy = (screen.MinY + screen.MaxY) * 0.5f - ViewOffsetY;
+        float cx = ScreenToCanvasX((screen.MinX + screen.MaxX) * 0.5f);
+        float cy = ScreenToCanvasY((screen.MinY + screen.MaxY) * 0.5f);
         float x = cx - card.Width * 0.5f;
         float y = cy - card.LayoutHeight * 0.5f;
-        x = Math.Clamp(x, screen.MinX + 16f * u,
-            MathF.Max(screen.MinX + 16f * u, screen.MaxX - card.Width - 16f * u));
-        y = Math.Clamp(y, screen.MinY - ViewOffsetY + 16f * u,
-            MathF.Max(screen.MinY - ViewOffsetY + 16f * u,
-                       screen.MaxY - ViewOffsetY - card.LayoutHeight - 16f * u));
+        x = Math.Clamp(x, ScreenToCanvasX(screen.MinX) + 16f * u,
+            MathF.Max(ScreenToCanvasX(screen.MinX) + 16f * u,
+                      ScreenToCanvasX(screen.MaxX) - card.Width - 16f * u));
+        y = Math.Clamp(y, ScreenToCanvasY(screen.MinY) + 16f * u,
+            MathF.Max(ScreenToCanvasY(screen.MinY) + 16f * u,
+                       ScreenToCanvasY(screen.MaxY) - card.LayoutHeight - 16f * u));
 
         var s = new Stroke
         {
@@ -1741,8 +1742,8 @@ public partial class InkEngine
             new Vector2(localW, localH),
         });
         float w = localW * scale, h = localH * scale;
-        float x = screen.MinX + (screen.MaxX - screen.MinX - w) * 0.5f;
-        float y = screen.MinY + (screen.MaxY - screen.MinY - h) * 0.5f - ViewOffsetY;
+        float x = ScreenToCanvasX(screen.MinX + (screen.MaxX - screen.MinX - w) * 0.5f);
+        float y = ScreenToCanvasY(screen.MinY + (screen.MaxY - screen.MinY - h) * 0.5f);
         s.Transform = Matrix3x2.CreateScale(scale) * Matrix3x2.CreateTranslation(x, y);
         Doc.AddStroke(s);
         Doc.SelectOnly(new[] { s });
@@ -2115,10 +2116,10 @@ public partial class InkEngine
         var c = card.TextBox;
         var img = image.PaddedBounds;
         float gap = 24f * u;
-        float vpMinX = screen.MinX + 12f * u;
-        float vpMaxX = screen.MaxX - 12f * u;
-        float vpMinY = screen.MinY - ViewOffsetY + 12f * u;
-        float vpMaxY = screen.MaxY - ViewOffsetY - 12f * u;
+        float vpMinX = ScreenToCanvasX(screen.MinX) + 12f * u;
+        float vpMaxX = ScreenToCanvasX(screen.MaxX) - 12f * u;
+        float vpMinY = ScreenToCanvasY(screen.MinY) + 12f * u;
+        float vpMaxY = ScreenToCanvasY(screen.MaxY) - 12f * u;
 
         float x, y;
         if (img.MaxX + gap + c.Width <= vpMaxX)
@@ -2361,7 +2362,7 @@ public partial class InkEngine
     private Stroke TextBoxAt(float screenX, float screenY)
     {
         if (!Doc.HasTextBoxs) return null;
-        float cx = screenX, cy = screenY - ViewOffsetY;
+        float cx = ScreenToCanvasX(screenX), cy = ScreenToCanvasY(screenY);
         for (int i = Doc.Strokes.Count - 1; i >= 0; i--)
         {
             var s = Doc.Strokes[i];
@@ -2385,7 +2386,7 @@ public partial class InkEngine
         var s = TextBoxAt(screenX, screenY);
         if (s == null) return false;
 
-        float cx = screenX, cy = screenY - ViewOffsetY;
+        float cx = ScreenToCanvasX(screenX), cy = ScreenToCanvasY(screenY);
 
         // **先按 z 序问一句**：卡片是填充矩形，但它上面的墨迹/图形/另一张卡才是
         // 这一下真正点到的东西。这里如果不让位，就会出现"墨迹明明在卡上面，
@@ -2553,21 +2554,21 @@ public partial class InkEngine
         if (s.Kind != StrokeKind.TextBox || s.TextBox == null) return;
         var screen = ScreenRectPhysical();
         float u = MathF.Max(0.75f, DpiScale);
-        float top = screen.MinY - ViewOffsetY + 16f * u;
+        float top = ScreenToCanvasY(screen.MinY) + 16f * u;
         bool normal = s.TextBox.Role == TextBoxRole.Normal;
         // 通用移动手势会把平移记在 Transform 上；普通文本先并进 Points，
         // 下面按画布坐标夹取才是准的（不并的话移动过的框一夹就漂）。
         if (normal) BakeTextBoxTranslation(s);
         // 底部留出工具条那一条（120 逻辑像素）：题卡展开后不能压住工具条。
         // **普通文本框不封底**：长文本高了就高，画布自己滚（用户 2026-11-01 定）。
-        float bottom = screen.MaxY - ViewOffsetY - 120f * u;
+        float bottom = ScreenToCanvasY(screen.MaxY) - 120f * u;
         var b = s.PaddedBounds;
         float dy = 0f, dx = 0f;
         if (!normal && b.MaxY > bottom) dy = bottom - b.MaxY;
         if (b.MinY + dy < top) dy = top - b.MinY;
 
-        float left = screen.MinX + 16f * u;
-        float right = screen.MaxX - 16f * u;
+        float left = ScreenToCanvasX(screen.MinX) + 16f * u;
+        float right = ScreenToCanvasX(screen.MaxX) - 16f * u;
         // 宽度不能超过屏幕左右沿；普通文本框在输入/改宽那边已经收过一次，
         // 这里兜底处理老存档和载入的宽框。
         if (normal && s.TextBox.Width > right - left)

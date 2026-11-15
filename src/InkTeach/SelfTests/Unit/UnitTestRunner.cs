@@ -70,6 +70,10 @@ internal static class UnitTestRunner
             UnitTestsCore.Serializer_RoundTrip_PreservesCountAndColor),
         (nameof(UnitTestsCore.UiScale_Snap_To_Nearest_Tier),
             UnitTestsCore.UiScale_Snap_To_Nearest_Tier),
+        (nameof(UnitTestsCamera.Camera_Helpers_RoundTrip_At_Scale1),
+            UnitTestsCamera.Camera_Helpers_RoundTrip_At_Scale1),
+        (nameof(UnitTestsCamera.Camera_Helpers_ScaleFormula_IsSymmetric),
+            UnitTestsCamera.Camera_Helpers_ScaleFormula_IsSymmetric),
     };
 
     public static int Run(string[] args)

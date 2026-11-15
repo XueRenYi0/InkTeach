@@ -123,7 +123,7 @@ public partial class InkEngine
         var vp = ViewportCanvas;
         float m = CaptureMarginLogical * DpiScale;
         float px = Math.Clamp(x, vp.MinX + m, MathF.Max(vp.MinX + m, vp.MaxX - m - w));
-        float py = Math.Clamp(y - ViewOffsetY, vp.MinY + m, MathF.Max(vp.MinY + m, vp.MaxY - m - h));
+        float py = Math.Clamp(ScreenToCanvasY(y), vp.MinY + m, MathF.Max(vp.MinY + m, vp.MaxY - m - h));
         var placed = Doc.AddImage(img, px, py, 1f);
         if (placed != null)
         {
@@ -303,7 +303,7 @@ public partial class InkEngine
         float dy = vk == 0x26 ? -s : vk == 0x28 ? s : 0f;
         bool shift = (Native.GetAsyncKeyState(0x10 /*VK_SHIFT*/) & 0x8000) != 0;
         var vs = VirtualScreen;
-        float minYc = vs.MinY - ViewOffsetY, maxYc = vs.MaxY - ViewOffsetY;
+        float minYc = ScreenToCanvasY(vs.MinY), maxYc = ScreenToCanvasY(vs.MaxY);
         float minSz = CaptureMinSizeLogical * DpiScale;
         if (shift)
         {
@@ -328,7 +328,7 @@ public partial class InkEngine
         float dx = x - _capDragX, dy = y - _capDragY;
         float minSz = CaptureMinSizeLogical * DpiScale;
         var vs = VirtualScreen;
-        float minYc = vs.MinY - ViewOffsetY, maxYc = vs.MaxY - ViewOffsetY;
+        float minYc = ScreenToCanvasY(vs.MinY), maxYc = ScreenToCanvasY(vs.MaxY);
 
         float l = _capD0MinX, r = _capD0MaxX, t = _capD0MinY, b = _capD0MaxY;
         switch (_capDrag)

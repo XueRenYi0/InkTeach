@@ -1252,8 +1252,8 @@ public partial class InkEngine
         // PointerX/Y 还停在旧位置——准线和"从哪儿起框"就会晚一拍才跟上。
         if (Native.GetCursorPos(out var p))
         {
-            PointerX = p.X;
-            PointerY = p.Y - ViewOffsetY;      // 屏幕 → 画布（相机只有纵向偏移）
+            PointerX = ScreenToCanvasX(p.X);
+            PointerY = ScreenToCanvasY(p.Y);   // 屏幕 → 画布（相机）
         }
         // 还没有框：四个点都放在指针上（"框太小"的判据自然成立 → 遮罩整块灰、不挖洞）
         CapMinX = CapMaxX = PointerX;
@@ -1400,8 +1400,8 @@ public partial class InkEngine
         float x1 = MathF.Max(CapMinX, CapMaxX), y1 = MathF.Max(CapMinY, CapMaxY);
         return new RectF
         {
-            MinX = x0, MinY = y0 + ViewOffsetY,          // 相机只有纵向偏移
-            MaxX = x1, MaxY = y1 + ViewOffsetY,
+            MinX = CanvasToScreenX(x0), MinY = CanvasToScreenY(y0),
+            MaxX = CanvasToScreenX(x1), MaxY = CanvasToScreenY(y1),
         };
     }
 
@@ -1434,8 +1434,8 @@ public partial class InkEngine
     private void ExtendCaptureTo(float x, float y)
     {
         var vs = VirtualScreen;
-        float sx = Math.Clamp(x, vs.MinX, vs.MaxX);
-        float sy = Math.Clamp(y, vs.MinY - ViewOffsetY, vs.MaxY - ViewOffsetY);
+        float sx = Math.Clamp(x, ScreenToCanvasX(vs.MinX), ScreenToCanvasX(vs.MaxX));
+        float sy = Math.Clamp(y, ScreenToCanvasY(vs.MinY), ScreenToCanvasY(vs.MaxY));
         CapMinX = MathF.Min(_capAnchorX, sx); CapMaxX = MathF.Max(_capAnchorX, sx);
         CapMinY = MathF.Min(_capAnchorY, sy); CapMaxY = MathF.Max(_capAnchorY, sy);
     }

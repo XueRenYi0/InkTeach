@@ -20,8 +20,8 @@ public partial class InkEngine
     {
         float dpi = UiUnit;
         var p = LibraryPanelRectNow();
-        float cx = (p.MinX + p.MaxX) * 0.5f;
-        float cy = (p.MinY + p.MaxY) * 0.5f + ViewOffsetY;   // 屏幕坐标
+        float cx = CanvasToScreenX((p.MinX + p.MaxX) * 0.5f);
+        float cy = CanvasToScreenY((p.MinY + p.MaxY) * 0.5f);   // 屏幕坐标
         LibraryMode = LibraryMode == LibraryPanelMode.Horizontal
             ? LibraryPanelMode.Vertical : LibraryPanelMode.Horizontal;
         // 换横竖后，旧的“按页签高度”已经不适用；两页都回到新方向的默认高度。
@@ -108,9 +108,9 @@ public partial class InkEngine
     {
         if (!LibraryPanelVisibleNow) return false;
         if (LibraryLayout.Contains(LibraryPanelRectNow(), x, y)) return false;
-        float sy = y + ViewOffsetY;
-        if (InUiPopup(x, sy) || UiContains(x, sy) || PptBarContains(x, sy)
-            || TimerCardContains(x, sy) || RollCardContains(x, sy)) return false;
+        float sx = CanvasToScreenX(x), sy = CanvasToScreenY(y);
+        if (InUiPopup(sx, sy) || UiContains(sx, sy) || PptBarContains(sx, sy)
+            || TimerCardContains(sx, sy) || RollCardContains(sx, sy)) return false;
         var vp = ViewportCanvas;
         return x >= vp.MinX && x <= vp.MaxX && y >= vp.MinY && y <= vp.MaxY;
     }
@@ -135,7 +135,7 @@ public partial class InkEngine
         // UiBarBounds 是**逻辑**坐标，这里要和 ViewportCanvas 的物理坐标对齐；
         // 少乘一个 UiUnit 会把落点夹到屏幕上半（虚影和放置都只能到上半屏）。
         if (!LibraryPlacementMode && !ui.IsEmpty)
-            bottom = MathF.Min(bottom, ui.MinY * UiUnit - ViewOffsetY - margin);
+            bottom = MathF.Min(bottom, ScreenToCanvasY(ui.MinY * UiUnit) - margin);
 
         float minCx = vp.MinX + margin + halfW;
         float maxCx = vp.MaxX - margin - halfW;
@@ -157,10 +157,10 @@ public partial class InkEngine
             if (LibraryLayout.Contains(LibraryPanelRectNow(), PointerX, PointerY)) return false;
             if (LibraryMenu != 0 && LibraryLayout.Contains(LibraryMenuRect(), PointerX, PointerY))
                 return false;
-            float sy = PointerY + ViewOffsetY;
-            if (InUiPopup(PointerX, sy) || UiContains(PointerX, sy)
-                || PptBarContains(PointerX, sy) || TimerCardContains(PointerX, sy)
-                || RollCardContains(PointerX, sy)) return false;
+            float sx = CanvasToScreenX(PointerX), sy = CanvasToScreenY(PointerY);
+            if (InUiPopup(sx, sy) || UiContains(sx, sy)
+                || PptBarContains(sx, sy) || TimerCardContains(sx, sy)
+                || RollCardContains(sx, sy)) return false;
             var vp = ViewportCanvas;
             return PointerX >= vp.MinX && PointerX <= vp.MaxX
                 && PointerY >= vp.MinY && PointerY <= vp.MaxY;

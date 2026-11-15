@@ -932,9 +932,9 @@ public partial class InkEngine
         var logical = new RectF
         {
             MinX = edit.MinX / UiUnit,
-            MinY = (edit.MinY + ViewOffsetY) / UiUnit,
+            MinY = CanvasToScreenY(edit.MinY) / UiUnit,
             MaxX = edit.MaxX / UiUnit,
-            MaxY = (edit.MaxY + ViewOffsetY) / UiUnit,
+            MaxY = CanvasToScreenY(edit.MaxY) / UiUnit,
         };
 
         TextInput.Begin(new TextInputRequest

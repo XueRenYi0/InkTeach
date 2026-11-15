@@ -703,7 +703,7 @@ public partial class InkEngine
         if (Native.GetCursorPos(out var p))
         {
             PointerX = p.X;
-            PointerY = p.Y - ViewOffsetY;
+            PointerY = ScreenToCanvasY(p.Y);
             PointerInside = true;
         }
         ColorPickHoverValid = false;
@@ -735,8 +735,8 @@ public partial class InkEngine
     internal Color4? SampleFrozenColorAt(float canvasX, float canvasY)
     {
         if (!CaptureFrozen || CaptureFrozenBgra == null) return null;
-        int sx = (int)MathF.Round(canvasX);
-        int sy = (int)MathF.Round(canvasY + ViewOffsetY);
+        int sx = (int)MathF.Round(CanvasToScreenX(canvasX));
+        int sy = (int)MathF.Round(CanvasToScreenY(canvasY));
         int ix = sx - CaptureFrozenX, iy = sy - CaptureFrozenY;
         if (ix < 0 || iy < 0 || ix >= CaptureFrozenW || iy >= CaptureFrozenH) return null;
         int o = (iy * CaptureFrozenW + ix) * 4;
@@ -1659,6 +1659,52 @@ public partial class InkEngine
     internal float ViewOffsetY;
 
     /// <summary>
+    /// 相机：画布坐标 → 屏幕坐标的横向偏移。滚动仍然只动 Y；
+    /// 这个数留给缩放后的横向平移（阶段 1 恒为 0，行为与以前完全一致）。
+    /// </summary>
+    internal float ViewOffsetX;
+
+    /// <summary>
+    /// 相机缩放（画布 → 屏幕）。**阶段 1 恒为 1f**：只铺管线，不启用缩放。
+    ///
+    /// 约定（唯一一套，全仓库必须走下面四个 helper）：
+    ///   screen = canvas * ViewScale + ViewOffset；
+    ///   canvas = (screen − ViewOffset) / ViewScale。
+    /// </summary>
+    internal float ViewScale = 1f;
+
+    /// <summary>屏幕 X → 画布 X（相机）。</summary>
+    internal float ScreenToCanvasX(float sx) => ViewScale > 0f ? (sx - ViewOffsetX) / ViewScale : sx;
+
+    /// <summary>屏幕 Y → 画布 Y（相机）。</summary>
+    internal float ScreenToCanvasY(float sy) => ViewScale > 0f ? (sy - ViewOffsetY) / ViewScale : sy;
+
+    /// <summary>画布 X → 屏幕 X（相机）。</summary>
+    internal float CanvasToScreenX(float cx) => cx * ViewScale + ViewOffsetX;
+
+    /// <summary>画布 Y → 屏幕 Y（相机）。</summary>
+    internal float CanvasToScreenY(float cy) => cy * ViewScale + ViewOffsetY;
+
+    /// <summary>算"一屏在画布里的高度/宽度"时用的除数；非法缩放值按 1 处理。</summary>
+    internal float ViewScaleSafe => ViewScale > 0f ? ViewScale : 1f;
+
+    /// <summary>
+    /// 横向相机偏移的夹取（阶段 1 恒为 0；缩放后左右拖页用）。
+    /// 和纵向的 `ClampOffset`（见 Engine.Cursor.cs）同一套判据。
+    /// </summary>
+    private float ClampOffsetX(float x)
+    {
+        // 100% 时横向相机必须严格为 0：这是"阶段 1 逐像素不变"的硬保证。
+        if (ViewScale <= 1.0001f) return 0f;
+        var extent = CanvasExtent;
+        // 左右各夹到"内容边贴住视口边"：x 的正方向 = 内容右移。
+        float minX = _virtualX + _virtualW - extent.MaxX * ViewScale;   // 内容右边缘贴视口右边缘
+        float maxX = _virtualX - extent.MinX * ViewScale;               // 内容左边缘贴视口左边缘
+        if (maxX < minX) { float t = minX; minX = maxX; maxX = t; }
+        return Math.Clamp(x, minX, maxX);
+    }
+
+    /// <summary>
     /// 最后一次"滚动条该露面"的时刻（滚动或悬停）。滚动条按这个时间淡出——
     /// 静止 3 秒后消失（InkClass 实测 1.5 秒太快，用户会找不到它）。
     /// </summary>
@@ -1685,15 +1731,19 @@ public partial class InkEngine
     private OverlayWindow _scrollWindow;
 
     /// <summary>屏幕坐标 → 画布坐标（相机）。输入进来第一件事就是过这个。</summary>
-    internal void ScreenToCanvas(ref float x, ref float y) => y -= ViewOffsetY;
+    internal void ScreenToCanvas(ref float x, ref float y)
+    {
+        x = ScreenToCanvasX(x);
+        y = ScreenToCanvasY(y);
+    }
 
     /// <summary>当前视口在**画布坐标**里的范围（相机之后）。</summary>
     internal RectF ViewportCanvas => new()
     {
-        MinX = _virtualX,
-        MinY = _virtualY - ViewOffsetY,
-        MaxX = _virtualX + _virtualW,
-        MaxY = _virtualY - ViewOffsetY + _virtualH,
+        MinX = ScreenToCanvasX(_virtualX),
+        MinY = ScreenToCanvasY(_virtualY),
+        MaxX = ScreenToCanvasX(_virtualX + _virtualW),
+        MaxY = ScreenToCanvasY(_virtualY + _virtualH),
     };
 
     /// <summary>
@@ -1726,8 +1776,8 @@ public partial class InkEngine
             // `ViewportCanvas` 是**画布坐标**（屏幕 Y 减了相机偏移），界面的上下沿是
             // **屏幕坐标**——滚过画布以后两者差一个 ViewOffsetY。不换算的话，
             // "避开工具条"会在滚动后整体偏一截（条要么钻下去、要么被推得太高）。
-            float uiTopCanvas = uiTop - ViewOffsetY;
-            float uiBottomCanvas = uiBottom - ViewOffsetY;
+            float uiTopCanvas = ScreenToCanvasY(uiTop);
+            float uiBottomCanvas = ScreenToCanvasY(uiBottom);
 
             if ((uiTop + uiBottom) * 0.5f >= screenMidY)
             {

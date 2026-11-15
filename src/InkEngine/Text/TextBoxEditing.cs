@@ -821,7 +821,7 @@ public partial class InkEngine
         // 不先判断的话，文本工具下点操作条会被当成"点空白"，又新建一个文本框。
         if (SelectionBarShown && Doc.Selected.Count > 0 && TextBoxChromeAt(screenX, screenY))
         {
-            _ = TryBeginSelectionGesture(screenX, screenY - ViewOffsetY, shift: false, alt: false);
+            _ = TryBeginSelectionGesture(ScreenToCanvasX(screenX), ScreenToCanvasY(screenY), shift: false, alt: false);
             _dirty = true;
             return true;
         }
@@ -843,13 +843,13 @@ public partial class InkEngine
             // **双击延迟到松手**：第二下按下去先交给选择手势，拖了就是移动，
             // 没拖才在松手时进编辑——这样"选中后马上按住拖"不会被双击吃掉。
             ArmTextBoxEditOnDoubleClick(hit, screenX, screenY);
-            _ = TryBeginSelectionGesture(screenX, screenY - ViewOffsetY, shift: false, alt: false);
+            _ = TryBeginSelectionGesture(ScreenToCanvasX(screenX), ScreenToCanvasY(screenY), shift: false, alt: false);
             _dirty = true;
             NotifyUiStateChanged();
             return true;
         }
 
-        float cx = screenX, cy = screenY - ViewOffsetY;
+        float cx = ScreenToCanvasX(screenX), cy = ScreenToCanvasY(screenY);
         var other = Doc.HitObjectAt(cx, cy, ClickToleranceLogical * DpiScale);
         if (other != null)
         {
@@ -872,8 +872,8 @@ public partial class InkEngine
     /// </summary>
     private bool TextBoxChromeAt(float screenX, float screenY)
     {
-        float x = screenX;
-        float y = screenY - ViewOffsetY;
+        float x = ScreenToCanvasX(screenX);
+        float y = ScreenToCanvasY(screenY);
         if (BarDrawnCollapsed)
             return SelectionDotCanvasRect.Contains(x, y);
 
@@ -942,20 +942,20 @@ public partial class InkEngine
         float minW = MathF.Max(24f * u, 36f * u + _textFontSize * u);
         float w = minW;                         // 初始只够一个字，之后逐字向右长
         float h = 60f * u;
-        float canvasBottom = screen.MaxY - ViewOffsetY;
-        float canvasRight = screen.MaxX - margin;
+        float canvasBottom = ScreenToCanvasY(screen.MaxY);
+        float canvasRight = ScreenToCanvasX(screen.MaxX) - margin;
 
         // **落点就是左上角**（ClassIn 的输入起点）：不再先把框往左挪 420。
         // 右边不够时只把初始宽度收到最小可排版宽度；后续输入到边界会自动换行/整体左让，
         // 见 OnTextBoxEditChanged。
-        float x = Math.Clamp(canvasX, screen.MinX + margin,
-                             MathF.Max(screen.MinX + margin, canvasRight - minW));
+        float x = Math.Clamp(canvasX, ScreenToCanvasX(screen.MinX) + margin,
+                             MathF.Max(ScreenToCanvasX(screen.MinX) + margin, canvasRight - minW));
         w = MathF.Max(minW, MathF.Min(w, canvasRight - x));
 
         // 纵向**落点就是框顶**，只保证第一行在屏幕内；继续往下写时由画布自动上滚
         // （KeepTextBoxEditInView），不预先把这个框往上顶三行。
         float lineH = _textFontSize * u * 1.55f;
-        float minY = screen.MinY - ViewOffsetY + margin;
+        float minY = ScreenToCanvasY(screen.MinY) + margin;
         float maxY = MathF.Max(minY, canvasBottom - margin - lineH);
         float y = Math.Clamp(canvasY, minY, maxY);
 
@@ -1049,8 +1049,8 @@ public partial class InkEngine
         float u = MathF.Max(0.75f, DpiScale);
         float w = MathF.Min(420f * u, (screen.MaxX - screen.MinX) * 0.55f);
         float h = 60f * u;
-        float x = (screen.MinX + screen.MaxX) * 0.5f - w * 0.5f;
-        float y = (screen.MinY + screen.MaxY) * 0.5f - ViewOffsetY - h * 0.5f;
+        float x = ScreenToCanvasX((screen.MinX + screen.MaxX) * 0.5f) - w * 0.5f;
+        float y = ScreenToCanvasY((screen.MinY + screen.MaxY) * 0.5f) - h * 0.5f;
 
         var data = TextBoxData.CreatePlain(text, u, w, h);
         data.FontSize = _textFontSize;
@@ -1072,8 +1072,8 @@ public partial class InkEngine
             float maxW = MathF.Max(80f * u, screen.MaxX - screen.MinX - 32f * u);
             float maxH = MathF.Max(80f * u, (screen.MaxY - screen.MinY) * 0.9f);
             data.FitToContent(maxW, maxH, fitWidth: true);
-            x = (screen.MinX + screen.MaxX) * 0.5f - data.Width * 0.5f;
-            y = (screen.MinY + screen.MaxY) * 0.5f - ViewOffsetY - data.Height * 0.5f;
+            x = ScreenToCanvasX((screen.MinX + screen.MaxX) * 0.5f) - data.Width * 0.5f;
+            y = ScreenToCanvasY((screen.MinY + screen.MaxY) * 0.5f) - data.Height * 0.5f;
             s.SetTextBoxRect(new Vector2(x, y), data.Width, data.Height);
         }
         else
@@ -1225,7 +1225,7 @@ public partial class InkEngine
 
         var screen = ScreenRectPhysical();
         var b = s.PaddedBounds;
-        int hostY = (int)MathF.Round(b.MinY + 2f + ViewOffsetY);
+        int hostY = (int)MathF.Round(CanvasToScreenY(b.MinY + 2f));
         float screenCaretY = hostY + caretY;
         float safeTop = screen.MinY + 72f * DpiScale;
         float safeBottom = screen.MaxY - 120f * DpiScale;
@@ -1309,8 +1309,8 @@ public partial class InkEngine
     {
         if (_textBoxEditHwnd == IntPtr.Zero || s?.TextBox == null) return;
         var b = s.PaddedBounds;
-        int hostX = (int)MathF.Round(b.MinX + 2f);
-        int hostY = (int)MathF.Round(b.MinY + 2f + ViewOffsetY);
+        int hostX = (int)MathF.Round(CanvasToScreenX(b.MinX + 2f));
+        int hostY = (int)MathF.Round(CanvasToScreenY(b.MinY + 2f));
         int w = Math.Max(1, (int)MathF.Round(b.MaxX - b.MinX) - 4);
         int h = Math.Max(1, (int)MathF.Round(b.MaxY - b.MinY) - 4);
         // 文字在宿主里内缩了 pad；EM_CHARFROMPOS 用文字区坐标，点也要先减 pad。
@@ -1364,8 +1364,8 @@ public partial class InkEngine
         float unit = MathF.Max(0.5f, box.Unit);
         float pad = 18f * unit;
         float fontPx = MathF.Max(6f, box.FontSize * MathF.Max(0.5f, box.Unit));
-        int x = (int)MathF.Round(b.MinX + 2f);
-        int y = (int)MathF.Round(b.MinY + 2f + ViewOffsetY);
+        int x = (int)MathF.Round(CanvasToScreenX(b.MinX + 2f));
+        int y = (int)MathF.Round(CanvasToScreenY(b.MinY + 2f));
         int w = Math.Max(60, (int)MathF.Round(b.MaxX - b.MinX - 4f));
         int h = Math.Max(40, (int)MathF.Round(b.MaxY - b.MinY - 4f));
         _textBoxEditScreenRect = new RectF
@@ -1496,7 +1496,7 @@ public partial class InkEngine
         if (box.AutoWidth)
         {
             float maxH = MathF.Max(60f * u,
-                                   screen.MaxY - ViewOffsetY - origin.Y - 16f * u);
+                                   ScreenToCanvasY(screen.MaxY) - origin.Y - 16f * u);
             box.GrowToContent(maxW, maxH);
         }
         else
@@ -1701,7 +1701,7 @@ public partial class InkEngine
                 float maxW = MathF.Max(80f * u, screen.MaxX - screen.MinX - margin * 2f);
                 float maxH = MathF.Max(80f * u, MathF.Min(
                     (screen.MaxY - screen.MinY) * 0.9f,
-                    screen.MaxY - ViewOffsetY - oldOrigin.Y - margin));
+                    ScreenToCanvasY(screen.MaxY) - oldOrigin.Y - margin));
                 s.TextBox.FitToContent(maxW, maxH, fitWidth: s.TextBox.AutoWidth);
                 // **左沿不动、只往右长**：不要按"变宽/变窄保持中心"去挪 p0，
                 // 否则提交那一下框会往左跳半个宽度，看起来就不是"右边长"了。

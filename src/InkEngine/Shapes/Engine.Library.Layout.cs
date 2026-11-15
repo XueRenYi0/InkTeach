@@ -62,8 +62,8 @@ public partial class InkEngine
     /// <summary>屏幕矩形 → 画布矩形。面板位置按**屏幕**记住，绘制/命中按画布。</summary>
     private RectF LibraryScreenToCanvas(in RectF r) => new()
     {
-        MinX = r.MinX, MinY = r.MinY - ViewOffsetY,
-        MaxX = r.MaxX, MaxY = r.MaxY - ViewOffsetY,
+        MinX = ScreenToCanvasX(r.MinX), MinY = ScreenToCanvasY(r.MinY),
+        MaxX = ScreenToCanvasX(r.MaxX), MaxY = ScreenToCanvasY(r.MaxY),
     };
 
     /// <summary>图库面板这一刻的矩形（**画布坐标**）。绘制、命中、脏区都问它。</summary>
@@ -446,13 +446,13 @@ public partial class InkEngine
             _libraryResizePreviewLogical = new RectF
             {
                 MinX = now.Panel.MinX / UiUnit,
-                MinY = (now.Panel.MinY + ViewOffsetY) / UiUnit,
+                MinY = CanvasToScreenY(now.Panel.MinY) / UiUnit,
                 MaxX = now.Panel.MaxX / UiUnit,
-                MaxY = (now.Panel.MaxY + ViewOffsetY) / UiUnit,
+                MaxY = CanvasToScreenY(now.Panel.MaxY) / UiUnit,
             };
         }
         _libraryDrag = kind;
-        _libraryDragStart = new Vector2(x, y + ViewOffsetY);
+        _libraryDragStart = new Vector2(CanvasToScreenX(x), CanvasToScreenY(y));
         _libraryDragStartRect = _libraryPanelLogical;
         if (_windows.Count > 0) Native.SetCapture(_windows[0].Hwnd);
     }
@@ -465,8 +465,8 @@ public partial class InkEngine
         var ui = UiBarBoundsNow();
         float uiTop = ui.IsEmpty ? screen.MaxY - 80f : ui.MinY;
         // 指针是画布坐标，面板位置是屏幕坐标；先把 y 加回相机偏移。
-        float sx = x;
-        float sy = y + ViewOffsetY;
+        float sx = CanvasToScreenX(x);
+        float sy = CanvasToScreenY(y);
         float dx = (sx - _libraryDragStart.X) / dpi;
         float dy = (sy - _libraryDragStart.Y) / dpi;
         var r = _libraryDragStartRect;

@@ -406,13 +406,13 @@ internal sealed partial class OverlayWindow
     /// </summary>
     private void CompositeTiles(in RectF windowRect)
     {
-        // 窗口 → 画布（CanvasToWindow 的逆）：c = w + Origin - ViewOffset
+        // 窗口 → 画布（CanvasToWindow 的逆）：c = (w + Origin − ViewOffset) / ViewScale
         var canvasRect = new RectF
         {
-            MinX = windowRect.MinX + OriginX - ViewOffsetX,
-            MinY = windowRect.MinY + OriginY - ViewOffsetY,
-            MaxX = windowRect.MaxX + OriginX - ViewOffsetX,
-            MaxY = windowRect.MaxY + OriginY - ViewOffsetY,
+            MinX = WindowToCanvasX(windowRect.MinX),
+            MinY = WindowToCanvasY(windowRect.MinY),
+            MaxX = WindowToCanvasX(windowRect.MaxX),
+            MaxY = WindowToCanvasY(windowRect.MaxY),
         };
 
         foreach (var tile in _tiles.Visible)
@@ -425,10 +425,12 @@ internal sealed partial class OverlayWindow
             float b = MathF.Min(tr.MaxY, canvasRect.MaxY);
             if (r <= l || b <= t) continue;
 
+            // src 仍然是**画布/纹理像素**（分块纹理目前 1 画布单位 = 1 像素，不改）；
+            // dst 由 CanvasToWindow 换算：缩放时同一块在窗口上更大，由 DrawBitmap 拉伸。
             var src = new Vortice.RawRectF(l - tr.MinX, t - tr.MinY, r - tr.MinX, b - tr.MinY);
             var dst = new Vortice.RawRectF(
-                l - canvasRect.MinX + windowRect.MinX, t - canvasRect.MinY + windowRect.MinY,
-                r - canvasRect.MinX + windowRect.MinX, b - canvasRect.MinY + windowRect.MinY);
+                CanvasToWindowX(l), CanvasToWindowY(t),
+                CanvasToWindowX(r), CanvasToWindowY(b));
 
             // NearestNeighbor：画布和窗口是 1:1，不需要插值；用线性过滤反而
             // 会在块边界上把邻居的像素混进来（半透明笔迹会糊出淡边）。
@@ -450,8 +452,8 @@ internal sealed partial class OverlayWindow
     /// </summary>
     private RectF CanvasRectToWindow(in RectF r) => new()
     {
-        MinX = r.MinX + ViewOffsetX - OriginX, MinY = r.MinY + ViewOffsetY - OriginY,
-        MaxX = r.MaxX + ViewOffsetX - OriginX, MaxY = r.MaxY + ViewOffsetY - OriginY,
+        MinX = CanvasToWindowX(r.MinX), MinY = CanvasToWindowY(r.MinY),
+        MaxX = CanvasToWindowX(r.MaxX), MaxY = CanvasToWindowY(r.MaxY),
     };
     private RectF ClipToWindow(RectF r)
     {

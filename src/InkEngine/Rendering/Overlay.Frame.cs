@@ -107,10 +107,10 @@ internal sealed partial class OverlayWindow
                 // 坐标"的那一类坑）。
                 var cv = new RectF
                 {
-                    MinX = c.MinX + OriginX - ViewOffsetX,
-                    MinY = c.MinY + OriginY - ViewOffsetY,
-                    MaxX = c.MaxX + OriginX - ViewOffsetX,
-                    MaxY = c.MaxY + OriginY - ViewOffsetY,
+                    MinX = WindowToCanvasX(c.MinX),
+                    MinY = WindowToCanvasY(c.MinY),
+                    MaxX = WindowToCanvasX(c.MaxX),
+                    MaxY = WindowToCanvasY(c.MaxY),
                 };
                 DrawDocPages(app, cv);     // 调试路径：文档页层也要画（否则白屏看不到文档）
                 if (boardOverDocTranslucentDbg)

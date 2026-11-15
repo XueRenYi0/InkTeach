@@ -86,7 +86,7 @@ internal sealed partial class OverlayWindow
         // 滑块长度 = 一屏 / 画布总高；位置 = 视口顶在画布里的比例
         float thumbLen = MathF.Max(40f * dpi, trackLen * (Height / extentH));
         float maxTravel = trackLen - thumbLen;
-        float viewTop = OriginY - app.ViewOffsetY;       // 视口顶部对应的画布 Y
+        float viewTop = WindowToCanvasY(OriginY);       // 视口顶部对应的画布 Y
         float frac = extentH - Height > 1f
             ? (viewTop - extent.MinY) / (extentH - Height) : 0f;
         frac = Math.Clamp(frac, 0f, 1f);

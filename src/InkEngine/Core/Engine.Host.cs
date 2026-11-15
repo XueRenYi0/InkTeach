@@ -1540,7 +1540,13 @@ public partial class InkEngine
         // 取整只作用于渲染层：引擎自己的 `ViewOffsetY` 保持全精度（输入映射/夹紧/可见区计算），
         // 差值 <1px，命中和观感都对得上。
         float renderCamY = MathF.Round(ViewOffsetY);
-        foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = renderCamY; }
+        float renderCamX = MathF.Round(ViewOffsetX);
+        foreach (var w in _windows)
+        {
+            w.ViewOffsetX = renderCamX;
+            w.ViewOffsetY = renderCamY;
+            w.ViewScale = ViewScale;      // 阶段 1 = 1：渲染层先接上，不改观感
+        }
 
         // 面板的接输入小窗跟着界面这一刻占的地方走（方案 B）。
         // 放在渲染之前：这一帧界面画在哪，输入就该收在哪，两件事同源。
