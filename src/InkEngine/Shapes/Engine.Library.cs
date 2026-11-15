@@ -145,8 +145,6 @@ public partial class InkEngine
     /// <summary>改名/日志/其他小输入共用的字体缓存（原生 EDIT 用）。</summary>
     private IntPtr _libraryRenameFont;
     private float _libraryRenameFontPx;
-    private long _libraryDrawerLastClickMs;
-    private string _libraryDrawerLastClickId;
 
     /// <summary>使用态选中的那一张（拿起 / 跟着指针）；空 = 没选。整理态不用它。</summary>
     internal ShapeLibrary.Entry LibraryUseSelected;
@@ -772,8 +770,6 @@ public partial class InkEngine
         LibraryConfirm = "";
         LibraryCategoriesOpen = false;
         LibraryDrawerManage = false;
-        _libraryDrawerLastClickMs = 0;
-        _libraryDrawerLastClickId = null;
         // 已经按了“放置”、还没落笔的：穿透期间画布不归我们，先取消，免得
         // 退出穿透后老师只是随手点一下画布却突然插进一张图。
         _libraryPending = null;

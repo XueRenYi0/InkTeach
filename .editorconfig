@@ -1,0 +1,29 @@
+root = true
+
+# 统一风格（ADR-005 P0）。只约束编辑器/格式化，不改变编译行为。
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{md,json,yml,yaml}]
+trim_trailing_whitespace = false
+
+[*.ps1]
+indent_size = 4
+
+[*.cs]
+# 私有字段沿用现有 `_camelCase`；只提示，不阻断构建。
+dotnet_naming_rule.private_fields_underscore.severity = suggestion
+dotnet_naming_rule.private_fields_underscore.symbols = private_fields
+dotnet_naming_rule.private_fields_underscore.style = underscore_prefix
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+dotnet_naming_style.underscore_prefix.required_prefix = _
+dotnet_naming_style.underscore_prefix.capitalization = camel_case
+
+# 存量长行/对齐不重排，避免 AI 编辑时产生无关 diff。
+dotnet_diagnostic.IDE0055.severity = none

@@ -571,7 +571,7 @@ internal static class OcrClient
                 err.TryGetProperty("message", out var m))
                 return $"HTTP {status}：{Clip(m.GetString(), 120)}";
         }
-        catch { }
+        catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
         return $"HTTP {status}：{Clip(raw, 120)}";
     }
 

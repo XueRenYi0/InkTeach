@@ -218,7 +218,7 @@ internal static class Native
             if (EnumDisplaySettingsW(null, -1 /*ENUM_CURRENT_SETTINGS*/, ref dm))
                 return dm.dmDisplayFrequency;
         }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
         return 0;
     }
 
@@ -643,7 +643,7 @@ internal static class Native
                       | TABLET_DISABLE_PENBARRELFEEDBACK;
             if (SetProp(hwnd, "MicrosoftTabletPenServiceProperty", new IntPtr(flags))) ok = true;
         }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
 
         // ② 挡掉全部系统手势（Win7+）。我们本来就不吃 WM_GESTURE —— 笔迹、翻页、
         //    滚动条全是自己按 WM_POINTER 算的，挡掉不存在"误伤自己"的问题。
@@ -652,7 +652,7 @@ internal static class Native
             var cfg = new GESTURECONFIG { dwID = 0, dwWant = 0, dwBlock = GC_ALLGESTURES };
             if (SetGestureConfig(hwnd, 0, 1, ref cfg, (uint)Marshal.SizeOf<GESTURECONFIG>())) ok = true;
         }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
 
         // ③ 消息那条在 WndProc 里回（见 Engine.WndProc 的 WM_TABLET_QUERYSYSTEMGESTURESTATUS）——
         //    它是系统主动来问的，答在那边才生效，这里没有对应调用。

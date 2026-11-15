@@ -184,7 +184,7 @@ internal static class OcrProviders
     public static string DeriveName(string baseUrl, OcrProviderState state, string exceptId)
     {
         string host = "";
-        try { host = new Uri(baseUrl).Host; } catch { }
+        try { host = new Uri(baseUrl).Host; } catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
         if (string.IsNullOrWhiteSpace(host)) host = "自定义服务";
         string name = host;
         int n = 2;

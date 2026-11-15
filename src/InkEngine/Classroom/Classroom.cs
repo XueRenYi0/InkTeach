@@ -1142,7 +1142,7 @@ public partial class InkEngine
     {
         if (!_timerSoundOn) return;
         _timerBeepCount++;
-        try { Native.MessageBeep(0x00000040 /*MB_ICONASTERISK*/); } catch { }
+        try { Native.MessageBeep(0x00000040 /*MB_ICONASTERISK*/); } catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
     }
 
     /// <summary>每帧推一次（Loop 与 RenderAll 各一处，理由同 StepPptBar）。</summary>

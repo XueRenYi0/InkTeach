@@ -184,7 +184,7 @@ internal static class ImageFile
                 if (p?.Value != null && p.Value.Length >= 2) return p.Value[0] | (p.Value[1] << 8);
             }
         }
-        catch { }
+        catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
         return 1;
     }
 

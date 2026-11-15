@@ -809,7 +809,7 @@ internal sealed partial class Stroke
             }
             s_traceWriter.WriteLine(line);
         }
-        catch { }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
     }
 
     private static StreamWriter s_traceWriter;

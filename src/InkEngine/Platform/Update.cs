@@ -367,7 +367,7 @@ internal static class UpdateFeed
             foreach (string dir in backups)
             {
                 try { Directory.Delete(dir, true); removed++; }
-                catch { }                                      // 被占用就下次再清
+                catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }                                      // 被占用就下次再清
             }
             if (removed > 0)
                 Console.WriteLine($"自动更新：清理了 {removed} 个旧备份目录");
@@ -632,7 +632,7 @@ internal static class UpdateFeed
                         if (now != seen) { seen = now; last = DateTime.UtcNow; }
                         else if (DateTime.UtcNow - last > DownloadStall)
                         {
-                            try { stall.Cancel(); } catch { }
+                            try { stall.Cancel(); } catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
                             return;
                         }
                     }
@@ -703,7 +703,7 @@ internal static class UpdateFeed
 
     private static void TryDelete(string f)
     {
-        try { if (File.Exists(f)) File.Delete(f); } catch { }
+        try { if (File.Exists(f)) File.Delete(f); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
     }
 
     private static string Flatten(Exception ex)
@@ -735,7 +735,7 @@ internal static class UpdateFeed
         # then fails to parse (measured 2026-09-29). Keep this file ASCII.
         $ErrorActionPreference = 'Continue'
         $log = Join-Path (Split-Path -Parent $PSCommandPath) 'swap.log'
-        function Log($m) { try { Add-Content -LiteralPath $log -Value ("{0}  {1}" -f (Get-Date -Format 'HH:mm:ss'), $m) } catch {} }
+        function Log($m) { try { Add-Content -LiteralPath $log -Value ("{0}  {1}" -f (Get-Date -Format 'HH:mm:ss'), $m) } catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ } }
 
         Log "waiting for pid $AppPid (dir=$AppDir)"
         $deadline = (Get-Date).AddSeconds(90)
@@ -835,7 +835,7 @@ internal static class UpdateFeed
         } catch {
             Log ("extract failed: " + $_.Exception.Message + " -- rolling back")
             try { Remove-Item -LiteralPath $AppDir -Recurse -Force -ErrorAction SilentlyContinue
-                  Rename-Item -LiteralPath $bak -NewName $leaf -ErrorAction Stop } catch {}
+                  Rename-Item -LiteralPath $bak -NewName $leaf -ErrorAction Stop } catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
             exit 1
         }
 

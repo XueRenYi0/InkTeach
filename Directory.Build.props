@@ -1,0 +1,19 @@
+<Project>
+
+  <!--
+    ADR-005 P0：结构护栏的统一编译入口。
+
+    为什么这里不写 TreatWarningsAsErrors：
+      C# 没有"只对新文件生效"的开关；全量开启会把存量 12 条告警变成红海，
+      而按文件白名单又需要给每个 csproj 维护清单。
+      实际做法是 tools/check-warnings.ps1 对比基线（当前基线 = 0 条），
+      新增告警直接 fail；口径写在 ADR-005 的 D5。
+
+    这里只放"全仓一致、且不改变编译结果"的两项。
+  -->
+  <PropertyGroup>
+    <Deterministic>true</Deterministic>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+</Project>

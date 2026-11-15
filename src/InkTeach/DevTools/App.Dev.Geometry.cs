@@ -339,7 +339,7 @@ internal sealed partial class App
         ctx.Transform = System.Numerics.Matrix3x2.Identity;
         var hr2 = ctx.EndDraw();
         if (hr2.Failure) Console.WriteLine("  PatchInto EndDraw 失败: " + hr2.Description);
-        try { ctx.Flush(out _, out _); } catch { }
+        try { ctx.Flush(out _, out _); } catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
         ctx.Target = null;
     }
     private IntPtr _syntheticPen;

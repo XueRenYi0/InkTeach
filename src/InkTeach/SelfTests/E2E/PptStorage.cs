@@ -40,7 +40,7 @@ internal sealed partial class App
         }
 
         string path = keepPath ?? Path.Combine(Path.GetTempPath(), "inkteach-iotest.png");
-        if (keepPath == null) { try { File.Delete(path); } catch { } }
+        if (keepPath == null) { try { File.Delete(path); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ } }
 
         Doc.Clear();
         Doc.ClearHistory();
@@ -179,7 +179,7 @@ internal sealed partial class App
         //    然后让用户知道 png 是透明底、jpg 是白底"。格式差别写在文件类型那一行，
         //    这里验的是"真按 JPG 编码了、而且透明处是白的（不是黑的）"。
         string jpgPath = System.IO.Path.ChangeExtension(path, ".jpg");
-        try { File.Delete(jpgPath); } catch { }
+        try { File.Delete(jpgPath); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         bool okJpg = ExportSelectionToPathForTest(jpgPath);
         Check("导出成 .jpg：返回成功、文件存在", okJpg && File.Exists(jpgPath),
               $"返回 {okJpg}，文件在 = {File.Exists(jpgPath)}");
@@ -209,7 +209,7 @@ internal sealed partial class App
                       $"({penPx.R},{penPx.G},{penPx.B})，原笔色 ({(int)(red.R * 255)},{(int)(red.G * 255)},{(int)(red.B * 255)})");
             }
             catch (Exception ex) { Check("JPEG 能被别的解码器读出来", false, ex.Message); }
-            try { File.Delete(jpgPath); } catch { }
+            try { File.Delete(jpgPath); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         }
 
         // ⑥ **PNG 白底**（第 3 条）：无损 + 白底。
@@ -218,7 +218,7 @@ internal sealed partial class App
         //    所以这里必须传 filterIndex=3，不能靠扩展名区分。
         {
             string whiteP = Path.Combine(Path.GetTempPath(), "inkteach-iotest-white.png");
-            try { File.Delete(whiteP); } catch { }
+            try { File.Delete(whiteP); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             bool okW = ExportSelectionToPathForTest(whiteP, 3);
             Check("导出成「PNG 白底」（第 3 条）：文件存在", okW && File.Exists(whiteP), $"返回 {okW}");
             if (File.Exists(whiteP))
@@ -243,7 +243,7 @@ internal sealed partial class App
                           $"({penPx.R},{penPx.G},{penPx.B})");
                 }
                 catch (Exception ex) { Check("白底 PNG 能被别的解码器读出来", false, ex.Message); }
-                try { File.Delete(whiteP); } catch { }
+                try { File.Delete(whiteP); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             }
         }
 
@@ -251,7 +251,7 @@ internal sealed partial class App
         //    自己写的编码器，所以逐字段验：签名、宽高、位深、以及**像素真的是白的和白底**。
         {
             string bmpPath = Path.Combine(Path.GetTempPath(), "inkteach-iotest.bmp");
-            try { File.Delete(bmpPath); } catch { }
+            try { File.Delete(bmpPath); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             bool okB = ExportSelectionToPathForTest(bmpPath, 4);
             Check("导出成 .bmp：返回成功、文件存在", okB && File.Exists(bmpPath),
                   $"返回 {okB}，文件在 = {File.Exists(bmpPath)}");
@@ -292,7 +292,7 @@ internal sealed partial class App
                           $"最上一行 ({topRow.R},{topRow.G},{topRow.B})");
                 }
                 catch (Exception ex) { Check("BMP 能被别的解码器读出来", false, ex.Message); }
-                try { File.Delete(bmpPath); } catch { }
+                try { File.Delete(bmpPath); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             }
         }
 
@@ -301,7 +301,7 @@ internal sealed partial class App
         //    **不碰选中与剪贴板** / 空板书拒绝。
         {
             string boardPath = Path.Combine(Path.GetTempPath(), "inkteach-iotest-board.jpg");
-            try { File.Delete(boardPath); } catch { }
+            try { File.Delete(boardPath); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
             // 先把选区清干净：证明保存图片**不依赖、也不改动**选区
             Doc.Selected.Clear();
@@ -330,7 +330,7 @@ internal sealed partial class App
                           $"({penPx.R},{penPx.G},{penPx.B})");
                 }
                 catch (Exception ex) { Check("保存图片：能被别的解码器读出来", false, ex.Message); }
-                try { File.Delete(boardPath); } catch { }
+                try { File.Delete(boardPath); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             }
             Check("保存图片：**不碰选中**（之前清空的选区还是空的）",
                   Doc.Selected.Count == 0, $"选中 {Doc.Selected.Count}");
@@ -341,12 +341,12 @@ internal sealed partial class App
             // 空板书拒绝、不写文件
             Doc.Clear();
             string emptyBoard = Path.Combine(Path.GetTempPath(), "inkteach-iotest-board-empty.jpg");
-            try { File.Delete(emptyBoard); } catch { }
+            try { File.Delete(emptyBoard); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             bool okEmpty = SaveBoardImageForTest(emptyBoard);
             Check("保存图片：空板书拒绝、不写文件",
                   !okEmpty && !File.Exists(emptyBoard),
                   $"返回 {okEmpty}，文件在 = {File.Exists(emptyBoard)}");
-            try { File.Delete(emptyBoard); } catch { }
+            try { File.Delete(emptyBoard); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         }
 
         Console.WriteLine();
@@ -356,7 +356,7 @@ internal sealed partial class App
         Console.WriteLine($"  文件：{path}（{png.Length} 字节）");
 
         // 给了路径就留着（人工核对 / 拿别的解码器验它）
-        if (keepPath == null) { try { File.Delete(path); } catch { } }
+        if (keepPath == null) { try { File.Delete(path); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ } }
         Doc.Clear();
         Doc.ClearHistory();
         _quit = true;
@@ -417,7 +417,7 @@ internal sealed partial class App
 
         // 自检**绝不碰用户真实的 PPT 批注**：把根目录指到临时目录（同 Recovery 的套路）。
         PptStore.RootOverride = Path.Combine(Path.GetTempPath(), "inkteach-ppttest");
-        try { if (Directory.Exists(PptStore.RootOverride)) Directory.Delete(PptStore.RootOverride, true); } catch { }
+        try { if (Directory.Exists(PptStore.RootOverride)) Directory.Delete(PptStore.RootOverride, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
         // 干净起手：只有 0 号桌面页、相机归零
         Doc.ResetToSinglePage();
@@ -1227,7 +1227,7 @@ internal sealed partial class App
             ? $"  PASS：PPT 模式正确（隔离 / 页内滚动 / 清除全部墨迹=所有页且可撤销 / 退出写盘 / 再进读回 / 按钮走 PPT）——共 {pass} 项"
             : $"  FAIL：{fail} 项不对（{pass} 项通过）");
 
-        try { Directory.Delete(PptStore.RootOverride, true); } catch { }
+        try { Directory.Delete(PptStore.RootOverride, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         PptStore.RootOverride = null;
 
         // 收尾：把文档清干净、退出（自检宿主跑完就结束，别留着一块盖在桌面上的窗口）。

@@ -645,7 +645,7 @@ internal sealed partial class OverlayWindow
         if (Trace)
         {
             int buf = -1;
-            try { if (_swapChain3 != null) buf = (int)_swapChain3.CurrentBackBufferIndex; } catch { }
+            try { if (_swapChain3 != null) buf = (int)_swapChain3.CurrentBackBufferIndex; } catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
             var b = RectF.Empty;
             foreach (var r in _frameDirty) { b.Add(r.MinX, r.MinY); b.Add(r.MaxX, r.MaxY); }
             int l0 = int.MaxValue, t0 = int.MaxValue, r0 = int.MinValue, bo0 = int.MinValue;
@@ -667,7 +667,7 @@ internal sealed partial class OverlayWindow
         // 试验D（2026-10-11，A/B）：每帧 DComp 提交（Chromium 的做法；我们以前只提交过一次）。
         if (TrailCommitEveryFrame && _inkTrail != null)
         {
-            try { _dcomp.Commit(); } catch { }
+            try { _dcomp.Commit(); } catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
         }
 
         // 用等待对象先"排队"：它发信号时才是提交下一帧的正确时机。

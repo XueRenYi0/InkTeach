@@ -3204,7 +3204,7 @@ internal sealed partial class App
 
         // ---- ⑧ 「更多」面板里的「重启软件」：先暂存板书，再拉起新进程（这里只记一笔，不真拉）----
         Recovery.ClearRestartCount();
-        try { File.Delete(Recovery.SessionPath); } catch { }
+        try { File.Delete(Recovery.SessionPath); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
         // ---- ⑨ 偏好落盘：改过的写进 settings.json，重开界面读得回来 ----
         // 把状态弄成一组"非默认"：深色开着（前面的用例已经开了）、取消钉住"图形"
@@ -3419,7 +3419,7 @@ internal sealed partial class App
             SettleFrames(150);
         }
 
-        try { File.Delete(prefsPath); } catch { }        // 临时配置用完就删
+        try { File.Delete(prefsPath); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }        // 临时配置用完就删
 
         Doc.SwitchPage(InkDocument.BoardPageKey);   // 自动存档=白板槽（2026-10-16）：这份"要留住的板书"写在白板上
         Doc.Clear();
@@ -5081,7 +5081,7 @@ internal sealed partial class App
         if (!ReadTextShared(log, 200).Contains("ready"))
         {
             Console.WriteLine("  点击目标窗口没有就绪");
-            try { target.Kill(); } catch { }
+            try { target.Kill(); } catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
             _quit = true;
             return;
         }
@@ -5316,7 +5316,7 @@ internal sealed partial class App
         // 教室大屏/手写板上可能根本没有键盘，界面是唯一的出口：界面没了又关不掉、
         // 重启不了，就是死局（用户 2026-09-16 提的）。
         Recovery.ClearRestartCount();          // 别让上一次自检留下的计数影响这一次
-        try { File.Delete(Recovery.SessionPath); } catch { }
+        try { File.Delete(Recovery.SessionPath); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
         int uiBuilt = 0;
         var panelRect = probe.BoundsPhysical;
@@ -5370,7 +5370,7 @@ internal sealed partial class App
             detail = $"暂存 {blob.Length} 字节 → 读回 {fresh.Strokes.Count} 笔（重启前 {strokesBeforeRestart} 笔）";
         }
         Check("重启后板书读得回来", restorable, detail);
-        try { File.Delete(Recovery.SessionPath); } catch { }
+        try { File.Delete(Recovery.SessionPath); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         Recovery.ClearRestartCount();
 
         Console.WriteLine($"  结果: {pass} 项通过, {fail} 项失败");
@@ -5413,11 +5413,11 @@ internal sealed partial class App
             foreach (var w in _windows) ApplyPassThroughStyle(w);
             SettleFrames(120);
         }
-        try { File.Delete(Recovery.SessionPath); } catch { }
+        try { File.Delete(Recovery.SessionPath); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         Recovery.ClearRestartCount();
 
         SetPass(false);
-        try { target.Kill(); } catch { }
+        try { target.Kill(); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         _quit = true;
     }
 
@@ -5627,7 +5627,7 @@ internal sealed partial class App
         }
         finally
         {
-            try { File.Delete(cfg); } catch { }
+            try { File.Delete(cfg); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             InkSettings.PathOverride = null;
         }
 
@@ -6006,7 +6006,7 @@ internal sealed partial class App
         PassThrough = false;
         foreach (var w in _windows) ApplyPassThroughStyle(w);
 
-        try { target.Kill(); } catch { }
+        try { target.Kill(); } catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
         _quit = true;
     }
 

@@ -206,7 +206,7 @@ internal sealed class DocPages
         if (w == null) return;
         _stop = true;
         _wake.Set();
-        try { w.Join(5000); } catch { }
+        try { w.Join(5000); } catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
         _worker = null;
         lock (_gate)
         {
@@ -264,7 +264,7 @@ internal sealed class DocPages
             }
 
             // 叫醒主循环：空闲时引擎不渲染，没人叫就"页渲好了但屏幕上一直空着"。
-            try { OnResultReady?.Invoke(); } catch { }
+            try { OnResultReady?.Invoke(); } catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
         }
     }
 

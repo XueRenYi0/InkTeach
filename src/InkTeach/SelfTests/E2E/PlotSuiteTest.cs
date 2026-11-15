@@ -174,7 +174,7 @@ internal sealed partial class App
                                                      1, out _);
                     if (bytes != null) File.WriteAllBytes(path, bytes);
                 }
-                catch { }
+                catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
                 img.Release();
             }
 

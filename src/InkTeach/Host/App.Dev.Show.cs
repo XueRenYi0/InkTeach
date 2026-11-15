@@ -92,7 +92,7 @@ internal sealed partial class App
                 ? $"dialogprobe：**文件真的写出来了** {LastExportPath}（{fi.Length} 字节，"
                   + $"类型第 {LastExportFilterIndex} 条）——对话框那条链是通的"
                 : $"dialogprobe：**没写出来** {LastExportPath}");
-            try { fi.Delete(); } catch { }
+            try { fi.Delete(); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             Console.WriteLine("dialogprobe：测试文件已删掉");
             DialogProbeCheckExport = false;
         }

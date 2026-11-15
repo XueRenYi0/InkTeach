@@ -85,7 +85,7 @@ internal static class Recovery
     /// <summary>删掉自动存档（自检用；产品里没有"删除"这条路，清空板书会存成空文档）。</summary>
     public static void DeleteAuto()
     {
-        try { if (File.Exists(AutoSavePath)) File.Delete(AutoSavePath); } catch { }
+        try { if (File.Exists(AutoSavePath)) File.Delete(AutoSavePath); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
     }
 
     private static string StatePath =>
@@ -134,7 +134,7 @@ internal static class Recovery
     /// </summary>
     public static void DiscardSession()
     {
-        try { if (File.Exists(SessionPath)) File.Delete(SessionPath); } catch { }
+        try { if (File.Exists(SessionPath)) File.Delete(SessionPath); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
     }
 
     /// <summary>记一次"因为界面出问题而重启"，返回这个窗口内的累计次数。</summary>
@@ -155,7 +155,7 @@ internal static class Recovery
                 }
             }
         }
-        catch { }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
         if (now - last > RestartWindowMs) count = 0;
         count++;
@@ -166,7 +166,7 @@ internal static class Recovery
                 now.ToString("F0", CultureInfo.InvariantCulture) + "," +
                 count.ToString(CultureInfo.InvariantCulture));
         }
-        catch { }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         return count;
     }
 
@@ -177,6 +177,6 @@ internal static class Recovery
     public static void ClearRestartCount()
     {
         try { if (File.Exists(StatePath)) File.Delete(StatePath); }
-        catch { }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
     }
 }

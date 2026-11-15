@@ -345,7 +345,7 @@ internal static class Program
                     enc = System.Text.Encoding.GetEncoding((int)cp);
                 }
             }
-            catch { }
+            catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
 
             Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), enc) { AutoFlush = true });
             Console.SetError(new StreamWriter(Console.OpenStandardError(), enc) { AutoFlush = true });
@@ -413,7 +413,7 @@ internal static class Program
         private void FlushLocked()
         {
             if (_n <= 0) return;
-            try { Native.WriteConsoleW(_h, _buf, (uint)_n, out _, IntPtr.Zero); } catch { }
+            try { Native.WriteConsoleW(_h, _buf, (uint)_n, out _, IntPtr.Zero); } catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
             _n = 0;
         }
     }
@@ -536,7 +536,7 @@ internal static class Program
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             File.WriteAllText(path, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}\n{ex}\n");
         }
-        catch { }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
         Native.MessageBoxW(IntPtr.Zero,
             "InkTeach 启动失败，已经退出。\n\n详情：" + (path.Length > 0 ? path : "（写日志也失败了）"),

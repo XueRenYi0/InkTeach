@@ -37,7 +37,7 @@ public partial class InkEngine
     private bool _g2Transform;
     private bool _g2TextBoxScroll;
     private Stroke _g2TextBoxScrollStroke;
-    private float _g2TextBoxScrollStart, _g2TextBoxScrollStartY;        // 有选中：这一次双指是在变换对象
+    private float _g2TextBoxScrollStart = 0f, _g2TextBoxScrollStartY = 0f;  // 双指纵滑起点（当前路径未赋值，恒为 0；保留行为）
     private bool _g2Tap;              // 两指点按候选（松手时结算）
     private float _g2Dist0;           // 变换用：起始两指距离（双指只做缩放，绕选区中心）
 

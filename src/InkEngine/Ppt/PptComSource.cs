@@ -51,7 +51,7 @@ internal sealed class PptComSource : IPptSource
             if (Process.GetProcessesByName("POWERPNT").Length > 0) return true;
             if (Process.GetProcessesByName("wpp").Length > 0) return true;
         }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
         return false;
     }
 
@@ -165,7 +165,7 @@ internal sealed class PptComSource : IPptSource
             }
             finally { ComLate.Release(pres); }
         }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
     }
 
     /// <summary>控制放映视图：Next / Previous / Exit（抛错不带走轮询线程）。</summary>
@@ -192,7 +192,7 @@ internal sealed class PptComSource : IPptSource
             }
             finally { ComLate.Release(pres); }
         }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
     }
 
     /// <summary>拿到 PowerPoint.Application（缓存；缓存失效时重新扫 ROT）。</summary>
@@ -350,7 +350,7 @@ internal sealed class PptComSource : IPptSource
                             ComLate.Release(app);
                         }
                     }
-                    catch { }
+                    catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
                     finally
                     {
                         if (com != IntPtr.Zero) ComLate.Release(com);
@@ -383,7 +383,7 @@ internal sealed class PptComSource : IPptSource
                     return true;
                 }
             }
-            catch { }
+            catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
         }
         return false;
     }

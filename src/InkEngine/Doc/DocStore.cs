@@ -30,7 +30,7 @@ internal static class DocStore
         if (paths != null)
             foreach (var p in paths)
             {
-                try { list.Add(Path.GetFullPath(p).ToLowerInvariant()); } catch { }
+                try { list.Add(Path.GetFullPath(p).ToLowerInvariant()); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             }
         list.Sort(StringComparer.Ordinal);
 

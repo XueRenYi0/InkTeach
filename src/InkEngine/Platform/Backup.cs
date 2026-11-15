@@ -49,7 +49,7 @@ internal static class AppBackup
         {
             string parent = Path.GetDirectoryName(zipPath);
             if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
-            try { if (File.Exists(part)) File.Delete(part); } catch { }
+            try { if (File.Exists(part)) File.Delete(part); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
             var dirs = new List<string>();
             var plan = new List<(string Entry, string Path, long Size)>();
@@ -88,7 +88,7 @@ internal static class AppBackup
         }
         catch (Exception ex)
         {
-            try { if (File.Exists(part)) File.Delete(part); } catch { }
+            try { if (File.Exists(part)) File.Delete(part); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             error = ex.Message;
             return false;
         }
@@ -109,7 +109,7 @@ internal static class AppBackup
                     if (file.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) continue;
                     string rel = Path.GetRelativePath(path, file).Replace('\\', '/');
                     long size = 0;
-                    try { size = new FileInfo(file).Length; } catch { }
+                    try { size = new FileInfo(file).Length; } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
                     plan.Add((prefix + "/" + item + "/" + rel, file, size));
                 }
             }
@@ -117,7 +117,7 @@ internal static class AppBackup
             {
                 if (path.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) continue;
                 long size = 0;
-                try { size = new FileInfo(path).Length; } catch { }
+                try { size = new FileInfo(path).Length; } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
                 plan.Add((prefix + "/" + item, path, size));
             }
         }
@@ -249,7 +249,7 @@ internal static class AppBackup
         }
         finally
         {
-            try { if (Directory.Exists(temp)) Directory.Delete(temp, true); } catch { }
+            try { if (Directory.Exists(temp)) Directory.Delete(temp, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         }
     }
 

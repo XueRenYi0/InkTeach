@@ -86,7 +86,7 @@ internal static class DiagLog
                 + $" vram={GpuVramMb} hz={RefreshHz} dpi={Dpi} ui={UiScale.ToString("F2", CultureInfo.InvariantCulture)}"
                 + $" screen={ScreenSize} session={SessionId}");
         }
-        catch { }
+        catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
     }
 
     // ---- 状态 ----
@@ -125,14 +125,14 @@ internal static class DiagLog
             SessionId = DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Environment.ProcessId.ToString("x");
             SessionStartText = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
         }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
 
         try
         {
             Console.SetOut(new Tee(Console.Out));
             Console.SetError(new Tee(Console.Error));
         }
-        catch { }
+        catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
 
         WriteHeader();
 
@@ -145,12 +145,12 @@ internal static class DiagLog
                     AppendRaw("===== 未处理异常（进程即将退出）=====\n" + e.ExceptionObject);
                     FlushNow();      // 崩溃前同步落盘：这批比平时任何一条都值得留下
                 }
-                catch { }
+                catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
             };
             // 崩溃最怕"最后 0.5 秒还在队列里"——退出时同步搬一次。
-            AppDomain.CurrentDomain.ProcessExit += (_, _) => { try { FlushNow(); } catch { } };
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => { try { FlushNow(); } catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ } };
         }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
 
         new Thread(Pump) { IsBackground = true, Name = "DiagLog" }.Start();
     }
@@ -230,7 +230,7 @@ internal static class DiagLog
                     if (File.Exists(f)) CopyShared(f, Path.Combine(stage, name));
                 }
             }
-            catch { }
+            catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             File.WriteAllText(Path.Combine(stage, "环境.txt"), BuildSummary(includeOlder),
                               new UTF8Encoding(false));
             try
@@ -238,7 +238,7 @@ internal static class DiagLog
                 File.WriteAllText(Path.Combine(stage, "session.json"),
                     BuildSessionJson(includeOlder), new UTF8Encoding(false));
             }
-            catch { }
+            catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             try
             {
                 string problem = BuildProblemText(note, context);
@@ -246,7 +246,7 @@ internal static class DiagLog
                     File.WriteAllText(Path.Combine(stage, "问题.txt"), problem,
                                       new UTF8Encoding(false));
             }
-            catch { }
+            catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             try
             {
                 if (File.Exists(crashPath))
@@ -255,7 +255,7 @@ internal static class DiagLog
                     copiedCrash = true;
                 }
             }
-            catch { }
+            catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
             if (File.Exists(destPath)) File.Delete(destPath);
             try
@@ -263,20 +263,20 @@ internal static class DiagLog
                 string parent = Path.GetDirectoryName(destPath);
                 if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
             }
-            catch { }
+            catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             ZipFile.CreateFromDirectory(stage, destPath);
             // 崩溃记录**只带一次**：否则一个 10-16 的自检崩溃会被复制进 10-17 的每一份
             // 日志里，分析时每次都要先排除它（真实踩到）。导出成功后改名；真正的下一次
             // 崩溃会重新写 last-crash.txt。
             if (copiedCrash)
             {
-                try { File.Move(crashPath, crashPath + ".sent", true); } catch { }
+                try { File.Move(crashPath, crashPath + ".sent", true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             }
             return destPath;
         }
         finally
         {
-            try { Directory.Delete(stage, true); } catch { }
+            try { Directory.Delete(stage, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         }
     }
 
@@ -339,7 +339,7 @@ internal static class DiagLog
             var p = System.Diagnostics.Process.GetCurrentProcess();
             sb.AppendLine($"本次运行：{p.StartTime:yyyy-MM-dd HH:mm:ss} 起，已运行 {(DateTime.Now - p.StartTime).TotalMinutes:F1} 分钟");
         }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
         sb.AppendLine($"系统：{RuntimeInformation.OSDescription}（{RuntimeInformation.OSArchitecture}）");
         sb.AppendLine($".NET：{Environment.Version}；进程 {RuntimeInformation.ProcessArchitecture}，{(Environment.Is64BitProcess ? "64" : "32")} 位");
         sb.AppendLine($"机器：{Environment.MachineName}");
@@ -353,7 +353,7 @@ internal static class DiagLog
             var x = EnvExtra?.Invoke();
             if (!string.IsNullOrEmpty(x)) sb.AppendLine($"屏幕：{x}");
         }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
         sb.AppendLine();
         sb.AppendLine($"日志文件（{(includeOlder ? "最多 4 份 / 8MB" : "最近 2 份 / 4MB")}）：");
         try
@@ -365,7 +365,7 @@ internal static class DiagLog
                     sb.AppendLine($"  {name}  {new FileInfo(f).Length / 1024.0:F0} KB");
             }
         }
-        catch { }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         return sb.ToString();
     }
 
@@ -376,8 +376,8 @@ internal static class DiagLog
     {
         while (true)
         {
-            try { Thread.Sleep(500); } catch { }
-            try { FlushNow(); } catch { }
+            try { Thread.Sleep(500); } catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
+            try { FlushNow(); } catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
         }
     }
 
@@ -390,11 +390,11 @@ internal static class DiagLog
             sb.AppendLine();
             sb.AppendLine($"====== InkTeach {ProductInfo.Version} 启动 · {DateTime.Now:yyyy-MM-dd HH:mm:ss} ======");
             if (SessionId.Length > 0) sb.AppendLine($"会话 {SessionId}");
-            try { sb.AppendLine($"系统 {RuntimeInformation.OSDescription}（{RuntimeInformation.OSArchitecture}）· 进程 {(Environment.Is64BitProcess ? "64" : "32")} 位 · {Environment.MachineName}"); } catch { }
-            try { sb.AppendLine($"机器 {MachineModel} · {CpuName} · RAM {RamGb}G"); } catch { }
+            try { sb.AppendLine($"系统 {RuntimeInformation.OSDescription}（{RuntimeInformation.OSArchitecture}）· 进程 {(Environment.Is64BitProcess ? "64" : "32")} 位 · {Environment.MachineName}"); } catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
+            try { sb.AppendLine($"机器 {MachineModel} · {CpuName} · RAM {RamGb}G"); } catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
             File.AppendAllText(CurrentPath, sb.ToString(), new UTF8Encoding(false));
         }
-        catch { }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
     }
 
     /// <summary>不限流直插（头部 / 崩溃专用）。</summary>
@@ -482,7 +482,7 @@ internal static class DiagLog
 
     static void CloseWriter()
     {
-        try { _w?.Dispose(); } catch { }
+        try { _w?.Dispose(); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         _w = null;
     }
 
@@ -501,7 +501,7 @@ internal static class DiagLog
             }
             if (File.Exists(CurrentPath)) File.Move(CurrentPath, Path.Combine(Dir, "inkteach.1.log"), true);
         }
-        catch { }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         _bytes = 0;
     }
 
@@ -515,32 +515,32 @@ internal static class DiagLog
 
         public override void Write(char c)
         {
-            try { _inner.Write(c); } catch { }
+            try { _inner.Write(c); } catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
             DiagLog.Feed(c);
         }
 
         public override void Write(string s)
         {
-            try { _inner.Write(s); } catch { }
+            try { _inner.Write(s); } catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
             if (!string.IsNullOrEmpty(s)) DiagLog.Feed(s.AsSpan());
         }
 
         public override void WriteLine(string s)
         {
-            try { _inner.WriteLine(s); } catch { }
+            try { _inner.WriteLine(s); } catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
             if (!string.IsNullOrEmpty(s)) DiagLog.Feed(s.AsSpan());
             DiagLog.EndLine();
         }
 
         public override void WriteLine()
         {
-            try { _inner.WriteLine(); } catch { }
+            try { _inner.WriteLine(); } catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
             DiagLog.EndLine();
         }
 
         public override void Flush()
         {
-            try { _inner.Flush(); } catch { }
+            try { _inner.Flush(); } catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
         }
     }
     /// <summary>日志收集仓坐标（建好后把令牌回填到下面；空 = 未配置、按钮提示改用导出）。</summary>
@@ -603,21 +603,21 @@ internal static class DiagLog
             string md = k?.GetValue("SystemProductName") as string;
             _model = ((mk ?? "").Trim() + " " + (md ?? "").Trim()).Trim();
         }
-        catch { }
+        catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
         if (string.IsNullOrEmpty(_model)) _model = "未知";
         try
         {
             using var k = Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\CentralProcessor\0");
             _cpu = ((k?.GetValue("ProcessorNameString") as string) ?? "").Trim();
         }
-        catch { }
+        catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
         if (string.IsNullOrEmpty(_cpu)) _cpu = "未知";
         try
         {
             var m = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
             if (GlobalMemoryStatusEx(ref m)) _ramGb = (int)Math.Round(m.ullTotalPhys / 1024.0 / 1024.0 / 1024.0);
         }
-        catch { }
+        catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -760,10 +760,10 @@ internal static class DiagLog
                 if (File.Exists(Path.Combine(Dir, name))) names.Add("\"" + J(name) + "\"");
             logs = string.Join(",", names);
         }
-        catch { }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
         string hwErr = "";
-        try { hwErr = Gfx.HardwareError ?? ""; } catch { }
+        try { hwErr = Gfx.HardwareError ?? ""; } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         if (hwErr.Length > 240) hwErr = hwErr[..240];
 
         return "{"
@@ -954,7 +954,7 @@ internal static class DiagLog
     {
         var http = new HttpClient(new HttpClientHandler { UseProxy = false });
         http.Timeout = TimeSpan.FromSeconds(seconds);
-        try { http.DefaultRequestHeaders.UserAgent.ParseAdd("InkTeach-log/" + ProductInfo.Version); } catch { }
+        try { http.DefaultRequestHeaders.UserAgent.ParseAdd("InkTeach-log/" + ProductInfo.Version); } catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
         return http;
     }
 
@@ -1186,7 +1186,7 @@ public partial class InkEngine
             Console.WriteLine("[日志] 上传失败，转导出：" + msg);
             ExportLogsFromUi();
         }
-        try { if (_logUploadZip != null) File.Delete(_logUploadZip); } catch { }
+        try { if (_logUploadZip != null) File.Delete(_logUploadZip); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         _logUploadZip = null;
     }
 
@@ -1248,7 +1248,7 @@ public partial class InkEngine
         // 半死不活的"给 GitHub 用的代理"会把上传卡到超时）。
         using var http = new HttpClient(new HttpClientHandler { UseProxy = false });
         http.Timeout = TimeSpan.FromSeconds(120);
-        try { http.DefaultRequestHeaders.UserAgent.ParseAdd("InkTeach-log/" + ProductInfo.Version); } catch { }
+        try { http.DefaultRequestHeaders.UserAgent.ParseAdd("InkTeach-log/" + ProductInfo.Version); } catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
 
         string api = $"https://api.gitcode.com/api/v5/repos/{DiagLog.LogUploadOwner}/{DiagLog.LogUploadRepo}";
         string b64 = Convert.ToBase64String(File.ReadAllBytes(zipPath));
@@ -1262,7 +1262,7 @@ public partial class InkEngine
         if (!resp.IsSuccessStatusCode)
         {
             string t = "";
-            try { t = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult(); } catch { }
+            try { t = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult(); } catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
             throw new Exception($"http={(int)resp.StatusCode}"
                 + (t.Length > 0 ? "；" + t.Substring(0, Math.Min(160, t.Length)) : ""));
         }

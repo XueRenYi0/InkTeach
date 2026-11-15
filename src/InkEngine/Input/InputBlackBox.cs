@@ -43,7 +43,7 @@ internal static class InputBlackBox
 
     public static void Close()
     {
-        try { _sw?.Flush(); _sw?.Dispose(); } catch { }
+        try { _sw?.Flush(); _sw?.Dispose(); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         _sw = null;
     }
 

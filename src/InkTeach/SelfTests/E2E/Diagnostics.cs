@@ -1243,7 +1243,7 @@ internal sealed partial class App
 
         // 临时目录：文件与备份都不碰用户真货（和 Recovery / PptStore 一个套路）。
         string temp = Path.Combine(Path.GetTempPath(), "inkteach-inkfiletest");
-        try { if (Directory.Exists(temp)) Directory.Delete(temp, true); } catch { }
+        try { if (Directory.Exists(temp)) Directory.Delete(temp, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         Directory.CreateDirectory(temp);
         string backupDir = Path.Combine(temp, "backup");
         InkFileStore.BackupDirOverride = backupDir;
@@ -1372,7 +1372,7 @@ internal sealed partial class App
             {
                 var probe = new InkDocument();
                 try { InkSerializer.LoadInto(probe, File.ReadAllBytes(files[0])); matches = SigOfDoc(probe) == sigBeforeOpen2; }
-                catch { }
+                catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             }
             Check("打开前备份：内容 = 打开前那一份板书（能解析、逐项对）", matches,
                   "备份文件自己也要解得回来——只断'文件存在'等于没验");
@@ -1428,7 +1428,7 @@ internal sealed partial class App
             File.SetLastWriteTimeUtc(oldPptB, DateTime.UtcNow.AddDays(-100));
 
             // 备份目录重造：一旧一新（前面轮转留下的 5 份清掉，判据才确定）
-            try { Directory.Delete(backupDir, true); } catch { }
+            try { Directory.Delete(backupDir, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             Directory.CreateDirectory(backupDir);
             string oldBak = Path.Combine(backupDir, "板书-打开前-20000101-000000000.inkb");
             string newBak = Path.Combine(backupDir, "板书-打开前-20990101-000000000.inkb");
@@ -1498,7 +1498,7 @@ internal sealed partial class App
                 var head = File.ReadAllBytes(anyPng);
                 pngHead = head.Length > 8 && head[0] == 0x89 && head[1] == 0x50 && head[2] == 0x4E;
             }
-            catch { }
+            catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             Check("保存…：.png 内容真的是 PNG", pngHead, "");
 
             // 先往**桌面槽**放一笔：验证"打开落白板槽、桌面不动"（2026-10-16 白板独立槽）。
@@ -1525,7 +1525,7 @@ internal sealed partial class App
         Doc.ResetToSinglePage();
         Doc.ClearHistory();
 
-        try { Directory.Delete(temp, true); } catch { }
+        try { Directory.Delete(temp, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         InkFileStore.BackupDirOverride = null;
 
         Console.WriteLine();
@@ -3104,7 +3104,7 @@ internal sealed partial class App
         //   落盘（带时间戳）、压测（2 万行不卡）、限流（丢行只记数）、导出 zip（内容齐）+ 轮转。
         {
             string logDir = Path.Combine(Path.GetTempPath(), "inkteach-logtest");
-            try { if (Directory.Exists(logDir)) Directory.Delete(logDir, true); } catch { }
+            try { if (Directory.Exists(logDir)) Directory.Delete(logDir, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             DiagLog.Retarget(logDir);
 
             // ⚠ 读日志文件要用**共享读**：写线程把它开着（FileShare.ReadWrite），
@@ -3174,7 +3174,7 @@ internal sealed partial class App
             }
             catch (Exception ex) { entries = "打开失败：" + ex.Message; }
             Check("导出 zip：默认只带最近 2 份 + 环境.txt", zipOk, entries);
-            try { File.Delete(zipDefault); } catch { }
+            try { File.Delete(zipDefault); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
             string zipAll = Path.Combine(Path.GetTempPath(), "inkteach-logtest-all.zip");
             DiagLog.ExportZip(zipAll, includeOlder: true,
@@ -3198,7 +3198,7 @@ internal sealed partial class App
             catch (Exception ex) { allEntries = "打开失败：" + ex.Message; }
             Check("导出 zip：勾更早 = 4 份 + 问题.txt（原话 + 自动上下文）", allOk,
                   allEntries + " / 问题.txt=" + (problem.Length > 0 ? "有" : "空"));
-            try { File.Delete(zipAll); } catch { }
+            try { File.Delete(zipAll); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
             // ⑥ 上传日志：未配置 / 自检档下必须**只提示、不抛错不卡**（老师机器上更不能炸）
             {
@@ -3230,7 +3230,7 @@ internal sealed partial class App
     private void LogTest()
     {
         string zip = Path.Combine(Path.GetTempPath(), "inkteach-logtest-" + Environment.ProcessId + ".zip");
-        try { if (File.Exists(zip)) File.Delete(zip); } catch { }
+        try { if (File.Exists(zip)) File.Delete(zip); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
         int pass = 0, fail = 0;
         void Check(string name, bool ok, string detail = "")

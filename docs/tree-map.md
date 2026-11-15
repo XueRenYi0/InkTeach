@@ -136,7 +136,7 @@
       - `Overlay.Frame.cs` 1,638 行 — 覆盖层帧渲染：内容/界面/装饰合成。
       - `Overlay.PptBar.cs` 654 行 — PPT 条/回放条/滚动条绘制。
       - `Overlay.Radial.cs` 657 行 — 呼出盘绘制。
-      - `Overlay.Readout.cs` 1,466 行 — 读数、收藏面板、滚动条、回放/PPT 条绘制。
+      - `Overlay.Readout.cs` 1,460 行 — 读数、收藏面板、滚动条、回放/PPT 条绘制。
       - `Overlay.SelectionBar.cs` 1,065 行 — 选中操作条/色板/字体/图层/菜单的绘制。
       - `Overlay.Toast.cs` 339 行
       - `Overlay.Ui.cs` 1,445 行 — 界面层合成与界面位图上传。
@@ -152,7 +152,7 @@
 
     **InkEngine/Shapes/**
       - `CollectionFingerprint.cs` 99 行
-      - `Engine.Library.cs` 1,109 行 — 收藏库：面板开合/页签/分类/选择/落盘。
+      - `Engine.Library.cs` 1,105 行 — 收藏库：面板开合/页签/分类/选择/落盘。
       - `Engine.Library.Input.cs` 1,013 行 — 收藏库指针输入：拖拽/整理/排序/页签拖动。
       - `Engine.Library.Layout.cs` 583 行 — 收藏面板插入/几何/尺寸/拖拽落位。
       - `Engine.Library.Menu.cs` 407 行 — 收藏库 ⋯ 菜单、过滤、滚动。
@@ -186,7 +186,7 @@
       - `TextBoxSelection.cs` 474 行
       - `TextInputService.cs` 568 行
       - `TextStyles.cs` 413 行
-      - `WindowlessTextControl.cs` 1,096 行 — 无窗口 RichEdit（ITextServices）宿主。
+      - `WindowlessTextControl.cs` 1,098 行 — 无窗口 RichEdit（ITextServices）宿主。
 
   **InkLocalization/**
     - `Loc.cs` 344 行
@@ -273,7 +273,7 @@
         - `SelMenuTest.cs` 215 行
         - `SettingsAudit.cs` 550 行
         - `ShapeAudit.cs` 104 行
-        - `ShapeLibrary.cs` 4,488 行 — 图形面板/收藏 E2E。
+        - `ShapeLibrary.cs` 4,475 行 — 图形面板/收藏 E2E。
         - `ShapePanel.cs` 845 行 — 图形面板专项 E2E。
         - `SnapTest.cs` 219 行
         - `Startup.cs` 41 行

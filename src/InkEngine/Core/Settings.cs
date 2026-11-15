@@ -140,7 +140,7 @@ internal static class InkSettings
                 if (bad == null && string.Equals(key, "url", StringComparison.OrdinalIgnoreCase))
                     return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
         }
-        catch { }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         return null;
     }
 

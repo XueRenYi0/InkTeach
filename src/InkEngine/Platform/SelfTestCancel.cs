@@ -37,7 +37,7 @@ internal static class SelfTestCancel
             Console.WriteLine("[自检] 取消键：Ctrl+Alt+Shift+C（全局；UI 卡住也能停）");
             Console.WriteLine("[自检] 终端里也可以 Ctrl+C。取消会把自检子进程一起结束。");
         }
-        catch { }
+        catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
 
         try
         {
@@ -47,7 +47,7 @@ internal static class SelfTestCancel
                 Cancel("终端 Ctrl+C");
             };
         }
-        catch { }
+        catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
 
         var t = new Thread(Watch)
         {
@@ -63,7 +63,7 @@ internal static class SelfTestCancel
         // 起跑时如果这几个键本来就按着，先等松开，避免“一启动就取消”。
         while (Down(VK_CONTROL) && Down(VK_MENU) && Down(VK_SHIFT) && Down(VK_C))
         {
-            try { Thread.Sleep(50); } catch { }
+            try { Thread.Sleep(50); } catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
         }
 
         bool was = false;
@@ -76,30 +76,30 @@ internal static class SelfTestCancel
                 return;
             }
             was = now;
-            try { Thread.Sleep(25); } catch { }
+            try { Thread.Sleep(25); } catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
         }
     }
 
     static void Cancel(string reason)
     {
-        try { Console.WriteLine("[自检] 已取消（" + reason + "），正在退出…"); } catch { }
+        try { Console.WriteLine("[自检] 已取消（" + reason + "），正在退出…"); } catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
 
-        try { SelfTestTracker.KillChildren(); } catch { }
+        try { SelfTestTracker.KillChildren(); } catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
 
         // 直接结束进程：UI 线程可能正卡在同步探测/子进程等待里，不能等它自己退。
         // 但 Environment.Exit 会跑 ProcessExit（日志 flush/写盘），极端情况下也可能被
         // 慢盘/锁拖住——所以 1.5 秒还没退就强制 Kill 自己。取消键必须“一定能停”。
         var exit = new Thread(() =>
         {
-            try { Environment.Exit(ExitCodeCancelled); } catch { }
+            try { Environment.Exit(ExitCodeCancelled); } catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
         })
         {
             IsBackground = true,
             Name = "SelfTestCancel-Exit",
         };
         exit.Start();
-        try { exit.Join(1500); } catch { }
-        try { Process.GetCurrentProcess().Kill(); } catch { }
+        try { exit.Join(1500); } catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
+        try { Process.GetCurrentProcess().Kill(); } catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
     }
 
     // ---- 键盘状态 ----
@@ -132,7 +132,7 @@ internal static class SelfTestTracker
         {
             foreach (var p in _children)
             {
-                try { if (!p.HasExited) p.Kill(); } catch { }
+                try { if (!p.HasExited) p.Kill(); } catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
             }
             _children.Clear();
         }

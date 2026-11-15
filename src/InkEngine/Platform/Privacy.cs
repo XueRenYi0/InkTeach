@@ -57,6 +57,6 @@ internal static class PrivacyStore
                 "consent=" + (granted ? "granted" : "denied") + "\n" +
                 "at=" + (at ?? "") + "\n");
         }
-        catch { }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
     }
 }

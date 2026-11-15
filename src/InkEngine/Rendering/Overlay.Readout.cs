@@ -878,12 +878,6 @@ internal sealed partial class OverlayWindow
             }
         }
 
-        void Poly(Vector2[] pts, bool close)
-        {
-            for (int i = 1; i < pts.Length; i++) Line(pts[i - 1].X, pts[i - 1].Y, pts[i].X, pts[i].Y);
-            if (close && pts.Length > 2) Line(pts[^1].X, pts[^1].Y, pts[0].X, pts[0].Y);
-        }
-
         int sides = variant is >= 3 and <= 6 ? variant : 4;
 
         Vector2[] BasePoints(float rx, float ry, float baseY, int n)

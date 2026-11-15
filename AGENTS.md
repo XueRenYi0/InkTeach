@@ -4,6 +4,8 @@
 > 再用 `docs/module-map.md`（30 条跨文件流程）定位“首读 + 下一跳”；
 > 行号看 `docs/section-map.md`。只读命中的那一段，不整文件通读。
 > 完整规范见 `docs/dev-standard.md`（10 条硬规则 + 提交流程）。
+> 提交前跑 `powershell -ExecutionPolicy Bypass -File tools/check-all.ps1`（build 告警 + 三个索引 + 结构基线，约 15 秒）。
+> 改私有字段前先查 `docs/state-map.md`（状态爆炸半径）；结构规则见 `docs/architecture.md` ADR-005。
 
 ## 0. 开发最高原则（2026-11-01 用户拍板，优先于下面所有条目）
 

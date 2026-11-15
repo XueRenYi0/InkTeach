@@ -12,7 +12,7 @@ internal sealed partial class App
     private void LibraryShow(string path)
     {
         string dir = Path.Combine(Path.GetTempPath(), "inkteach-library-show");
-        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         ShapeLibrary.DirOverride = dir;
 
         SetUiFactory(() => new InkUi.FullUi());
@@ -192,7 +192,7 @@ internal sealed partial class App
 
         CloseLibraryPanel();
         ShapeLibrary.DirOverride = null;
-        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         _quit = true;
     }
 }

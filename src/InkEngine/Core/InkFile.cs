@@ -61,7 +61,7 @@ internal static class InkFileStore
             Array.Sort(files, StringComparer.Ordinal);
             for (int i = 0; i < files.Length - BackupKeep; i++)
             {
-                try { File.Delete(files[i]); } catch { }
+                try { File.Delete(files[i]); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             }
         }
         catch (Exception ex) { Console.WriteLine("备份轮转失败（不影响使用）：" + ex.Message); }

@@ -156,19 +156,19 @@ internal sealed partial class App : InkEngine.InkEngine
         if (_selfCheckMode && PptStore.RootOverride == null)
         {
             PptStore.RootOverride = Path.Combine(Path.GetTempPath(), "inkteach-selfcheck-ppt");
-            try { if (Directory.Exists(PptStore.RootOverride)) Directory.Delete(PptStore.RootOverride, true); } catch { }
+            try { if (Directory.Exists(PptStore.RootOverride)) Directory.Delete(PptStore.RootOverride, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         }
         // 文档批注缓存同理：自检每次启动先清空这份临时缓存（和 PptStore 一样，别碰用户真目录）
         if (_selfCheckMode && DocStore.RootOverride == null)
         {
             DocStore.RootOverride = Path.Combine(Path.GetTempPath(), "inkteach-selfcheck-doc");
-            try { if (Directory.Exists(DocStore.RootOverride)) Directory.Delete(DocStore.RootOverride, true); } catch { }
+            try { if (Directory.Exists(DocStore.RootOverride)) Directory.Delete(DocStore.RootOverride, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         }
         // 板书历史（0 号页快照）同理：自检绝不写用户的历史目录。
         if (_selfCheckMode && BoardHistory.DirOverride == null)
         {
             BoardHistory.DirOverride = Path.Combine(Path.GetTempPath(), "inkteach-selfcheck-history");
-            try { if (Directory.Exists(BoardHistory.DirOverride)) Directory.Delete(BoardHistory.DirOverride, true); } catch { }
+            try { if (Directory.Exists(BoardHistory.DirOverride)) Directory.Delete(BoardHistory.DirOverride, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             BoardHistory.CloseSession();
         }
         // 运行日志同理（2026-10-16）：自检**不往用户的日志目录灌**——一轮自检的日志
@@ -2105,7 +2105,7 @@ internal sealed partial class App : InkEngine.InkEngine
 
         if (msg == Native.WM_LBUTTONDOWN)
         {
-            try { File.AppendAllText(_clickLogFile, "clicked\n"); } catch { }
+            try { File.AppendAllText(_clickLogFile, "clicked\n"); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             return true;
         }
         if (msg == Native.WM_CLOSE) { _quit = true; return true; }

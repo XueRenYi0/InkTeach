@@ -62,7 +62,7 @@ internal static class UpdateProbe
 
         // ---- ③ 本地取清单（file:// 与裸路径）---------------------------------
         string dir = Path.Combine(Path.GetTempPath(), "inkteach-updatetest");
-        try { Directory.CreateDirectory(dir); } catch { }
+        try { Directory.CreateDirectory(dir); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         string manifestPath = Path.Combine(dir, "update.json");
         File.WriteAllText(manifestPath, """
             { "version": "7.6.5", "url": "本地.zip", "sha256": "00", "notes": "本地自检" }
@@ -185,7 +185,7 @@ internal static class UpdateProbe
         //   所以现在改成**真跑**：假安装目录 + 一个能解出 marker 的小 zip + 不存在的 Exe，
         //   跑完验"备份留了、新文件到位、日志里有 extracted"。
         string sandbox = Path.Combine(dir, "sandbox");
-        try { if (Directory.Exists(sandbox)) Directory.Delete(sandbox, true); } catch { }
+        try { if (Directory.Exists(sandbox)) Directory.Delete(sandbox, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         Directory.CreateDirectory(sandbox);
         string instDir = Path.Combine(sandbox, "App-1.0");
         Directory.CreateDirectory(instDir);
@@ -211,7 +211,7 @@ internal static class UpdateProbe
                       && File.Exists(Path.Combine(instDir, "unins000.dat"))
                       && File.Exists(Path.Combine(instDir, "unins000.msg"));
         string swapLog = "";
-        try { swapLog = File.ReadAllText(Path.Combine(swapDir, "swap.log")); } catch { }
+        try { swapLog = File.ReadAllText(Path.Combine(swapDir, "swap.log")); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
         Check("换壳（沙箱真跑）：跑得起来且解压到位", swapOk && newArrived, swapMsg);
         Check("换壳（沙箱真跑）：旧目录留了备份（可回滚）", backupKept,
@@ -232,7 +232,7 @@ internal static class UpdateProbe
 
         // ---- ⑥a 旧备份清理（2026-10-29 用户截图：同一目录堆了 3 个 .old）----
         string cleanupRoot = Path.Combine(dir, "cleanup");
-        try { if (Directory.Exists(cleanupRoot)) Directory.Delete(cleanupRoot, true); } catch { }
+        try { if (Directory.Exists(cleanupRoot)) Directory.Delete(cleanupRoot, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         Directory.CreateDirectory(cleanupRoot);
         string cleanupMain = Path.Combine(cleanupRoot, "InkTeach-9.4.2-win-x64");
         Directory.CreateDirectory(cleanupMain);
@@ -251,7 +251,7 @@ internal static class UpdateProbe
 
         // ---- ⑥b 从 .old 备份启动时，不能再套一层 .old ----
         string nestedRoot = Path.Combine(dir, "nested");
-        try { if (Directory.Exists(nestedRoot)) Directory.Delete(nestedRoot, true); } catch { }
+        try { if (Directory.Exists(nestedRoot)) Directory.Delete(nestedRoot, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         Directory.CreateDirectory(nestedRoot);
         string nestedMain = Path.Combine(nestedRoot, "InkTeach-9.4.2-win-x64");
         Directory.CreateDirectory(nestedMain);
@@ -350,7 +350,7 @@ internal static class UpdateProbe
             string err = p.StandardError.ReadToEnd();
             if (!p.WaitForExit(120000))
             {
-                try { p.Kill(true); } catch { }
+                try { p.Kill(true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
                 return (false, "换壳脚本超时（120 秒）");
             }
             string msg = err.Trim().Length > 0 ? err.Trim() : outp.Trim();

@@ -26,7 +26,7 @@ internal sealed partial class App
 
         // 独立的临时目录（App 的自检 override 也在临时目录，这里再嵌一层，互不干扰）。
         string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inkteach-historytest");
-        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         BoardHistory.DirOverride = dir;
         BoardHistory.CloseSession();
 
@@ -102,7 +102,7 @@ internal sealed partial class App
                     loaded2 = InkSerializer.LoadStrokes(
                         System.IO.File.ReadAllBytes(snap), out _).Count;
             }
-            catch { }
+            catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             Check("桌面批注**不进快照**（白板独立槽）", wrote2 && loaded2 == 2, $"读回 {loaded2} 条");
             Doc.SwitchPage(InkDocument.BoardPageKey);             // 回白板继续后面的用例
         }
@@ -134,8 +134,8 @@ internal sealed partial class App
               $"剩 {left} 份；最老两份还在？{!oldestGone}");
         BoardHistory.MaxBytes = keepMax;
         // 清掉假文件，别干扰后面的"找回"（真快照那一份要留着）。
-        for (int i = 0; i < 5; i++) { try { System.IO.File.Delete(moved[i]); } catch { } }
-        try { Directory.Delete(rot, true); } catch { }
+        for (int i = 0; i < 5; i++) { try { System.IO.File.Delete(moved[i]); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ } }
+        try { Directory.Delete(rot, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
         // ---------- ③ 找回：走"打开墨迹"那条路（先备份当前板书） ----------
         int backupsBefore = InkFileStore.BackupCount();
@@ -275,7 +275,7 @@ internal sealed partial class App
         // 收尾：临时目录与记忆都放掉
         BoardHistory.CloseSession();
         BoardHistory.DirOverride = null;
-        try { Directory.Delete(dir, true); } catch { }
+        try { Directory.Delete(dir, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         Doc.Clear();
         SettleFrames(80);
         _quit = true;

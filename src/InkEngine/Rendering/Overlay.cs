@@ -44,7 +44,7 @@ internal static class Mem
     /// "free but still resident".</summary>
     public static void TrimWorkingSet()
     {
-        try { Native.EmptyWorkingSet(Native.GetCurrentProcess()); } catch { }
+        try { Native.EmptyWorkingSet(Native.GetCurrentProcess()); } catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
     }
 }
 
@@ -202,7 +202,7 @@ internal static class Gfx
                 var d1 = a1.Description1;
                 softFlag = (d1.Flags & Vortice.DXGI.AdapterFlags.Software) != 0;
             }
-            catch { }
+            catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
             if (softFlag
                 || AdapterName.Contains("WARP", StringComparison.OrdinalIgnoreCase)
                 || AdapterName.Contains("Basic Render", StringComparison.OrdinalIgnoreCase)
@@ -213,7 +213,7 @@ internal static class Gfx
                         + (IsSoftware ? "  → 软件渲染（WARP）"
                            : dedicated < 512UL * 1048576 ? "  → 核显（显存来自系统内存）" : "  → 独显");
         }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
 
         D2DFactory = D2D1.D2D1CreateFactory<ID2D1Factory1>(
             Vortice.Direct2D1.FactoryType.SingleThreaded, DebugLevel.None);
@@ -943,7 +943,7 @@ internal sealed partial class OverlayWindow : IDisposable
         if (!_trailActive || _inkTrail == null) { _trailActive = false; return; }
         _trailActive = false;
         try { if (_trailGeneration != 0) _inkTrail.RemoveTrailPoints(_trailGeneration); }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
         // 收笔撤轨迹同样算"结账"（诊断口径：喂 = 结账 + 在场）。
         int outstanding = _trailPointsFed - _trailPointsRemoved;
         if (outstanding > 0) { InkTrailPointsRemoved += outstanding; _trailPointsRemoved = _trailPointsFed; }

@@ -70,7 +70,7 @@ internal sealed partial class App
         finally
         {
             OcrClient.ConfigPathOverride = old;
-            try { Directory.Delete(dir, true); } catch { }
+            try { Directory.Delete(dir, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         }
 
         Console.WriteLine(ok ? "结论：OK" : "结论：FAIL");

@@ -126,7 +126,7 @@ internal static class TextBoxFaces
                 if (string.Equals(family, name, StringComparison.OrdinalIgnoreCase))
                     return true;
         }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
         return false;
     }
 
@@ -213,11 +213,11 @@ internal static class TextBoxFaces
                     if (excludeCjk && FamilyHasCharacter(fam, '\u4E2D')) continue;
                     name = DisplayName(fam);
                 }
-                catch { }
+                catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
                 if (!string.IsNullOrWhiteSpace(name) && seen.Add(name)) result.Add(name);
             }
         }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
         if (result.Count == 0)
             return SystemFamilies;
         result.Sort(StringComparer.OrdinalIgnoreCase);
@@ -254,13 +254,13 @@ internal static class TextBoxFaces
                         hasCjk = FamilyHasCharacter(fam, '\u4E2D');      // “中”
                         name = DisplayName(fam);
                     }
-                    catch { }
+                    catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
                     if (string.IsNullOrWhiteSpace(name) || !seen.Add(name)) continue;
                     (IsCjkName(name) ? cn : other).Add(name);
                     if (hasCjk) _cjkFamilyList.Add(name);
                 }
             }
-            catch { }
+            catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
             if (cn.Count == 0 && other.Count == 0)
             {
                 // DirectWrite 枚举失败时退回 Skia（只是少见的兜底）。
@@ -273,7 +273,7 @@ internal static class TextBoxFaces
                             _cjkFamilyList.Add(family);     // 兜底时按名字粗略当中文
                         }
                 }
-                catch { }
+                catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
             }
             var zh = StringComparer.Create(new System.Globalization.CultureInfo("zh-CN"), false);
             cn.Sort(zh);                                     // 中文按拼音序
@@ -299,7 +299,7 @@ internal static class TextBoxFaces
                 if (font.HasCharacter(ch)) return true;
             }
         }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
         return false;
     }
 

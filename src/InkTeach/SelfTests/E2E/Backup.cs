@@ -23,7 +23,7 @@ internal sealed partial class App
         }
 
         string root = Path.Combine(Path.GetTempPath(), "inkteach-backup-test");
-        try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
+        try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         string roaming = Path.Combine(root, "roaming");
         string local = Path.Combine(root, "local");
         Directory.CreateDirectory(Path.Combine(roaming, "Library"));
@@ -192,13 +192,13 @@ internal sealed partial class App
                   $"成功 {upd.Success}，宽度 {reread?.Strokes?[0].Width:F1}（原 {beforeW:F1}）");
 
             ShapeLibrary.DirOverride = null;
-            try { if (Directory.Exists(lib1)) Directory.Delete(lib1, true); } catch { }
-            try { if (Directory.Exists(lib2)) Directory.Delete(lib2, true); } catch { }
+            try { if (Directory.Exists(lib1)) Directory.Delete(lib1, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
+            try { if (Directory.Exists(lib2)) Directory.Delete(lib2, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         }
 
         AppBackup.RoamingRootOverride = null;
         AppBackup.LocalRootOverride = null;
-        try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
+        try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
         Console.WriteLine(fail == 0
             ? $"  PASS: 全局备份 / 恢复都对（{pass} 项）"

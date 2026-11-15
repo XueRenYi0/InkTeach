@@ -57,7 +57,7 @@ internal static class DocMemory
         get
         {
             int primary = 0;
-            try { primary = Native.GetSystemMetrics(0); } catch { }
+            try { primary = Native.GetSystemMetrics(0); } catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
             return $"{Name}/<={LayoutWidth(primary)}px/cache1/flip{FlipMs:F0}ms";
         }
     }

@@ -533,7 +533,7 @@ internal static class ExportFileDialog
         {
             if (_cbtHook != IntPtr.Zero) { UnhookWindowsHookEx(_cbtHook); _cbtHook = IntPtr.Zero; }
         }
-        catch { }
+        catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
     }
 
     /// <summary>钩子回调：在对话框**出生/激活**的那一刻把它摆到中间。</summary>
@@ -547,7 +547,7 @@ internal static class ExportFileDialog
         //  但通用对话框第一次显示走的不发 ACTIVATE——所以主路放在 CREATEWND。）
         if (nCode == HCBT_CREATEWND && lParam != IntPtr.Zero && !_cbtCenteredOnce)
         {
-            try { TryPlaceAtBirth(wParam, lParam); } catch { }
+            try { TryPlaceAtBirth(wParam, lParam); } catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
         }
         // HCBT_ACTIVATE：兜底——若某条路径真的是"先激活"（窗口已创建但没经过上面那条），
         // 在激活前再用"只挪位置"的方式摆一次。异常绝不许外抛（系统回调，抛=crupt）。
@@ -560,7 +560,7 @@ internal static class ExportFileDialog
                 _cbtSeenX = before.Left; _cbtSeenY = before.Top;
                 _cbtApplied = CenterOnce(wParam, out _, out _, quiet: true);
             }
-            catch { }
+            catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
         }
         return CallNextHookEx(_cbtHook, nCode, wParam, lParam);
     }
@@ -839,7 +839,7 @@ internal static class ExportFileDialog
                                $"{DateTime.Now:HH:mm:ss} {msg}{Environment.NewLine}");
             Console.WriteLine("[导出] " + msg);
         }
-        catch { }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
     }
 
     private const int OFN_OVERWRITEPROMPT = 0x00000002;

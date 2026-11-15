@@ -105,7 +105,7 @@ internal static class PptStore
                     list.Add(id);
             }
         }
-        catch { }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         return list;
     }
 
@@ -119,7 +119,7 @@ internal static class PptStore
             File.WriteAllText(Path.Combine(dir, "Position"),
                 slide.ToString(CultureInfo.InvariantCulture));
         }
-        catch { }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
     }
 
     public static int LoadPosition(string key)
@@ -139,7 +139,7 @@ internal static class PptStore
     public static void DeletePage(string key, int pageKey)
     {
         try { BackgroundSaver.WriteBlocking("PPT 批注", FileOf(key, pageKey), null); }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
     }
 
     /// <summary>
@@ -572,7 +572,7 @@ public partial class InkEngine
             SavePageToDisk(key);
             saved++;
         }
-        try { PptStore.SavePosition(_pptKey, PptSlide); } catch { }
+        try { PptStore.SavePosition(_pptKey, PptSlide); } catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
         if (saved > 0) Console.WriteLine($"[PPT] 已保存 {saved} 页批注");
     }
 
@@ -587,7 +587,7 @@ public partial class InkEngine
             var dir = Path.Combine(PptStore.Root, _pptKey);
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
         }
-        catch { }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
     }
 
     // ---- 翻页命令（给底部那两条 + 长按菜单用）----------------------------------

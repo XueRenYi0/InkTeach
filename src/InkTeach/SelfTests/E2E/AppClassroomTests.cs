@@ -426,7 +426,7 @@ internal sealed partial class App
         SetPassThroughFromUi(false);
         SetRollSeedForTest(12345);
         string noNames = Path.Combine(Path.GetTempPath(), "inkteach-no-names.txt");
-        try { File.Delete(noNames); } catch { }
+        try { File.Delete(noNames); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         InkEngine.InkEngine.NamesPathOverride = noNames;
         ReloadNamesFromUi();
         SettleFrames(100);
@@ -617,8 +617,8 @@ internal sealed partial class App
         // 收尾：清掉测试名单与覆盖
         InkEngine.InkEngine.NamesPathOverride = null;
         ReloadNamesFromUi();
-        try { File.Delete(namesPath); } catch { }
-        try { File.Delete(noNames); } catch { }
+        try { File.Delete(namesPath); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
+        try { File.Delete(noNames); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         SettleFrames(100);
 
         Console.WriteLine();

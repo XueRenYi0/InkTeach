@@ -106,7 +106,7 @@ internal sealed partial class App
         }
 
         string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inkteach-library-test");
-        try { if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, true); } catch { }
+        try { if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         ShapeLibrary.DirOverride = dir;
 
         // 界面要挂上：图库的两个入口（操作条那颗图标要靠界面推上来的主题画、
@@ -145,7 +145,7 @@ internal sealed partial class App
         if (SkipIfNoSyntheticInput("收藏"))
         {
             ShapeLibrary.DirOverride = null;
-            try { if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, true); } catch { }
+            try { if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             _quit = true;
             return;
         }
@@ -170,19 +170,6 @@ internal sealed partial class App
             SendMouse((int)((x0 + x1) * 0.5f), (int)((y0 + y1) * 0.5f), 0); SettleFrames(40);
             SendMouse((int)x1, (int)y1, 0);                                 SettleFrames(40);
             SendMouse((int)x1, (int)y1, Native.MOUSEEVENTF_LEFTUP);         SettleFrames(holdFrames);
-        }
-        // 拖卡片到分类：先经过标题栏（抽屉自动展开），再进分类行——
-        // 直接斜穿会落回卡片区，被当成排序。
-        void DragCardToRow(float x0, float y0, float rowX, float rowY)
-        {
-            var hdr = LibraryPanelInfoNow().Header;
-            float hx = hdr.MinX + 24f * uiK;
-            float hy = (hdr.MinY + hdr.MaxY) * 0.5f;
-            SendMouse((int)x0, (int)y0, 0);                                 SettleFrames(60);
-            SendMouse((int)x0, (int)y0, Native.MOUSEEVENTF_LEFTDOWN);       SettleFrames(60);
-            SendMouse((int)hx, (int)hy, 0);                                 SettleFrames(150);
-            SendMouse((int)rowX, (int)rowY, 0);                             SettleFrames(150);
-            SendMouse((int)rowX, (int)rowY, Native.MOUSEEVENTF_LEFTUP);     SettleFrames(250);
         }
         void ClickPhys(float x, float y)
         {
@@ -1209,7 +1196,7 @@ internal sealed partial class App
         }
 
         CloseLibraryPanel();
-        try { if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, true); } catch { }
+        try { if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         Console.WriteLine(fail == 0
             ? $"  PASS: 图库（存入 / 面板 / 插入 / 回收站 / 排序 / 整理 / 导入透明图 / 星标 / 重置 / 穿透隐藏 / 触摸滚动 / 吸附）都对（{pass} 项）"
             : $"  FAIL: {fail} 项不对（{pass} 项通过）");

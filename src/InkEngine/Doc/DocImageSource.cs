@@ -223,7 +223,7 @@ internal static class DocImageSource
     private static LoadedImage GetImage(string path)
     {
         string key = path;
-        try { key += "|" + System.IO.File.GetLastWriteTimeUtc(path).Ticks; } catch { }
+        try { key += "|" + System.IO.File.GetLastWriteTimeUtc(path).Ticks; } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         if (_cache != null)
         {
             if (_cacheKey == key) return _cache;

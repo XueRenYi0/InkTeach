@@ -343,3 +343,151 @@ AOT 产物实测（不是 JIT）：
   39 个关键文件补了 `// [职责]` 头。
 - `--unittest` 5/5 通过；`check-tree-map` / `check-section-map` / `check-module-map` 均返回 0。
 - 评分（两份独立评审）：手工 map 6/10，树 + 少量语义表 **8/10**。
+
+## ADR-005 AI 修改成本：状态爆炸半径与追加式修改的收口（2026-11-15，提案）
+
+> **状态：提案，未执行。** 待用户批准后按 P0 → P1 → P2 施工。
+> 本 ADR 只增补 ADR-002/003/004，不推翻任何一条；冲突处已在「与既有 ADR 的关系」写明。
+
+### 背景（2026-11-15 实测）
+
+规模与超标：
+
+| 指标 | 现状 | ADR-002 口径 |
+| --- | --- | --- |
+| .cs / 行数 | 270 / 164,424 | — |
+| 文件 >800 / >1,000 / >2,000 行 | 55 / 42 / **19** | 新拆文件 800–2,000 |
+| 其中自检文件 >2,000 | 5 | 自检不设硬上限 |
+| 未登记的超 2,000 行产品文件 | **12** | 超限需拆分或写明豁免 |
+| 方法 >100 / >200 / >400 行 | 187 / 68 / 23 | 无 |
+| 空 `catch {}` | 191（**171 处无注释**） | 无 |
+| 编译告警 | 12 条（未使用字段/本地函数、CS8632） | 0 新增 |
+| L1 单元测试 | **5 条** | 目标 <2 秒 |
+| SelfTests 代码量 | 33,417 行（编进发布 exe） | 不拆 |
+
+真正的问题不是行数，是**状态不可见**和**追加式修改**：
+
+| partial 族 | 文件 | 行数 | 私有字段 | 被同族其他文件引用 | 比例 |
+| --- | --- | --- | --- | --- | --- |
+| `Engine` | 24 | 20,247 | 344 | **272** | **79%** |
+| `FullUi` | 8 | 10,276 | 140 | 113 | 81% |
+| `Overlay` | 13 | 9,730 | 123 | 86 | 70% |
+| `Model` | 8 | 8,646 | 64 | 4 | 6% |
+
+`Engine._dirty` 被 **23 个文件**读写，`_windows` 被 15 个文件引用。`Model` 只有 6%，说明
+"几何算法自洽、状态不外泄"是能做到的；`Engine` 的 79% 是反面样本。
+
+变更集中在同一批文件（近 150 commit）：`App.cs` 62 次、`Engine.cs` 57、`FullUi.cs` 38、
+`Overlay.cs` 35、`Selection.cs` 20。近 38 个 `src` commit 的改动文件数中位 **4**、均值 13.7
+（被大重构拉高）。
+
+追加式修改的典型：`App.RunModeDispatch` **1,935 行、197 个 mode（195 条 `if`/`else if` 分支）**；
+`--help` 手写 130 条，**77 个 mode 不在 help 里**，另有 `--list-modes` 从未实现。
+help 文案在基类与 `App` 里各写一份，已经开始漂移。
+
+### 决策
+
+**D1. 指标增加"状态爆炸半径"，不新增行数硬指标。**
+沿续 ADR-002 的 Read Budget（单需求 ≤800 行、≤3 文件、banner 段 ≤300 行）；
+新增：一个私有字段被多少个同族 partial 文件读写 = 该字段的爆炸半径。
+改动排序用 `churn × 半径`，不用行数。按此排序，第一优先是 `App.cs`（62 次 × 197 分支），
+不是 `Engine.cs`（57 次 × 24 文件，但拆分风险最高）。
+
+**D2. 消灭"追加式修改"：自检分发改注册表。**
+`RunModeDispatch` 的 197 个 `if` 分支改为按域的显式注册表：
+
+- handler 写成 `SelfTests/` 下的静态类/静态方法，**不新增 App 的 partial**（见 D6）；
+- 每个域一个 `static (string Mode, string Help, Func<App, string[], int> Run)[]` 数组，
+  集中在 `SelfTestCatalog.cs` 拼接；
+- `--help` 与新增 `--list-modes`（输出 mode → 文件 → 验证命令）从注册表生成，不再手写；
+- AOT 安全：照抄 `UnitTestRunner` 已验过的显式数组，禁止 `Assembly.GetTypes()`/反射；
+- **序言保全**：`App.cs:144–209` 的临时目录隔离（`InkSettings.PathOverride` / `Recovery` /
+  `PptStore` / `DocStore` / `BoardHistory` / `DiagLog`）必须保持原序逐行不动——2026-10-01
+  PptStore 污染事故就是顺序问题。重构 commit 内必须重跑 `--unittest` + `--keytest` +
+  `--startupcheck`。
+
+**D3. 只做增量收口，存量不追溯。**
+新代码不得给 `Engine` / `FullUi` / `Overlay` 新增私有字段或 partial 文件；需要新状态时
+新建组合对象（`internal` 字段原样搬迁，不改可见性、不改字段名）。存量 24 个 Engine
+partial 冻结，不主动重写。
+
+**D4. 可见性优先于重构：状态地图是"拆类的裁判"，不是替代品。**
+新增 `tools/gen-state-map.ps1` → `docs/state-map.md`：只列"被 ≥2 个同族文件引用"的字段，
+按扇入 Top 20，总长 ≤400 行；每条给"读它的文件 / 写它的文件"。
+它降低**定位成本**，不降低**验证成本**（`_dirty` 仍要改 23 处）。
+因此拆分触发条件写死：**同一字段组出现 2 次以上真实 bug，或单次改动跨 >5 文件**，
+才允许做组合提取；否则只更新地图。
+
+**D5. 规范变成可执行检查，用"基线白名单"而不是 diff 解析。**
+- 根 `.editorconfig` + `Directory.Build.props`：现有 12 条告警清零，之后禁止新增
+  （`TreatWarningsAsErrors` 先只对新增项目/新文件开，避免存量红海）。
+- `tools/check-all.ps1` 一条命令：build + 4 个 check + 结构检查，输出 ≤20 行；
+  `publish.ps1` 前置调用。
+- `--archetest`（或并入 `--unittest`）：文件 >800 行、方法 >120 行、字段跨 >5 文件、
+  空 catch 无注释、新文件无 `[职责]` → 对照 `tools/structure-baseline.json` 白名单；
+  只报"新增违规"，存量 19 个文件/23 个方法显式登记。不做 git diff 解析（rename 会误判）。
+
+**D6. partial 预算裁决。**
+ADR-002 写"单类 partial ≤20"，`Engine` 已 24 个。本 ADR 明确：
+存量 `Engine` 24 个冻结为既成事实；**新增 partial 文件一律禁止**（含自检）；
+新类最多 6 个 partial。自检 handler 放 `SelfTests/`，不挂到 `App` partial 上。
+
+### 与既有 ADR 的关系
+
+- ADR-002「不提取 `InputController` / `RenderPipeline` 服务类」**继续有效**：D3 只禁止新增，
+  D4 只在触发条件下允许小步组合，不做大重构。
+- ADR-002「不引 Roslyn/MCP/tree-sitter」**继续有效**：状态地图用正则+现有脚本，不加依赖。
+- ADR-002「Read Budget ≤800 行/≤3 文件」**继续有效**，D1 增补状态维度。
+- ADR-003「AOT 等价」**继续有效**：D2 的注册表必须是显式数组。
+- ADR-004「三层索引」**继续有效**：`state-map` 是第四张表（状态），不替代前三张。
+
+### 不做什么
+
+| 不做 | 理由 |
+| --- | --- |
+| Roslyn / MCP / tree-sitter 符号图 | ADR-002 已否决；`grep` + section-map + state-map 够用 |
+| 每模块 `Ports.cs` / `_feature.md` | 三个评审一致反对：没有第二个实现时只是多一个文件要读；`module-map` 已覆盖 |
+| 条件编译把自检剔出发布 exe | AOT 冒烟实测要跑 `--unittest`/`--keytest`；剔除会破坏现有验证链 |
+| Engine/FullUi 大重构、按行数拆 | ADR-002 已否决；D4 的触发条件未满足前不做 |
+| 拆 `SelfTests/` | ADR-002 已否决；自检按需读 50 行，不整文件通读 |
+| 改 `App : InkEngine` 继承、字段可见性 | 会破坏自检读内部状态；D3 明确禁止 |
+| 新增 DI / 事件总线 / 新项目 | 硬规则第 10 条；对按需读取无帮助 |
+
+### 分期
+
+| 阶段 | 内容 | 验证 | 回滚 |
+| --- | --- | --- | --- |
+| P0 护栏（1–2 天） | `.editorconfig` + `Directory.Build.props`；`check-all.ps1`；`gen-state-map.ps1` + `state-map.md`；171 处空 catch 各补一行原因；根 `AGENTS.md` ≤120 行 | build 0 error、0 新增 warning；4 个 check 全过；`check-all` ≤60 秒 | 纯新增文件 + 注释，`git revert` |
+| P1 注册表（3–5 天） | `SelfTestCatalog` + 197 个 handler 迁移；`--list-modes`；help 自动生成；`--archetest` 基线 | `--unittest` / `--keytest` / `--startupcheck` 三条全过；`--help` 行数 ≥ 迁移前 | 单个 commit，纯剪切 |
+| P2 按需（不做计划） | 新功能的组合化；state-map 触发的小步 seam；纯逻辑补 L1 | 各自 L2 | 每步独立 commit |
+
+### 验收标准
+
+- `App.cs` ≤400 行（现 2,277）；新增一条自检的 diff ≤2 个文件（现：大 if 链 + 两处 help）。
+- 新增文件 0 告警、0 无注释空 `catch`、0 新 partial；`check-all` 全绿且 ≤60 秒。
+- `state-map` 覆盖 5 个 partial 族、≤400 行；人工抽检 10 条字段→文件映射正确。
+- 回放最近 10 个需求：经 `module-map` + `section-map` + `state-map` 定位后，
+  单次读取 ≤3 个文件、≤800 行（人工记录在 `reports/`）。
+
+### 三模型对照（2026-11-15）
+
+同一份草案分别交给 Claude Sonnet 5.5、Grok 4.7、GLM-5.3-Flash 只读评审，结论一致为
+**GO-WITH-CHANGES**，但侧重点不同：
+
+| 模型 | 采纳 | 否决/降级 |
+| --- | --- | --- |
+| Sonnet 5.5 | 先抽 `DirtyTracker` 做 seam；注册表；空 catch 改 `Swallow(ex, tag)`；门槛分新旧 | 自检条件编译（与 AOT 冒烟冲突）；`Ports.cs`/`_feature.md`（仪式） |
+| Grok 4.7 | AOT 显式注册表；`App : InkEngine` 继承不可动；不追溯废止 partial；索引不替代三层 | 追溯废止 ADR-002 的 partial 决策；把 `symbols.json` 当新索引层 |
+| GLM-5.3-Flash | 序言保全条款；`state-map` 是拆类的裁判；state-map 限 ≤400 行；archetest 降级 | diff 级 archetest（rename 误判）；`Swallow()` 横扫 191 处 |
+
+共识（三条评审都提到）：**按状态所有权而不是行数**、**只做增量不追溯**、**注册表必须 AOT 显式**。
+分歧只有一处：`Engine` 要不要现在拆。本 ADR 取"不拆"，理由是 ADR-002 已评估过风险收益，
+且当前没有"2 次真实 bug / 跨 >5 文件"的证据；先用 `state-map` 把风险量化。
+
+### 风险
+
+- **注册表迁移 1,935 行**是本 ADR 最大动作：必须纯剪切、序言不动、三条自检全过；
+  任何一条不过就整 commit 回滚，不夹带修复。
+- **state-map 正则误判**（字段名出现在字符串/注释里）：只输出 ≥2 文件引用项，人工抽检 10 条；
+  误报不影响构建，只影响阅读。
+- **拆类诱惑**：D4 的触发条件必须写进 `dev-standard.md`，否则下个会话又会以"文件太大"为由开拆。

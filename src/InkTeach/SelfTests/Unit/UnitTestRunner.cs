@@ -114,7 +114,7 @@ internal static class UnitTestRunner
     private static void ApplyIsolation()
     {
         string tmp = Path.Combine(Path.GetTempPath(), "inkteach-unittest");
-        try { Directory.CreateDirectory(tmp); } catch { }
+        try { Directory.CreateDirectory(tmp); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
         if (InkSettings.PathOverride == null)
             InkSettings.PathOverride = Path.Combine(tmp, "settings.json");

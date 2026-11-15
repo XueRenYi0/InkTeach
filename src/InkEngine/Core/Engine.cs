@@ -77,7 +77,7 @@ public partial class InkEngine
             if (_mainThreadId != 0)
                 Native.PostThreadMessage(_mainThreadId, PptWatcher.WakeMessage, IntPtr.Zero, IntPtr.Zero);
         }
-        catch { }
+        catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
     }
 
     /// <summary>主循环每拍：后台来的页到了就置脏，下一拍走渲染（在 SyncDocPages 里采纳）。</summary>

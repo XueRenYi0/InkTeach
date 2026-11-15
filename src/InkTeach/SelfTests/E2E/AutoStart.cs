@@ -94,7 +94,7 @@ internal sealed partial class App
         }
         finally
         {
-            try { Registry.CurrentUser.DeleteSubKeyTree(root, throwOnMissingSubKey: false); } catch { }
+            try { Registry.CurrentUser.DeleteSubKeyTree(root, throwOnMissingSubKey: false); } catch { /* 有意忽略：读取失败走默认值（ADR-005 D5） */ }
             AutoStart.ResetTestPaths();
         }
 

@@ -120,7 +120,7 @@ internal static class BoardHistory
             foreach (var f in Directory.GetFiles(Dir, "*.inkb"))
             {
                 try { var fi = new FileInfo(f); files.Add(fi); total += fi.Length; }
-                catch { }
+                catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             }
             if (total <= MaxBytes) return;
 
@@ -130,7 +130,7 @@ internal static class BoardHistory
                 if (total <= MaxBytes) break;
                 if (_sessionPath != null
                     && string.Equals(f.FullName, _sessionPath, StringComparison.OrdinalIgnoreCase)) continue;
-                try { total -= f.Length; f.Delete(); } catch { }
+                try { total -= f.Length; f.Delete(); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             }
         }
         catch (Exception ex) { Console.WriteLine("板书历史轮转失败（不影响使用）：" + ex.Message); }
@@ -146,11 +146,11 @@ internal static class BoardHistory
             foreach (var f in Directory.GetFiles(Dir, "*.inkb"))
             {
                 try { var fi = new FileInfo(f); list.Add((fi.FullName, fi.LastWriteTime, fi.Length)); }
-                catch { }
+                catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             }
             list.Sort((a, b) => b.Time.CompareTo(a.Time));
         }
-        catch { }
+        catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         return list;
     }
 }

@@ -29,7 +29,7 @@ internal static class FavoriteTransfer
         {
             string parent = Path.GetDirectoryName(zipPath);
             if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
-            try { if (File.Exists(part)) File.Delete(part); } catch { }
+            try { if (File.Exists(part)) File.Delete(part); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
             using (var fs = new FileStream(part, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
@@ -61,7 +61,7 @@ internal static class FavoriteTransfer
         }
         catch (Exception ex)
         {
-            try { if (File.Exists(part)) File.Delete(part); } catch { }
+            try { if (File.Exists(part)) File.Delete(part); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
             error = ex.Message;
             return false;
         }
@@ -143,7 +143,7 @@ internal static class FavoriteTransfer
         }
         finally
         {
-            try { if (Directory.Exists(temp)) Directory.Delete(temp, true); } catch { }
+            try { if (Directory.Exists(temp)) Directory.Delete(temp, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         }
     }
 }

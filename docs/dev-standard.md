@@ -101,7 +101,8 @@ powershell -ExecutionPolicy Bypass -File tools/check-headers.ps1
 2. 新文件/改动文件符合目录、命名、规模规则。
 3. >600 行文件有 `[职责]` + `[测试]` 头。
 4. `module-map` 的首读/下一跳/测试与实际一致（入口变了才改）。
-5. `check-tree-map` / `check-section-map` / `check-module-map` / `check-headers` 全过。
+5. `check-tree-map` / `check-section-map` / `check-module-map` / `check-headers` 全过；
+   ADR-005 起用 `tools/check-all.ps1` 一条命令跑完（含 build 告警基线与结构基线）。
 6. `dotnet build -c Release` 通过（或 `.\run.ps1` 编译通过）。
 7. 跑了 1 条相关 L1/L2，记录命令与结果；未跑全量要注明。
 8. 有 AOT 风险或发版时，跑了 AOT 冒烟。
@@ -122,6 +123,10 @@ powershell -ExecutionPolicy Bypass -File tools/check-headers.ps1
 ## 10. 禁止事项
 
 - 禁止把新逻辑继续堆进已超 2,000 行的文件。
+- **ADR-005 起：禁止给 `Engine` / `FullUi` / `Overlay` 新增私有字段或 partial 文件**；
+  新状态用组合对象，存量冻结。空 `catch` 必须带一行原因。
+- **拆分只看 ADR-005 D4 的触发条件**（同一字段组 2 次以上真实 bug，或单次改动跨 >5 文件），
+  不按行数、不按"看起来太大"。
 - 禁止手改 `tree-map` / `section-map`。
 - 禁止只跑 build/grep 就宣称 UI/输入/渲染已验证。
 - 禁止把单一状态机拆到多个文件“凑小”。

@@ -90,7 +90,7 @@ internal static unsafe class ComLate
     public static void Release(IntPtr p)
     {
         if (p == IntPtr.Zero) return;
-        try { ((delegate* unmanaged[Stdcall]<IntPtr, int>)Vtbl(p)[2])(p); } catch { }
+        try { ((delegate* unmanaged[Stdcall]<IntPtr, int>)Vtbl(p)[2])(p); } catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
     }
 
     /// <summary>IUnknown::QueryInterface（槽位 0）。</summary>
@@ -184,7 +184,7 @@ internal static unsafe class ComLate
 
     private static void Clear(ref Variant v)
     {
-        try { VariantClear((IntPtr)Unsafe.AsPointer(ref v)); } catch { }
+        try { VariantClear((IntPtr)Unsafe.AsPointer(ref v)); } catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
     }
 
     /// <summary>读一个整数属性；拿不到返回 false。</summary>

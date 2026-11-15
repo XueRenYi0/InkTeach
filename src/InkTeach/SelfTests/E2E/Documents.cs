@@ -452,7 +452,7 @@ internal sealed partial class App
             b.SetPropertyItem(item);
             b.Save(pExif, System.Drawing.Imaging.ImageFormat.Jpeg);
         }
-        catch { }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
         if (System.IO.File.Exists(pExif) && DocImageSource.TryReadInfo(pExif, out int ew, out int eh))
         {
             if (ew == 200 && eh == 300)
@@ -549,7 +549,7 @@ internal sealed partial class App
               DocView.Count == 0 && ImageData.LiveImages == imgBefore && ImageData.LiveBytes == bytesBefore,
               $"LiveImages {imgBefore} ⇐ {ImageData.LiveImages}");
 
-        try { Directory.Delete(dir, true); } catch { }
+        try { Directory.Delete(dir, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
         // ------------------------------------------------------------------
         Console.WriteLine("  -- C1 PDFium：加载 / 打开 / 页尺寸 / 渲染 --");
@@ -643,7 +643,7 @@ internal sealed partial class App
                   errBad ?? "(没报错)");
         }
 
-        try { Directory.Delete(pdfDir, true); } catch { }
+        try { Directory.Delete(pdfDir, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
         // ------------------------------------------------------------------
         Console.WriteLine("  -- C3 页码条 + 文档批注独立页空间 + 自动保存/读回 --");
@@ -1031,7 +1031,7 @@ internal sealed partial class App
             if (Doc.PageKey != 0) Doc.SwitchPage(0);
             Doc.Clear();
             Doc.ClearHistory();
-            try { Directory.Delete(pdfDir2, true); } catch { }
+            try { Directory.Delete(pdfDir2, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
         }
 
         // ------------------------------------------------------------------

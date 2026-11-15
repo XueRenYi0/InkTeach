@@ -42,12 +42,21 @@ param(
     #   · **不碰更新清单**（update.json / update-mirror.json / 仓库根那份），
     #   · 默认不装"安装包"（测试包发 zip 就够了，要就再加 -NoSetup:$false 那种没用——直接别传 NoSetup）。
     # 版本号仍是 csproj 里那个（自动更新要比它），**只是包名换了**。
-    [string]$Label = ""
+    [string]$Label = "",
+    # ADR-005 D5：默认先跑 check-all（索引/结构/告警门禁）。
+    # 只有明确知道自己在干什么的演练才跳过；正式发版不要加。
+    [switch]$SkipChecks
 )
 if ($Jit -and $Aot) { throw "-Jit 和 -Aot 只能选一个（默认就是 AOT）" }
 $useAot = -not $Jit
 
 $ErrorActionPreference = "Stop"
+
+# ADR-005 D5：发版前门禁。check-all 内部已包含 Release build + 4 个索引检查 + 结构基线。
+if (-not $SkipChecks) {
+    & (Join-Path $PSScriptRoot "tools\check-all.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "check-all 未通过，发布中止（演练可加 -SkipChecks）" }
+}
 
 # 便携版 .NET 10 SDK：如果没在 PATH 里（本机全局是 9.x），垫到最前面——
 # 否则 `dotnet publish` 会报 NETSDK1045（当前 SDK 不支持 net10.0）。

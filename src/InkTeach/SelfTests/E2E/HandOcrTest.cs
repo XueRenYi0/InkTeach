@@ -114,7 +114,7 @@ internal sealed partial class App
         {
             OcrClient.TestOverride = null;
             listener.Stop();
-            try { server.Wait(2000); } catch { }
+            try { server.Wait(2000); } catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
         }
         Console.WriteLine(ok ? "结论：OK" : "结论：FAIL");
         ExitCode = ok ? 0 : 1;

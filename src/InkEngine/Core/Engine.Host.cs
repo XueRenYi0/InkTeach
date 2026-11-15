@@ -40,11 +40,11 @@ public partial class InkEngine
                 Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), utf8) { AutoFlush = true });
                 Console.SetError(new StreamWriter(Console.OpenStandardError(), utf8) { AutoFlush = true });
             }
-            catch { }
+            catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
         }
         else
         {
-            try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
+            try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { /* 有意忽略：日志失败不能再抛（ADR-005 D5） */ }
         }
         Native.SetProcessDpiAwarenessContext(Native.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         Native.EnableMouseInPointer(true);
