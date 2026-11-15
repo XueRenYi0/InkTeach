@@ -1,3 +1,6 @@
+// [职责] 界面层合成与界面位图上传。
+// [测试] --uitest
+
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;

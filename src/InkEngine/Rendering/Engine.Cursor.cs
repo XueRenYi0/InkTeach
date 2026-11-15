@@ -1,3 +1,6 @@
+// [职责] 光标形状与滚动条交互。
+// [测试] --cursortest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

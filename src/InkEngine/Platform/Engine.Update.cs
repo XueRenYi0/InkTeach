@@ -1,3 +1,6 @@
+// [职责] 自动更新：检查/下载/换壳。
+// [测试] --updatetest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

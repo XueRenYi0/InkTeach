@@ -23,7 +23,7 @@
 | 需求 / 功能 | 首读 | 下一跳 | 测试 |
 | --- | --- | --- | --- |
 | 操作条颜色/粗细/线型 | `InkEngine/Core/Engine.SelectionBar.cs` | 外观 `InkEngine/Rendering/Overlay.SelectionBar.cs` | `--seltest` |
-| 操作条按钮动作 | `InkEngine/Core/Engine.Selection.Actions.cs` | `Engine.SelectionBar.cs` | `--seltest` |
+| 操作条按钮动作 | `InkEngine/Core/Engine.SelectionBar.Actions.cs` | `Engine.SelectionBar.cs` | `--seltest` |
 | 框选/套索/拖动/对齐 | `InkEngine/Core/Engine.Selection.Gesture.cs` | `InkEngine/Core/Selection.cs` | `--seltest` / `--lassotest` |
 | 图形端点编辑/吸附 | `InkEngine/Core/Engine.Selection.Vertex.cs` | `Model.Stroke.Curves.cs` · `Model.Stroke.Tangent.cs` · `Model.Stroke.Solids.cs` | `--handletest` |
 | 图片美化 | `InkEngine/Core/Engine.Selection.Beautify.cs` | `InkEngine/Export/PhotoBeautify.cs` | `--inkbeautify` |
@@ -47,7 +47,7 @@
 | 图形识别 | `InkEngine/Shapes/ShapeRecognize.cs` | `PointCloudRecognizer.cs` | `--inktest` |
 | 图形卡 / 图形库 | `InkEngine/Shapes/ShapeCatalog.cs` | `ShapePreview.cs` | `--shapepaneltest` |
 | 设置页 | `InkUi/Panels/FullUi.Settings.cs` | `InkEngine/Core/Settings.cs` | `--settingsaudit` |
-| 更多面板 / 日志页 | `InkUi/Panels/FullUi.More.cs` | `InkUi/Shell/FullUi.Hit.cs` | `--paneltest` |
+| 更多面板 / 日志页 | `InkUi/Panels/FullUi.MorePanel.cs` | `InkUi/Shell/FullUi.Interaction.cs` | `--paneltest` |
 | 键位 / 热键 | `InkEngine/Platform/KeyBindings.cs` | `InkEngine/Platform/Engine.Hotkey.cs` | `--keytest` |
 | 自动更新 | `InkEngine/Platform/Update.cs` | `InkEngine/Platform/Engine.Update.cs` | `--updatetest` |
 | 启动 / 模式分发 | `InkTeach/Host/App.cs` | `InkEngine/Core/Engine.Host.cs` | `--startupcheck` |

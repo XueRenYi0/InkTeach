@@ -1,3 +1,6 @@
+// [职责] 笔迹识别自检（--inktest）。
+// [测试] --inktest
+
 using System.Numerics;
 using InkEngine;
 

@@ -1,3 +1,6 @@
+// [职责] 课堂窗绘制：卡片/按钮/名牌/环/分段表。
+// [测试] --timertest
+
 using System;
 using System.Collections.Generic;
 using System.Numerics;

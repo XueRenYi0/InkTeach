@@ -1,3 +1,6 @@
+// [职责] 图形面板/收藏 E2E。
+// [测试] --shapepaneltest / --librarytest
+
 // 本文件由 App.cs 拆出（2026-10-07）：ShapeLibrary 这一组。
 // **纯搬家，逻辑一字未改** —— 靠 partial class 共享 App 的私有成员。
 // 拆开的目的：产品代码与自检代码互不干扰，人和 AI 读代码时不必互相穿插。

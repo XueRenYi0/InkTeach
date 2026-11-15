@@ -1,4 +1,7 @@
-﻿using System.Runtime.InteropServices;
+// [职责] Win32 P/Invoke 集合。
+// [测试] --unittest
+
+using System.Runtime.InteropServices;
 
 namespace InkEngine;
 

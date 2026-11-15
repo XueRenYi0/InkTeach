@@ -1,3 +1,6 @@
+// [职责] 热键处理：WM_HOTKEY → 动作。
+// [测试] --keytest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

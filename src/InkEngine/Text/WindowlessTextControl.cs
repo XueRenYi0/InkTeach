@@ -1,3 +1,6 @@
+// [职责] 无窗口 RichEdit（ITextServices）宿主。
+// [测试] --textboxsim
+
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;

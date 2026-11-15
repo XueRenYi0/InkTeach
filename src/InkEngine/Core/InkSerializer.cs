@@ -1,3 +1,6 @@
+// [职责] .inkb 序列化：笔画/图像/块格式。
+// [测试] --savetest / --unittest Serializer
+
 using System.Numerics;
 using Vortice.Mathematics;
 

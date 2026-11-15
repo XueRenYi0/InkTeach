@@ -1,3 +1,6 @@
+// [职责] 图形面板专项 E2E。
+// [测试] --shapepaneltest
+
 // 图形面板专项（--shapepaneltest）
 //
 // 只测这次改动的一条线：

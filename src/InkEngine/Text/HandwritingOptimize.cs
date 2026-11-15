@@ -1,3 +1,6 @@
+// [职责] AI 手写优化：选中文字 → 识别 → 字形重排。
+// [测试] --handreplace
+
 using System;
 using System.Collections.Generic;
 using System.Linq;

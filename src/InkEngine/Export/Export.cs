@@ -1,3 +1,6 @@
+// [职责] 导出格式表：PNG/JPEG/BMP 与编码器选择。
+// [测试] --iotest
+
 using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text;

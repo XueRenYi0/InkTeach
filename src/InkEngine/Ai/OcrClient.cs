@@ -1,3 +1,6 @@
+// [职责] OCR 客户端：图片 → 逐行文字（OpenAI 兼容）。
+// [测试] --handocr
+
 using System;
 using System.Collections.Generic;
 using System.IO;

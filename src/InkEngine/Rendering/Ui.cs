@@ -1,3 +1,6 @@
+// [职责] 界面接入契约：IOverlayUi / IEngineCommands / UiState。
+// [测试] --uitest
+
 using Vortice.Direct2D1;
 using Vortice.DirectWrite;
 using Vortice.Mathematics;

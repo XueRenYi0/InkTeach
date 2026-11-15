@@ -1,3 +1,6 @@
+// [职责] 笔迹运动模型对照台（M0–M7）。
+// [测试] --motiontest
+
 using System.Numerics;
 using System.Runtime.CompilerServices;
 

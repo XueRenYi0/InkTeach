@@ -1,3 +1,6 @@
+// [职责] 覆盖层帧渲染：内容/界面/装饰合成。
+// [测试] --tiletest
+
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;

@@ -1,3 +1,6 @@
+// [职责] 呼出盘：按住/划向扇区/松手。
+// [测试] --radialtest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

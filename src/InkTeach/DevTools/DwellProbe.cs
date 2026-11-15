@@ -1,3 +1,6 @@
+// [职责] 停顿成型自检（--dwelltest）。
+// [测试] --dwelltest
+
 using System.Numerics;
 using InkEngine;
 

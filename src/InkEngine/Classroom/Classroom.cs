@@ -1,3 +1,6 @@
+// [职责] 计时/点名窗：状态、名单、窗口交互。
+// [测试] --timertest / --rolltest
+
 
 using System;
 using System.Collections.Generic;

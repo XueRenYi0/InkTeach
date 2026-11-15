@@ -1,3 +1,6 @@
+// [职责] PPT 条/回放条/滚动条绘制。
+// [测试] --ppttest
+
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;

@@ -1,3 +1,6 @@
+// [职责] 课堂窗 E2E（计时/点名）。
+// [测试] --timertest / --rolltest
+
 using System;
 using System.IO;
 using System.Linq;

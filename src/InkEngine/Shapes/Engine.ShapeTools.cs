@@ -1,3 +1,6 @@
+// [职责] 图形工具：直线/矩形/椭圆/箭头/曲线绘制。
+// [测试] --shapetest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

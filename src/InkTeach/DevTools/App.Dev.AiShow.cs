@@ -1,3 +1,6 @@
+// [职责] AI 题卡/作图展示工具（开发期）。
+// [测试] --aishow
+
 using System.Buffers;
 using System.Diagnostics;
 using System.Numerics;

@@ -1,3 +1,6 @@
+// [职责] 平滑/运动模型展示工具（开发期）。
+// [测试] --smoothshow
+
 using System.Buffers;
 using System.Diagnostics;
 using System.Numerics;

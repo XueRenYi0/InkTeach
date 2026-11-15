@@ -1,3 +1,6 @@
+// [职责] 图标绘制：路径解析/缓存/尺寸缩放。
+// [测试] --paneltest
+
 using System.Numerics;
 using InkEngine;
 using Vortice.Direct2D1;

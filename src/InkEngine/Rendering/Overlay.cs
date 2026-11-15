@@ -1,3 +1,6 @@
+// [职责] 覆盖层主文件：窗口/初始化/生命周期。
+// [测试] --selftest 8
+
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;

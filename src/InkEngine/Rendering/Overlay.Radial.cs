@@ -1,3 +1,6 @@
+// [职责] 呼出盘绘制。
+// [测试] --radialtest
+
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;

@@ -1,3 +1,6 @@
+// [职责] 引擎 ↔ 界面边界：IOverlayUi 命令转发。
+// [测试] --uitest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

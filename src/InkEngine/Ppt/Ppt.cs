@@ -1,3 +1,6 @@
+// [职责] PPT 批注：放映联动、按页落盘、翻页。
+// [测试] --ppttest
+
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
