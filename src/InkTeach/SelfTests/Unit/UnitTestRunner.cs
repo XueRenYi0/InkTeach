@@ -1,23 +1,24 @@
 using System.Diagnostics;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using InkEngine;
 
 namespace InkTeach;
 
 /// <summary>
-/// 给纯逻辑用的最小单元测试框架（零 NuGet 依赖）。
+/// 给纯逻辑用的最小单元测试框架（零 NuGet 依赖、AOT 安全）。
 ///
 /// 为什么不用 xUnit：
 ///   1. 仓库规矩是不新增包、不改 csproj；本机外网受限，还原新包有风险。
 ///   2. 新建独立测试项目会绕过宿主现成的临时目录隔离，测试可能直接读写
 ///      用户真实的 settings / 板书 / 历史目录。
 ///
+/// 为什么用**显式注册表**而不是反射：
+///   NativeAOT 会裁剪 `Assembly.GetTypes()` 找不到的类型；反射版在 AOT 产物里
+///   一条测试都找不到（2026-11-15 AOT 冒烟实测）。显式列表让测试永远在。
+///
 /// 用法：
 ///   .\run.ps1 --unittest            跑全部
 ///   .\run.ps1 --unittest EditAction 只跑名字里含 EditAction 的
-///
-/// 测试方法：internal static void，标 [UnitTest]，不建窗口、不碰 D2D。
 /// </summary>
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
 internal sealed class UnitTestAttribute : Attribute
@@ -53,22 +54,36 @@ internal static class Check
 
 internal static class UnitTestRunner
 {
+    /// <summary>
+    /// 测试注册表。新增测试：在 UnitTests.*.cs 里写 internal static void，
+    /// 然后在这里加一行。**不要改回反射**（AOT 会裁掉）。
+    /// </summary>
+    private static readonly (string Name, Action Body)[] Tests =
+    {
+        (nameof(UnitTestsCore.CollectionFingerprint_SameContent_SameKey),
+            UnitTestsCore.CollectionFingerprint_SameContent_SameKey),
+        (nameof(UnitTestsCore.EditAction_AddStrokes_UndoRedo),
+            UnitTestsCore.EditAction_AddStrokes_UndoRedo),
+        (nameof(UnitTestsCore.Serializer_Format_Is_Stable),
+            UnitTestsCore.Serializer_Format_Is_Stable),
+        (nameof(UnitTestsCore.Serializer_RoundTrip_PreservesCountAndColor),
+            UnitTestsCore.Serializer_RoundTrip_PreservesCountAndColor),
+        (nameof(UnitTestsCore.UiScale_Snap_To_Nearest_Tier),
+            UnitTestsCore.UiScale_Snap_To_Nearest_Tier),
+    };
+
     public static int Run(string[] args)
     {
         string filter = args.Length > 1 ? args[1] : "";
         ApplyIsolation();
 
-        var tests = typeof(UnitTestRunner).Assembly.GetTypes()
-            .SelectMany(t => t.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
-            .Where(m => m.GetCustomAttribute<UnitTestAttribute>() != null)
-            .Where(m => filter.Length == 0
-                        || (m.DeclaringType.Name + "." + m.Name)
-                           .IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
-            .OrderBy(m => m.DeclaringType.Name)
-            .ThenBy(m => m.Name)
-            .ToList();
+        var selected = new List<(string Name, Action Body)>();
+        foreach (var t in Tests)
+            if (filter.Length == 0
+                || t.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
+                selected.Add(t);
 
-        if (tests.Count == 0)
+        if (selected.Count == 0)
         {
             Console.WriteLine($"没有匹配 \"{filter}\" 的单元测试");
             return 1;
@@ -76,28 +91,22 @@ internal static class UnitTestRunner
 
         int failed = 0;
         var all = Stopwatch.StartNew();
-        foreach (var m in tests)
+        foreach (var t in selected)
         {
-            string name = m.DeclaringType.Name + "." + m.Name;
             var one = Stopwatch.StartNew();
             try
             {
-                m.Invoke(null, null);
-                Console.WriteLine($"PASS {name} ({one.ElapsedMilliseconds} ms)");
-            }
-            catch (TargetInvocationException ex)
-            {
-                failed++;
-                Console.WriteLine($"FAIL {name}: {ex.InnerException?.Message ?? ex.Message}");
+                t.Body();
+                Console.WriteLine($"PASS {t.Name} ({one.ElapsedMilliseconds} ms)");
             }
             catch (Exception ex)
             {
                 failed++;
-                Console.WriteLine($"FAIL {name}: {ex.Message}");
+                Console.WriteLine($"FAIL {t.Name}: {ex.Message}");
             }
         }
 
-        Console.WriteLine($"unit tests: {tests.Count - failed} passed / {failed} failed / {all.ElapsedMilliseconds} ms");
+        Console.WriteLine($"unit tests: {selected.Count - failed} passed / {failed} failed / {all.ElapsedMilliseconds} ms");
         return failed == 0 ? 0 : 1;
     }
 

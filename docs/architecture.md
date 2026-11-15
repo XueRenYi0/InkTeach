@@ -261,3 +261,28 @@ ADR-002 选择“扁平目录 + 单文件 2,000 行上限”，理由是避免�
   全部 ≤2,808，多数 ≤1,200；同一功能域的代码在一个文件里，按 `section-map` 的 banner 读。
 - **仅剩自检未拆**：`SelfTests/E2E/PanelAndKeys` 5,146、`ShapeLibrary` 3,889、
   `Diagnostics` 2,736。AI 改产品时不会读它们；按 ADR 保持现状。
+
+### AOT 冒烟（2026-11-15）
+
+命令：`publish.ps1 -Label AOTsmoke -NoZip -NoSetup -NoManifest`。
+结果：**成功**；产物 `dist/InkTeach-AOTsmoke-win-x64/`，`InkTeach.exe` 18.15 MB，
+整包 9 个文件 38.57 MB，GUI 子系统、pdfium 已带。
+
+AOT 产物实测（不是 JIT）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `--unittest` | **5/5 PASS**（0 ms） |
+| `--keytest` | PASS（键位表 / 冲突 / 落盘 / 真机注册 / 批注内按键） |
+| `--startupcheck` | **5/5 PASS**（待命态穿透、小球、叫醒展开） |
+| `--shapepaneltest` | **55/55 PASS**（图形面板 / 收藏 / 拖拽 / 落盘 / 绘制） |
+
+发现并修复：`UnitTestRunner` 原来用 `Assembly.GetTypes()` + 反射找测试，AOT 裁剪后
+一条都找不到（`--unittest` 报“没有匹配的单元测试”）。改成**显式注册表**
+（`(name, Action)[]`），消除 IL2026/IL2070，AOT 下恢复 5/5。
+
+已知限制（不影响产品）：
+- `--settingsaudit` 用 `DispatchProxy.Create`，NativeAOT 不支持动态代理，AOT 下会卡住；
+  该自检不要放进 AOT 冒烟。产品本身不依赖它。
+- 其余 AOT 警告是既有 `JsonSerializer` 匿名类型（`OcrProviders.Save`、若干自检），
+  本次拆分未引入新的产品级警告。

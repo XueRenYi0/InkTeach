@@ -24,7 +24,7 @@ internal static class UnitTestsCore
     }
 
     [UnitTest]
-    private static void Serializer_RoundTrip_PreservesCountAndColor()
+    internal static void Serializer_RoundTrip_PreservesCountAndColor()
     {
         var src = MakeStroke(4);
         src.Id = 42;
@@ -39,7 +39,7 @@ internal static class UnitTestsCore
     }
 
     [UnitTest]
-    private static void EditAction_AddStrokes_UndoRedo()
+    internal static void EditAction_AddStrokes_UndoRedo()
     {
         var doc = new InkDocument();
         var s = MakeStroke();
@@ -55,7 +55,7 @@ internal static class UnitTestsCore
     }
 
     [UnitTest]
-    private static void UiScale_Snap_To_Nearest_Tier()
+    internal static void UiScale_Snap_To_Nearest_Tier()
     {
         Check.Equal(1f, UiScalePresets.Snap(1.02f));
         Check.Equal(1.3f, UiScalePresets.Snap(1.27f));
@@ -63,7 +63,7 @@ internal static class UnitTestsCore
     }
 
     [UnitTest]
-    private static void CollectionFingerprint_SameContent_SameKey()
+    internal static void CollectionFingerprint_SameContent_SameKey()
     {
         var a = MakeStroke(4);
         var b = MakeStroke(4);
@@ -78,7 +78,7 @@ internal static class UnitTestsCore
     }
 
     [UnitTest]
-    private static void Serializer_Format_Is_Stable()
+    internal static void Serializer_Format_Is_Stable()
     {
         var s = MakeStroke(3);
         s.Id = 7;
