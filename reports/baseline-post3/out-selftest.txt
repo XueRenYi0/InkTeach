@@ -1,0 +1,56 @@
+笔迹运动模型: mean2（M6：距离窗 12px ＋ 过点曲线 ＋ 收笔追赶 ＋ 高斯权σ 3.0→1.2px）
+输入精度: himetric 亚像素（默认；逐点拿不到时自动退回整数像素；--nohimetric 对照）
+virtual desktop: 2520x1680 at (0,0)；主屏 2520x1680
+帧延迟等待对象: 已启用
+overlay on monitor 65537: 2520x1680 at (0,0) dpi=192
+湿墨档位: 0 原路径（不喂系统轨迹）（设置里记着；Ctrl+Alt+Shift+W 循环切换，--wetmode 0..1 指定）
+委托墨迹轨迹(InkTrail): 关（接口可用（已挂视觉树））
+湿墨呈现: 自己画（系统轨迹照喂）
+笔迹预测: 关（设置 → 书写 → 墨迹预测；--predict2 可再开）
+书写期间 GC 低延迟档: 开，待命（进 0 次 / 退 0 次）（SustainedLowLatency，最后一笔后 5 秒退回）
+系统笔设置: HoldMode=3、长按判定等待 300 ms、长按保持 2300 ms（这一份是**系统全局**的设置，只列出来看清楚——我们自己的窗口已经单独关掉了这条手势，见下一行）
+长按=右键手势: 已在本窗口内关掉（系统里开着也不影响我们）
+压感→粗细: 开（0.22~2.00 倍，曲线 gamma 1.00）；变宽通道: 可用（D2D 原生墨迹 ID2D1Ink：压感按逐点半径改粗细）
+无压感笔迹增强: 已停用（模拟压力 / 笔锋 / 收尖）
+输入路径: 开 ink → Windows Ink 笔（压力 1024 级）；关 ink → raw 补点（等宽，无压力）
+DPI 缩放 2.00（逻辑 1260x840），界面缩放 1.00（标准）
+[env] gpu=Intel(R) Iris(R) Xe Graphics soft=0 vram=128 hz=90 dpi=192 ui=1.00 screen=2520x1680 session=20261115-152103-6198
+批注键盘模式 = True（键盘归批注层；此时下层程序收不到键盘）
+registered 3/3 global hotkeys
+[自检] 取消键：Ctrl+Alt+Shift+C（全局；UI 卡住也能停）
+[自检] 终端里也可以 Ctrl+C。取消会把自检子进程一起结束。
+[设备] HONOR HGF-WX6-V · 12th Gen Intel(R) Core(TM) i5-12500H · RAM 16G · id 31edd864
+
+=== self test ===
+drawing a synthetic stroke across the primary monitor...
+[   0.1s] fps=  0.0 记录=16.26 上屏= 0.62 光栅=23.60 面板=0.00ms×0/s 统计= 1.14 总帧=206.46ms 置顶= 0.00ms 脏区=1块/100.0%（整屏） 动因=无 ws=  92.8MB
+PASS: overlay pixels verified on screen (13226 matching pixels)
+
+running the 10k-stroke benchmark...
+
+=== benchmark: 10000 strokes on one screen ===
+  generate      :     29.7 ms
+  build geometry:    160.1 ms  (0.016 ms/stroke)
+  full rebuild  :    203.6 ms  (rasterise 10000 strokes onto the content layer)
+  points total  : 194797
+  working set   : 411.2 MB
+
+laser stress: forcing a continuous 120 Hz trail...
+[   1.4s] fps= 21.9 记录= 0.39 上屏= 0.20 光栅= 0.84 面板=0.00ms×0/s 统计= 0.02 总帧=  4.78ms 置顶= 0.11ms 脏区=1块/100.0%（整屏） 动因=无 ws= 411.2MB
+[   2.4s] fps=449.5 记录= 0.41 上屏= 0.15 光栅= 0.00 面板=0.00ms×0/s 统计= 0.02 总帧=  2.00ms 置顶= 0.62ms 脏区=1块/  4.1% 动因=无 ws= 413.0MB
+[   3.5s] fps=378.0 记录= 0.70 上屏= 0.16 光栅= 0.00 面板=0.00ms×0/s 统计= 0.03 总帧=  2.40ms 置顶= 0.46ms 脏区=1块/  4.2% 动因=无 ws= 416.2MB
+
+--- summary ---
+  rendering verified : rendering verified
+  fps (stress loop)  : 350.6
+  record (last frame): 1.22 ms
+  present (last frame): 0.22 ms
+  full rebuild (10k) : 203.6 ms
+  working set        : 420.1 MB
+  peak working set   : 416.2 MB
+
+  [mode] 自检：--selftest（设置/存档/PPT 缓存都走临时路径）
+[   4.5s] fps=350.6 记录= 1.05 上屏= 0.19 光栅= 0.00 面板=0.00ms×0/s 统计= 0.02 总帧=  3.21ms 置顶= 0.18ms 脏区=1块/  4.2% 动因=脏区+激光 ws= 419.9MB
+输入精度统计: himetric 映射 0 点 / 退回整数像素 0 点
+[touch] 汇总 0 次触点
+shutdown complete

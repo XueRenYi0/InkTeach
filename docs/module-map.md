@@ -30,42 +30,42 @@ src/InkTeach/    Host/ DevTools/ SelfTests/{Unit,E2E}
 
 | 功能 | 先看 | 锚点 / 再看 | 测试 |
 | --- | --- | --- | --- |
-| 工具 / 笔迹 / 图片对象 | `Model.cs` | `Tool` · `Stroke` · `InkPiece` | `--unittest Serializer` |
-| 撤销 / 重做 | `Model.cs` | `EditAction` 及各 `*Action` | `--unittest EditAction` |
-| 文档 / 页 / 槽 | `Model.cs` | `InkDocument` · `PageSlot` | `--edittest` |
+| 工具 / 笔迹 / 图片对象 | `Model.Types.cs` | `Model.Stroke.cs` · `Tool` · `Stroke` · `InkPiece` | `--unittest Serializer` |
+| 撤销 / 重做 | `Model.EditActions.cs` | `EditAction` 及各 `*Action` | `--unittest EditAction` |
+| 文档 / 页 / 槽 | `Model.InkDocument.cs` | `InkDocument` · `PageSlot` | `--edittest` |
 | 选择 / 变换 / 手柄 | `Selection.cs` | 手柄顺序 / 紧框 / 变换矩阵 | `--seltest` / `--handletest` |
 | 空间索引 | `SpatialGrid.cs` | 邻近查询 | `--seltest` |
 | 序列化（.inkb） | `InkSerializer.cs` | `SaveStrokes` / `LoadStrokes` | `--savetest` |
 | 自动存档 / 崩溃恢复 | `Recovery.cs` | `BackgroundSaver.cs` · `Engine.cs` 自动存档 | `--recoverytest` |
 | 板书历史 | `BoardHistory.cs` | `InkHistory.cs` · `Engine.cs` 板书历史 | `--recoverytest` |
 | 设置 / 偏好 | `Settings.cs` | `Engine.cs` 界面偏好的存取 | `--settingsaudit` |
-| 引擎主循环 / 启动 | `Engine.cs` | `Startup` · `Message loop` · `Window procedure` | `--startupcheck` |
+| 引擎主循环 / 启动 | `Engine.Host.cs` | `Startup` · `Message loop` · `Window procedure` | `--startupcheck` |
 
 ### Input（输入 / 笔迹算法）
 
 | 功能 | 先看 | 锚点 / 再看 | 测试 |
 | --- | --- | --- | --- |
-| 指针按下/移动/抬起 | `Engine.cs` | `Pointer input` | `--inputtest` |
+| 指针按下/移动/抬起 | `Engine.Input.cs` | `Pointer input` | `--inputtest` |
 | 笔 / 鼠标 / 触摸采样 | `Input/PenInput.cs` | `Input/PointerInput.cs` · `InputPrecision.cs` | `--inputtest` |
 | 输入黑匣子 / 回放 | `Input/InputBlackBox.cs` | `InkTeach/InputReplay.cs` | `--replayinput` |
-| 笔迹预测 | `Prediction/InkPredictorLinear.cs` | `Engine.cs` 自绘预测尾 | `--pdmetrics` |
+| 笔迹预测 | `Prediction/InkPredictorLinear.cs` | `Engine.Input.cs` 自绘预测尾 | `--pdmetrics` |
 | 笔迹模型 | `InkStrokeModeler.cs` | `InkModel.cs` · `InkModelProbe.cs` | `--inkmodeltest` |
 | 平滑 / 运动模型 | `StrokeSmoothing.cs` | `StrokeMotion.cs` · `SmoothProbe.cs` | `--smoothtest` / `--motiontest` |
-| 停顿成型 | `Engine.cs` | 停顿成型（两段）· `DwellAssist.cs` | `--dwelltest` |
-| 触摸手势 | `Engine.cs` | `触摸手势（8.4.0）` · `Touch.cs` | `--touchtest` |
-| 亚像素 / 湿墨 / 限速 | `Engine.cs` | `湿墨档位` · `长度限速` | `--inputtest` |
+| 停顿成型 | `Engine.Input.cs` | 停顿成型（两段）· `DwellAssist.cs` | `--dwelltest` |
+| 触摸手势 | `Engine.Input.cs` | `触摸手势（8.4.0）` · `Touch.cs` | `--touchtest` |
+| 亚像素 / 湿墨 / 限速 | `Engine.Input.cs` | `湿墨档位` · `长度限速` | `--inputtest` |
 
 ### Rendering（覆盖层 / 缓存 / 界面边界）
 
 | 功能 | 先看 | 锚点 / 再看 | 测试 |
 | --- | --- | --- | --- |
-| 覆盖层窗口 / 帧 | `Overlay.cs` | `Frame` · `RenderFrame` | `--selftest 8` |
-| 内容层分块缓存 | `CanvasTiles.cs` | `Overlay.cs` 内容层 | `--tiletest` |
-| 界面层合成 | `Overlay.cs` | 界面层 · `Ui.cs` · `UiHost.cs` | `--uitest` |
-| 多边形读数 / 角度标 | `Overlay.cs` | 多边形读数 | `--rotatetest` |
-| 呼出盘 | `Overlay.cs` | 呼出盘 · `Engine.cs` 呼出盘 | `--radialtest` |
-| 截图取景框 | `Overlay.cs` | 截图模式 · `ScreenCapture.cs` | `--capturetest` |
-| 光标形状 | `Cursors.cs` | `Engine.cs` 指针形状 | `--cursortest` |
+| 覆盖层窗口 / 帧 | `Overlay.Frame.cs` | `Frame` · `RenderFrame` | `--selftest 8` |
+| 内容层分块缓存 | `CanvasTiles.cs` | `Overlay.Content.cs` 内容层 | `--tiletest` |
+| 界面层合成 | `Overlay.Ui.cs` | 界面层 · `Ui.cs` · `UiHost.cs` | `--uitest` |
+| 多边形读数 / 角度标 | `Overlay.Readout.cs` | 多边形读数 | `--rotatetest` |
+| 呼出盘 | `Overlay.Radial.cs` | 呼出盘 · `Engine.Radial.cs` | `--radialtest` |
+| 截图取景框 | `Overlay.Capture.cs` | 截图模式 · `ScreenCapture.cs` | `--capturetest` |
+| 光标形状 | `Cursors.cs` | `Engine.Cursor.cs` 指针形状 | `--cursortest` |
 | SVG 路径 / 图标 | `SvgPath.cs` | `Icons.Paths.cs` | `--makeicon` |
 
 ### Shapes（识别 / 图形卡 / 收藏）
@@ -74,7 +74,7 @@ src/InkTeach/    Host/ DevTools/ SelfTests/{Unit,E2E}
 | --- | --- | --- | --- |
 | 一笔识别成图形 | `ShapeRecognize.cs` | `PointCloudRecognizer.cs` | `--inktest` |
 | 图形卡目录 | `ShapeCatalog.cs` | `ShapePreview.cs` | `--shapepaneltest` |
-| 收藏库 | `ShapeLibrary.cs` | `LibraryLayout.cs` · `CollectionFingerprint.cs` | `--librarytest` |
+| 收藏库 | `ShapeLibrary.cs` | `Engine.Library.cs` · `LibraryLayout.cs` · `CollectionFingerprint.cs` | `--librarytest` |
 | 收藏导入导出 | `FavoriteTransfer.cs` | 设置页入口 | `--librarytest` |
 | 图形渲染 / 参数 | `FigureRenderer.cs` | `FigureParamBar.cs` | `--shapetest` |
 | AI 作图 | `AiPlotClient.cs` | `PlotExpression.cs` · `PlotSampler` · `PlotRenderer.cs` | `--plottest` |
@@ -114,7 +114,7 @@ src/InkTeach/    Host/ DevTools/ SelfTests/{Unit,E2E}
 | 功能 | 先看 | 锚点 / 再看 | 测试 |
 | --- | --- | --- | --- |
 | 工具条 / 球 / 上带 / 色带 | `FullUi.cs` | 按钮表 · 布局 · 上带 · 色带 · 绘制 | `--paneltest` |
-| 更多面板 / 设置页 / 日志页 | `FullUi.cs` | 「更多」面板 · 设置行 · 日志与反馈页 | `--paneltest` |
+| 更多面板 / 设置页 / 日志页 | `FullUi.More.cs` | `FullUi.Settings.cs` · 日志与反馈页 | `--paneltest` |
 | 页面栈 | `FullUi.Pages.cs` | `Framework/IPage.cs` · `PageHost.cs` | `--paneltest` |
 | AI 面板 / 菜单 / API | `FullUi.Ai.cs` | `FullUi.AiMenu.cs` · `FullUi.ApiSettings.cs` | `--settingsaudit` |
 | 使用说明 | `HelpUi.cs` | 同文件 | `--paneltest` |
@@ -125,13 +125,13 @@ src/InkTeach/    Host/ DevTools/ SelfTests/{Unit,E2E}
 
 | 功能 | 文件 | 测试 |
 | --- | --- | --- |
-| 启动 / 参数分发 / 模式路由 | `App.cs` | `--startupcheck` |
-| Program.Main / `--unittest` 拦截 | `App.cs` | `--unittest` |
-| 内存 / 帧率报告 | `App.cs` | `--memory` |
-| 合成输入 / 点击目标 | `App.cs` | `--passtest` |
-| 无界面宿主 | `HeadlessUi.cs` · `UiProbe.cs` | `--uitest` |
-| 自检专项 | `SelfTests/*.cs` | 见 `docs/test-playbook.md` |
-| 图标候选图 | `*IconSheet.cs` · `PenSheet.cs` | `--makeicon` |
+| 启动 / 参数分发 / 模式路由 | `Host/App.cs` | `--startupcheck` |
+| Program.Main / `--unittest` 拦截 | `Host/Program.cs` | `--unittest` |
+| 内存 / 帧率报告 | `DevTools/App.Dev.Metrics.cs` | `--memory` |
+| 合成输入 / 点击目标 | `DevTools/App.Dev.Input.cs` · `App.Dev.ClickTarget.cs` | `--passtest` |
+| 无界面宿主 | `DevTools/HeadlessUi.cs` · `UiProbe.cs` | `--uitest` |
+| 自检专项 | `SelfTests/E2E/*.cs` | 见 `docs/test-playbook.md` |
+| 图标候选图 | `DevTools/*IconSheet.cs` · `PenSheet.cs` | `--makeicon` |
 
 ### 本地化
 

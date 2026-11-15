@@ -1,0 +1,115 @@
+笔迹运动模型: mean2（M6：距离窗 12px ＋ 过点曲线 ＋ 收笔追赶 ＋ 高斯权σ 3.0→1.2px）
+输入精度: himetric 亚像素（默认；逐点拿不到时自动退回整数像素；--nohimetric 对照）
+virtual desktop: 2520x1680 at (0,0)；主屏 2520x1680
+帧延迟等待对象: 已启用
+overlay on monitor 65537: 2520x1680 at (0,0) dpi=192
+湿墨档位: 0 原路径（不喂系统轨迹）（设置里记着；Ctrl+Alt+Shift+W 循环切换，--wetmode 0..1 指定）
+委托墨迹轨迹(InkTrail): 关（接口可用（已挂视觉树））
+湿墨呈现: 自己画（系统轨迹照喂）
+笔迹预测: 关（设置 → 书写 → 墨迹预测；--predict2 可再开）
+书写期间 GC 低延迟档: 开，待命（进 0 次 / 退 0 次）（SustainedLowLatency，最后一笔后 5 秒退回）
+系统笔设置: HoldMode=3、长按判定等待 300 ms、长按保持 2300 ms（这一份是**系统全局**的设置，只列出来看清楚——我们自己的窗口已经单独关掉了这条手势，见下一行）
+长按=右键手势: 已在本窗口内关掉（系统里开着也不影响我们）
+压感→粗细: 开（0.22~2.00 倍，曲线 gamma 1.00）；变宽通道: 可用（D2D 原生墨迹 ID2D1Ink：压感按逐点半径改粗细）
+无压感笔迹增强: 已停用（模拟压力 / 笔锋 / 收尖）
+输入路径: 开 ink → Windows Ink 笔（压力 1024 级）；关 ink → raw 补点（等宽，无压力）
+DPI 缩放 2.00（逻辑 1260x840），界面缩放 1.00（标准）
+[env] gpu=Intel(R) Iris(R) Xe Graphics soft=0 vram=128 hz=90 dpi=192 ui=1.00 screen=2520x1680 session=20261115-152616-2aa0
+批注键盘模式 = True（键盘归批注层；此时下层程序收不到键盘）
+registered 3/3 global hotkeys
+[自检] 取消键：Ctrl+Alt+Shift+C（全局；UI 卡住也能停）
+[自检] 终端里也可以 Ctrl+C。取消会把自检子进程一起结束。
+[设备] HONOR HGF-WX6-V · 12th Gen Intel(R) Core(TM) i5-12500H · RAM 16G · id 53e45dd3
+
+=== 键位自检（表 / 冲突 / 落盘 / 真机注册）===
+    默认表内部没有矛盾                     PASS  无
+    作用域划分：两档都非空且每条都有键             PASS  全局 3 条，批注内 32 条
+    全局键一律带修饰键（不会抢走正常打字）           PASS  
+    编辑类动作只在批注内（没有全局 Ctrl+Z 这种）    PASS  
+    删除选中同时绑定 Delete 和 Backspace   PASS  Delete / Backspace
+    解析 `Ctrl+=` / `Ctrl+-` 并原样打印  PASS  Ctrl+= → Ctrl+=，Ctrl+- → Ctrl+-
+    新键位：Ctrl+B 白板 / Ctrl+= 放大 / Ctrl+- 缩小 / Ctrl+Shift+Z 重做别名PASS  白板 Ctrl+B，缩放 Ctrl+= / Ctrl+-，重做 Ctrl+Y / Ctrl+Shift+Z
+    截图键改 Ctrl+Shift+A（Ctrl+S 腾给'保存'习惯）PASS  截图 Ctrl+Shift+A；Ctrl+S 占用者 = 无
+    全局里没有名单（4 个）之外的动作             PASS  全局 3 条，全是：穿透模式开关 / 批注键盘模式开关 / 呼出盘 / 退出
+    退役的图形键 Ctrl+Alt+O 不在任何作用域里    PASS  
+    退役的图形键 Ctrl+Alt+T 不在任何作用域里    PASS  
+    退役的图形键 Ctrl+Alt+G 不在任何作用域里    PASS  
+    退役的图形键 Ctrl+Alt+F 不在任何作用域里    PASS  
+    退役的图形键 Ctrl+Alt+N 不在任何作用域里    PASS  
+    穿透默认键 = Ctrl+Alt+Shift+T（2026-10-04 起统一加 Shift）PASS  Ctrl+Alt+Shift+T
+    已撤的预测算法键 Ctrl+Alt+Shift+P 不在任何作用域里PASS  
+    呼出盘已升为全局键 Ctrl+Alt+Shift+Q，批注内不再留副本PASS  Ctrl+Alt+Shift+Q
+    解析 Ctrl+Alt+P（大小写不敏感）         PASS  Ctrl+Alt+P
+    解析 Delete                     PASS  VK=2E
+    解析 Shift+Left                 PASS  Shift+Left
+    认不出的键名要报错（不是静默忽略）             PASS  不认识的键名“月亮”
+    只有修饰键要报错                      PASS  只有修饰键，没有主键
+    撞了别人的键要拒绝并说清是谁                PASS  Ctrl+Alt+Shift+X 已经是“退出”（Global）的键
+    全局热键没有修饰键要拒绝                  PASS  全局热键 F5 没有修饰键：那会把正常打字抢走，拒绝
+    没冲突就能改，并标记成脏                  PASS  穿透 → Ctrl+Alt+F5
+    能恢复默认键                        PASS  Ctrl+Alt+Shift+T
+    写盘后文件真的存在                     PASS  C:\Users\LHL-XZX\AppData\Local\Temp\inkteach-keytest.json
+    读回无警告，且改动生效                   PASS  退出键 → Ctrl+Alt+F12
+    没改过的项仍是默认值（只写差异）              PASS  
+    只写差异：文件里应当只有 1 条              PASS  
+    键名写坏了：报警告 + 用默认值 + 不抛异常       PASS  “Global.Quit”的按键“Ctrl+Alt+”读不懂：只有修饰键，没有主键（这一项用默认值）
+    整个文件是垃圾：报警告 + 仍能启动            PASS  配置文件里没有 "keys" 段，按默认键位运行
+    全局热键注册数量与表一致                  PASS  3/3 注册成功
+    快捷键总表.md 覆盖了每一条绑定（键 + 动作名同一行） PASS  快捷键总表.md 不在当前目录，这一项跳过
+    WM_HOTKEY 的 id 能正确反查到动作       PASS  3 条全部对上
+    批注内按 Delete 真的删掉了选中           PASS  3 笔 → 0 笔
+    这一步能撤销回来                      PASS  撤销后 3 笔
+    批注内按 Backspace 同样删除选中         PASS  0 笔（应 0）
+    Backspace 删除也能撤销              PASS  撤销后 3 笔
+批注键盘模式 = True（键盘归批注层；此时下层程序收不到键盘）
+pass-through = False (mode LayeredTransparent)
+    Ctrl+B：按一下开板、再按关板             PASS  开 = True，再按后 = False
+pass-through = True (mode LayeredTransparent)
+批注键盘模式 = True（键盘归批注层；此时下层程序收不到键盘）
+pass-through = False (mode LayeredTransparent)
+    Ctrl+B：穿透里按 = 开板 + 顺手退穿透      PASS  板 = True，穿透 = False
+
+  当前键位表：
+全局热键（任何程序在前台都生效）：
+  Ctrl+Alt+Shift+T 穿透模式开关         全屏批注：能画 / 不能画（穿透给下层）
+  Ctrl+Alt+Shift+X 退出             退出
+  Ctrl+Alt+Shift+Q 呼出盘            呼出盘：按住 → 划向扇区 → 松手（笔/黑/红/蓝/荧光笔/橡皮/框选/激光）
+批注内快捷键（批注键盘模式打开时生效）：
+  Ctrl+Z           撤销             撤销一步
+  Ctrl+Y           重做             重做
+  Ctrl+Shift+Z     重做             重做（别名）
+  Ctrl+C           复制选中           复制选中对象（粘回来仍是可编辑对象，同时给外部程序一张图）
+  Ctrl+A           全选             全选
+  Ctrl+D           复制一份           复制一份
+  Delete           删除选中           删除选中
+  Backspace        删除选中           删除选中（Backspace 别名）
+  Esc              取消选择           取消选择
+  Ctrl+V           粘贴（对象优先，否则当图）  粘贴：优先粘回可编辑对象，否则把图粘到左上角
+  Left             左移 1           左移 1 像素
+  Up               上移 1           上移 1 像素
+  Right            右移 1           右移 1 像素
+  Down             下移 1           下移 1 像素
+  Shift+Left       左移 10          左移 10 像素
+  Shift+Up         上移 10          上移 10 像素
+  Shift+Right      右移 10          右移 10 像素
+  Shift+Down       下移 10          下移 10 像素
+  Ctrl+=           放大选中           选中对象放大 10%（以选区中心为锚）
+  Ctrl+-           缩小选中           选中对象缩小 10%（以选区中心为锚）
+  PageUp           上一屏            白板 / 文档翻上一屏；PPT 翻上一页
+  PageDown         下一屏            白板 / 文档翻下一屏；PPT 翻下一页
+  Ctrl+P           笔              换成笔（已经是笔→再按换色）
+  Ctrl+I           荧光笔            换成荧光笔（半透明大笔；单击语义同笔）
+  Ctrl+L           激光笔            换成激光笔（只留痕迹，不留墨）
+  Ctrl+E           橡皮擦            换成橡皮擦（碰到哪一条就整条删掉；整笔/像素橡皮看上带）
+  Ctrl+M           选择             换成选择（选择/移动/缩放/旋转；矩形/套索看上带）
+  Ctrl+Shift+A     截图             截图：拖一个框，抓到的那块原位落图并选中
+  Ctrl+6           切换当前工具粗细       切成当前工具的下一档粗细
+  Ctrl+8           拆开擦断的笔迹        把选中的、被擦断的笔迹拆成独立对象（只服务老存档）
+  Ctrl+Shift+C     清空当前页墨迹        清空当前页墨迹（可撤销；整份清空在翻页条菜单）
+  Ctrl+B           白板开关           开/关白板（和点白板格同一条命令）
+
+  PASS: 键位表、冲突检测、落盘读回、真机注册与批注内按键都正确
+  [mode] 自检：--keytest（设置/存档/PPT 缓存都走临时路径）
+输入精度统计: himetric 映射 0 点 / 退回整数像素 0 点
+[touch] 汇总 0 次触点
+shutdown complete
