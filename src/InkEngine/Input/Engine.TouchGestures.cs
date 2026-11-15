@@ -1,3 +1,6 @@
+// [职责] 触摸手势：单指/双指/三指/长按/惯性。
+// [测试] --touchtest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

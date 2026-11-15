@@ -1,3 +1,6 @@
+// [职责] Stroke 核心：点、颜色、粗细、变换、几何入口（含 InkPiece 嵌套类）。
+// [测试] --unittest Serializer / --shapetest
+
 using System;
 using System.Numerics;
 using Vortice.Direct2D1;

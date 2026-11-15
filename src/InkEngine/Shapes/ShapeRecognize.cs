@@ -1,3 +1,6 @@
+// [职责] 一笔墨迹 → 图形识别（$P 点云 + 拟合 + 贴合判据）。
+// [测试] --inktest
+
 using System.Numerics;
 
 namespace InkEngine;

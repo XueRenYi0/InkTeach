@@ -1,3 +1,6 @@
+// [职责] 激光笔轨迹（淡出、采样）。
+// [测试] --lasertest
+
 using System;
 using System.Numerics;
 using Vortice.Direct2D1;

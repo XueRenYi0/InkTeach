@@ -1,3 +1,6 @@
+// [职责] 坐标系/数轴/四种曲线的几何构建。
+// [测试] --shapetest
+
 using System;
 using System.Numerics;
 using Vortice.Direct2D1;

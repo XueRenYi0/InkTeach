@@ -1,3 +1,6 @@
+// [职责] 更多面板：首页/设置/说明/日志/AI 服务入口。
+// [测试] --paneltest
+
 using System.IO;
 using System.Numerics;
 using System.Runtime.InteropServices;

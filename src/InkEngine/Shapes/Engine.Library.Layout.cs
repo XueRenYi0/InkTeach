@@ -1,3 +1,6 @@
+// [职责] 收藏面板插入/几何/尺寸/拖拽落位。
+// [测试] --librarytest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

@@ -1,3 +1,6 @@
+// [职责] 宿主启动、参数分发、模式路由、用法帮助。
+// [测试] --startupcheck
+
 using System.Buffers;
 using System.Diagnostics;
 using System.Numerics;

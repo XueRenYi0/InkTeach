@@ -1,3 +1,6 @@
+// [职责] 收藏库杂项：双支配对/隐藏配对/结束笔画。
+// [测试] --inktest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

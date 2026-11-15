@@ -1,3 +1,6 @@
+// [职责] 选择框、手柄、变换矩阵、紧框与命中。
+// [测试] --seltest / --handletest
+
 using System.Numerics;
 using InkLocalization;
 

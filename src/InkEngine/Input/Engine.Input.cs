@@ -1,3 +1,6 @@
+// [职责] 指针输入、停顿成型、动态橡皮。
+// [测试] --inputtest / --dwelltest / --erasertest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

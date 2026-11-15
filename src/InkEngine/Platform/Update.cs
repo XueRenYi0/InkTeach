@@ -1,3 +1,6 @@
+// [职责] 自动更新：版本比较、清单解析、下载/换壳。
+// [测试] --updatetest
+
 using System.Diagnostics;
 using System.Net.Http;
 using System.Security.Cryptography;

@@ -1,3 +1,6 @@
+// [职责] 键位表、作用域、冲突检测、解析。
+// [测试] --keytest
+
 using System.Text;
 
 namespace InkEngine;

@@ -1,3 +1,6 @@
+// [职责] 图形端点编辑：起手/拖动/吸附/读数/提交。
+// [测试] --handletest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

@@ -1,3 +1,6 @@
+// [职责] 普通文本框插入/编辑/结束/富文本只读卡。
+// [测试] --textboxsim
+
 using System;
 using System.Globalization;
 using System.Numerics;

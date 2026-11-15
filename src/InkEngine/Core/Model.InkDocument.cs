@@ -1,3 +1,6 @@
+// [职责] 文档/页/槽/撤销栈/空间索引。
+// [测试] --edittest
+
 using System;
 using System.Numerics;
 using Vortice.Direct2D1;

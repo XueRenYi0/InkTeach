@@ -1,3 +1,6 @@
+// [职责] 框选/套索/拖动/对齐吸附/美化入口。
+// [测试] --seltest / --lassotest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

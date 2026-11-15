@@ -1,3 +1,6 @@
+// [职责] 启动、消息循环、窗口过程（WndProc）。
+// [测试] --startupcheck
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

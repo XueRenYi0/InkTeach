@@ -1,3 +1,6 @@
+// [职责] 选中操作条的状态与动作：颜色/粗细/线型/锁定/层级/取色器/菜单。
+// [测试] --seltest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

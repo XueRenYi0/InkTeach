@@ -1,3 +1,6 @@
+// [职责] 收藏库指针输入：拖拽/整理/排序/页签拖动。
+// [测试] --librarytest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

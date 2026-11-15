@@ -1,3 +1,6 @@
+// [职责] 读数、收藏面板、滚动条、回放/PPT 条绘制。
+// [测试] --rotatetest
+
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;

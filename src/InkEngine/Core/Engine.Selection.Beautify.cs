@@ -1,3 +1,6 @@
+// [职责] 选中图片的本地美化（应用/回退）。
+// [测试] --inkbeautify
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

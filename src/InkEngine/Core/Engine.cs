@@ -1,3 +1,6 @@
+// [职责] 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
+// [测试] --recoverytest / --unittest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

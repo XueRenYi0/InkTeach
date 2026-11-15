@@ -1,3 +1,6 @@
+// [职责] 截图取景框绘制：遮罩/准线/读数/手柄。
+// [测试] --capturetest
+
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;

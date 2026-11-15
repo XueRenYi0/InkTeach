@@ -1,3 +1,6 @@
+// [职责] 操作条按钮动作分发（RunBarAction / RunBarButton）。
+// [测试] --seltest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

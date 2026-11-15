@@ -1,3 +1,6 @@
+// [职责] 收藏库 ⋯ 菜单、过滤、滚动。
+// [测试] --librarytest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

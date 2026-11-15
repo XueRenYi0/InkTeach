@@ -1,3 +1,6 @@
+// [职责] Tool / StrokeKind / CurveAxis / RectF / InkPoint 等基础类型。
+// [测试] --unittest
+
 using System;
 using System.Numerics;
 using Vortice.Direct2D1;

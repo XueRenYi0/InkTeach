@@ -1,3 +1,6 @@
+// [职责] AI 题卡：题干/答案/图形/交互。
+// [测试] --imgcardtest
+
 using System.Numerics;
 using System.Text.RegularExpressions;
 using InkLocalization;

@@ -1,3 +1,6 @@
+// [职责] 选中操作条/色板/字体/图层/菜单的绘制。
+// [测试] --seltest
+
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;

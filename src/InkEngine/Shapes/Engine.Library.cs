@@ -1,3 +1,6 @@
+// [职责] 收藏库：面板开合/页签/分类/选择/落盘。
+// [测试] --librarytest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

@@ -1,3 +1,6 @@
+// [职责] 界面命中、开合、换页、贴边隐藏。
+// [测试] --paneltest
+
 using System.IO;
 using System.Numerics;
 using System.Runtime.InteropServices;

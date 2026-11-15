@@ -1,3 +1,6 @@
+// [职责] 收藏条目存储：.ink/.meta、分类、回收站、指纹去重。
+// [测试] --librarytest
+
 using System;
 using System.Collections.Generic;
 using System.Globalization;

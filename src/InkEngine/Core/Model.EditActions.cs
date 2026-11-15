@@ -1,3 +1,6 @@
+// [职责] 撤销/重做动作（Add/Remove/Erase/Transform/SetProp 等）。
+// [测试] --unittest EditAction / --edittest
+
 using System;
 using System.Numerics;
 using Vortice.Direct2D1;

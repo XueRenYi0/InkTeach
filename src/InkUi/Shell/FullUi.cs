@@ -1,3 +1,6 @@
+// [职责] 工具条/球/上带/色带的主体布局与绘制。
+// [测试] --paneltest
+
 using System.IO;
 using System.Numerics;
 using System.Runtime.InteropServices;

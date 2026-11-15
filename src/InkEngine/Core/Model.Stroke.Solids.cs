@@ -1,3 +1,6 @@
+// [职责] 立体图形（圆柱/圆锥/球/棱柱等）的几何构建。
+// [测试] --shapetest
+
 using System;
 using System.Numerics;
 using Vortice.Direct2D1;

@@ -1,3 +1,6 @@
+// [职责] 截图状态、确认/取消、手柄与读数。
+// [测试] --capturetest
+
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;

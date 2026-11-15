@@ -1,3 +1,6 @@
+// [职责] 设置页：工具条/通用/书写/墨迹/AI/备份。
+// [测试] --settingsaudit
+
 using System.IO;
 using System.Numerics;
 using System.Runtime.InteropServices;
