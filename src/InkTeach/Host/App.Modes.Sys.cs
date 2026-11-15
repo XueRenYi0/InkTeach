@@ -22,6 +22,8 @@ internal sealed partial class App
             _nextLogAt = double.MaxValue;
             foreach (var e in ModeEntries)
                 Console.WriteLine($"{e.Mode}\t{(string.IsNullOrEmpty(e.Help) ? "（待补说明）" : e.Help)}");
+            // Program 层模式：在 RunModeDispatch 之前就返回，不在注册表里，但仍是用户可见入口。
+            Console.WriteLine("--unittest\tL1 纯逻辑测试（--unittest [过滤词]，不建窗口）");
             return null;
         }),
         new("--aitest", "AI 题卡自检（插入 / 折叠 / 存档 / 删除 / 撤销）", args =>

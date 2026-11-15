@@ -70,15 +70,18 @@ foreach ($f in $files) {
     # 见 ADR-005 D2/D6 的施工例外。
     if ($rel -match '/App\.Modes\.') { $heavyMethods.Remove($rel) }
 
-    # 5. 空 catch（按行判断；多行形式在 fix 时已补成同行注释）
-    for ($i = 0; $i -lt $lines.Length; $i++) {
-        if ($lines[$i] -match 'catch\s*(\([^)]*\))?\s*\{\s*\}' -and $lines[$i] -notmatch '//|/\*') {
-            [void]$uncommentedCatch.Add("${rel}:$($i + 1)")
-        }
+    # 5. 空 catch（全文配平；多行形式也能命中）
+    $raw = [System.IO.File]::ReadAllText($f.FullName)
+    foreach ($m in [regex]::Matches($raw, 'catch\s*(\([^)]*\))?\s*\{\s*\}')) {
+        if ($m.Value -match '/\*|//') { continue }
+        $line = ($raw.Substring(0, $m.Index) -split "`n").Count
+        [void]$uncommentedCatch.Add("${rel}:$line")
     }
 }
 
 # ---------- 3. partial 族文件数 ----------
+# 近似口径：按文件名族统计。本仓这些族没有同名的非 partial 文件；
+# 若以后出现，改成解析 `partial class` 关键字并维护族→类名映射。
 foreach ($family in $families) {
     $count = @(Get-ChildItem -Path $srcRoot -Recurse -File -Filter "$family*.cs" |
         Where-Object { $_.FullName -notmatch '\\bin\\|\\obj\\' }).Count
@@ -95,7 +98,12 @@ foreach ($family in $families) {
         Where-Object { $_.FullName -notmatch '\\bin\\|\\obj\\' })
     if ($famFiles.Count -eq 0) { continue }
     $text = @{}
-    foreach ($f in $famFiles) { $text[$f.FullName] = [System.IO.File]::ReadAllText($f.FullName) }
+    foreach ($f in $famFiles) {
+        $body = [System.IO.File]::ReadAllText($f.FullName)
+        # 近似：先剥注释，避免注释里的字段名被算成引用。
+        $body = $body -replace '(?m)//.*$', '' -replace '(?s)/\*.*?\*/', ''
+        $text[$f.FullName] = $body
+    }
     $declared = @{}
     foreach ($f in $famFiles) {
         foreach ($m in $declRegex.Matches($text[$f.FullName])) {
@@ -110,12 +118,23 @@ foreach ($family in $families) {
     }
 }
 
+# ---------- 6. 模式表不得有重复 mode ----------
+$modeNames = New-Object System.Collections.Generic.List[string]
+$modeFiles = @(Get-ChildItem -Path (Join-Path $srcRoot 'InkTeach\Host') -File -Filter 'App.Modes.*.cs' -ErrorAction SilentlyContinue)
+foreach ($f in $modeFiles) {
+    foreach ($m in [regex]::Matches([System.IO.File]::ReadAllText($f.FullName), 'new\("(--[a-z0-9\-]+)"')) {
+        [void]$modeNames.Add($m.Groups[1].Value)
+    }
+}
+$duplicateModes = @($modeNames | Group-Object | Where-Object Count -gt 1 | ForEach-Object { $_.Name })
+
 $current = [ordered]@{
     filesOver800 = @($filesOver800 | Sort-Object)
     heavyMethods = $heavyMethods
     partialCounts = $partialCounts
     wideFields = @($wideFields | Sort-Object)
     uncommentedCatch = @($uncommentedCatch | Sort-Object)
+    duplicateModes = @($duplicateModes)
 }
 
 if ($UpdateBaseline) {
@@ -155,6 +174,9 @@ foreach ($p in $current.wideFields) {
 }
 foreach ($p in $current.uncommentedCatch) {
     [void]$violations.Add("empty catch without comment: $p")
+}
+foreach ($p in $current.duplicateModes) {
+    [void]$violations.Add("duplicate self-test mode: $p")
 }
 
 if ($violations.Count -gt 0) {

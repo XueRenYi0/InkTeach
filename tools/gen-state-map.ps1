@@ -51,7 +51,12 @@ foreach ($family in $families) {
     if ($files.Count -eq 0) { continue }
 
     $text = @{}
-    foreach ($f in $files) { $text[$f.FullName] = [System.IO.File]::ReadAllText($f.FullName) }
+    foreach ($f in $files) {
+        $body = [System.IO.File]::ReadAllText($f.FullName)
+        # 近似：先剥注释，避免注释里的字段名被算成引用。
+        $body = $body -replace '(?m)//.*$', '' -replace '(?s)/\*.*?\*/', ''
+        $text[$f.FullName] = $body
+    }
 
     $declared = @{}
     foreach ($f in $files) {

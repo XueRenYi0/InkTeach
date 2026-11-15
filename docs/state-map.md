@@ -1,6 +1,6 @@
 # 状态地图（自动生成，勿手改）
 
-> 生成：2026-11-15 17:31 ／ 脚本：`tools/gen-state-map.ps1` ／ ADR-005 D4
+> 生成：2026-11-15 17:35 ／ 脚本：`tools/gen-state-map.ps1` ／ ADR-005 D4
 > 用法：改一个私有字段前，先在这里查它被哪些同族文件读写；只列被 >=2 个文件引用的字段。
 > 它降低定位成本，不降低验证成本；拆不拆类看 ADR-005 D4 的触发条件，不按行数。
 
@@ -8,10 +8,10 @@
 
 | 字段 | 引用文件 | 主要文件 | 写入点 |
 | --- | --- | --- | --- |
-| `_dirty` | 23 | Engine.cs, Engine.Host.cs, Engine.Selection.Beautify.cs, Engine.Selection.Gesture.cs, Engine.Selection.Vertex.cs, Engine.SelectionBar.Actions.cs …+17 | 298 |
+| `_dirty` | 23 | Engine.cs, Engine.Host.cs, Engine.Selection.Beautify.cs, Engine.Selection.Gesture.cs, Engine.Selection.Vertex.cs, Engine.SelectionBar.Actions.cs …+17 | 297 |
 | `_windows` | 15 | Engine.cs, Engine.Host.cs, Engine.Capture.cs, Engine.Clipboard.cs, Engine.Input.cs, Engine.Hotkey.cs …+9 | 1 |
-| `_drawing` | 9 | Engine.cs, Engine.Host.cs, Engine.SelectionBar.cs, Engine.Input.cs, Engine.TouchGestures.cs, Engine.Radial.cs …+3 | 30 |
-| `_libraryPending` | 9 | Engine.Host.cs, Engine.Input.cs, Engine.Hotkey.cs, Engine.Radial.cs, Engine.Library.cs, Engine.Library.Input.cs …+3 | 14 |
+| `_drawing` | 9 | Engine.cs, Engine.Host.cs, Engine.SelectionBar.cs, Engine.Input.cs, Engine.TouchGestures.cs, Engine.Radial.cs …+3 | 29 |
+| `_libraryPending` | 8 | Engine.Host.cs, Engine.Hotkey.cs, Engine.Radial.cs, Engine.Library.cs, Engine.Library.Input.cs, Engine.Library.Layout.cs …+2 | 14 |
 | `_libraryPendingTitle` | 8 | Engine.Host.cs, Engine.Hotkey.cs, Engine.Radial.cs, Engine.Library.cs, Engine.Library.Input.cs, Engine.Library.Layout.cs …+2 | 13 |
 | `_restoreToolAfterLibrarySelection` | 8 | Engine.Input.cs, Engine.Hotkey.cs, Engine.Radial.cs, Engine.Library.cs, Engine.Library.Input.cs, Engine.Library.Layout.cs …+2 | 4 |
 | `_selDragMoved` | 7 | Engine.cs, Engine.Selection.cs, Engine.Selection.Gesture.cs, Engine.Selection.Vertex.cs, Engine.SelectionBar.cs, Engine.TouchGestures.cs …+1 | 8 |
@@ -19,22 +19,21 @@
 | `_uiHover` | 6 | Engine.cs, Engine.Host.cs, Engine.Input.cs, Engine.Update.cs, Engine.Cursor.cs, Engine.UiBridge.cs | 11 |
 | `_quit` | 6 | Engine.cs, Engine.Host.cs, Engine.Selection.Beautify.cs, Engine.Hotkey.cs, Engine.Update.cs, Engine.UiBridge.cs | 9 |
 | `_shapeOneShot` | 6 | Engine.Input.cs, Engine.Hotkey.cs, Engine.Radial.cs, Engine.Library.cs, Engine.Library.Menu.cs, Engine.Library.Pair.cs | 5 |
-| `_uiInputHwnd` | 6 | Engine.cs, Engine.Host.cs, Engine.Capture.cs, Engine.Hotkey.cs, Engine.Radial.cs, Engine.Update.cs | 4 |
-| `_dwellSelected` | 6 | Engine.cs, Engine.Selection.Gesture.cs, Engine.Input.cs, Engine.TouchGestures.cs, Engine.Hotkey.cs, Engine.Library.Pair.cs | 2 |
 | `_libraryCategoryInfos` | 6 | Engine.Radial.cs, Engine.UiBridge.cs, Engine.Library.cs, Engine.Library.Input.cs, Engine.Library.Layout.cs, Engine.Library.Menu.cs | 2 |
-| `_eraserKind` | 5 | Engine.Host.cs, Engine.TouchGestures.cs, Engine.Hotkey.cs, Engine.Keyboard.cs, Engine.UiBridge.cs | 8 |
 | `_dragIsMove` | 5 | Engine.cs, Engine.Selection.cs, Engine.Selection.Gesture.cs, Engine.Selection.Vertex.cs, Engine.Cursor.cs | 8 |
+| `_eraserKind` | 5 | Engine.Host.cs, Engine.TouchGestures.cs, Engine.Hotkey.cs, Engine.Keyboard.cs, Engine.UiBridge.cs | 8 |
 | `_selDragMatrix` | 5 | Engine.cs, Engine.Selection.cs, Engine.Selection.Gesture.cs, Engine.Selection.Vertex.cs, Engine.TouchGestures.cs | 7 |
-| `_stepPlan` | 5 | Engine.cs, Engine.Input.cs, Engine.Hotkey.cs, Engine.Library.Pair.cs, Engine.ShapeTools.cs | 6 |
 | `_autoSelCollapsed` | 5 | Engine.cs, Engine.Selection.Gesture.cs, Engine.Hotkey.cs, Engine.Library.Layout.cs, Engine.Library.Pair.cs | 6 |
+| `_stepPlan` | 5 | Engine.cs, Engine.Input.cs, Engine.Hotkey.cs, Engine.Library.Pair.cs, Engine.ShapeTools.cs | 6 |
 | `_capturePressHandled` | 5 | Engine.cs, Engine.Capture.cs, Engine.Input.cs, Engine.Library.Pair.cs, Engine.ShapeTools.cs | 5 |
+| `_stepIndex` | 5 | Engine.cs, Engine.Input.cs, Engine.Hotkey.cs, Engine.Library.Pair.cs, Engine.ShapeTools.cs | 5 |
+| `_uiInputHwnd` | 5 | Engine.cs, Engine.Host.cs, Engine.Capture.cs, Engine.Hotkey.cs, Engine.Update.cs | 4 |
 
-## App（28 文件 / 19 字段 / 9 个跨文件字段）
+## App（28 文件 / 19 字段 / 8 个跨文件字段）
 
 | 字段 | 引用文件 | 主要文件 | 写入点 |
 | --- | --- | --- | --- |
 | `_clickTargetHwnd` | 2 | App.Dev.ClickTarget.cs, App.cs | 3 |
-| `_selfCheckMode` | 2 | App.Dev.Showcase.cs, App.cs | 3 |
 | `_benchSpread` | 2 | App.Dev.Render.cs, App.Modes.Shape.cs | 1 |
 | `_benchPressure` | 2 | App.Dev.Render.cs, App.Modes.Shape.cs | 1 |
 | `_panelShowMore` | 2 | App.Dev.PageShow.cs, App.cs | 1 |
@@ -84,9 +83,9 @@
 | `_work` | 5 | FullUi.Ai.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 2 |
 | `_aiMenuOpen` | 5 | FullUi.Ai.cs, FullUi.AiMenu.cs, FullUi.MorePanel.cs, FullUi.cs, FullUi.Interaction.cs | 2 |
 | `_bandCell` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 29 |
-| `_press` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 20 |
-| `_morePress` | 4 | FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.Interaction.cs | 19 |
+| `_press` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 19 |
 | `_morePage` | 4 | FullUi.Ai.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.Interaction.cs | 19 |
+| `_morePress` | 4 | FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.Interaction.cs | 19 |
 | `_railHover` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 15 |
 | `_hover` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 14 |
 | `_hubHint` | 4 | FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.Interaction.cs | 10 |
@@ -102,4 +101,4 @@
 | `_builtRawLive` | 2 | Model.Stroke.cs, Model.Stroke.Tangent.cs | 2 |
 | `_grid` | 2 | Model.EditActions.cs, Model.InkDocument.cs | 2 |
 
-共 73 行；完整字段清单用 `tools/gen-state-map.ps1` 重跑（本文件不手工维护）。
+共 72 行；完整字段清单用 `tools/gen-state-map.ps1` 重跑（本文件不手工维护）。

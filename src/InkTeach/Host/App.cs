@@ -310,6 +310,7 @@ internal sealed partial class App : InkEngine.InkEngine
         foreach (var e in ModeEntries.OrderBy(e => e.Mode, StringComparer.Ordinal))
             Console.WriteLine($"  {e.Mode,-22} {(string.IsNullOrEmpty(e.Help) ? "（待补说明）" : e.Help)}");
         Console.WriteLine("  --list-modes          只输出 mode → 说明（机器可读；AI 用来查改哪跑哪）");
+        Console.WriteLine("  --unittest [过滤词]   L1 纯逻辑测试（Program 层，不建窗口）");
         Console.WriteLine();
         Console.WriteLine("开关（不是模式，和 --xxx 一起用）：");
         Console.WriteLine("  --eraserhud         橡皮读数浮层（左下角实时 速度/目标/当前系数/尺寸；调门槛用，不进界面）");

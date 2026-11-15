@@ -153,7 +153,6 @@
                        "Engine._dirty",
                        "Engine._dragHandle",
                        "Engine._drawing",
-                       "Engine._dwellSelected",
                        "Engine._libraryCategoryInfos",
                        "Engine._libraryPending",
                        "Engine._libraryPendingTitle",
@@ -162,7 +161,6 @@
                        "Engine._selDragMoved",
                        "Engine._shapeOneShot",
                        "Engine._uiHover",
-                       "Engine._uiInputHwnd",
                        "Engine._windows",
                        "FullUi._dark",
                        "FullUi._host",
@@ -176,5 +174,8 @@
                    ],
     "uncommentedCatch":  [
 
-                         ]
+                         ],
+    "duplicateModes":  [
+
+                       ]
 }
