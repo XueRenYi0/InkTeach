@@ -536,6 +536,10 @@ public partial class InkEngine
     /// </summary>
     internal bool FlipPage(bool down)
     {
+        // 文本编辑中翻页：先把正在编辑的文本框提交，再切相机/切页。
+        // 不这么做的话，编辑宿主还挂在上/下一页的文本框上，翻过去以后继续输入会
+        // 写到一个“文档里已经不在眼前”的框里，看起来就是 PDF 翻页出问题。
+        if (_textBoxEditing) EndTextBoxEditFromUi(true);
         float want;
         int docTarget = -1;
         if (BoardOn)

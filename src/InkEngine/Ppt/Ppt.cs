@@ -488,6 +488,9 @@ public partial class InkEngine
     /// </summary>
     private bool GotoPage(int key)
     {
+        // 文本编辑中换页（遥控器 / 放映翻页 / 页号面板）：先提交文本框，
+        // 否则编辑宿主会挂在上一页的框上，下一页继续输入就写错对象。
+        if (_textBoxEditing) EndTextBoxEditFromUi(true);
         // 任何换页（翻页键 / 点箭头 / 页号面板 / 进退出放映）都先让回放退场：
         // 回放是"当前这一页的只读重演"，页一换它就失去意义（用户 2026-10-01 拍板）。
         ExitReplayForEdit("翻页");

@@ -698,6 +698,34 @@ internal sealed partial class App
                   Math.Abs(ViewOffsetY + DocView.TopOf(1)) < 2f && BarPageNow == 2,
                   $"camY={ViewOffsetY:F0}（应 {-DocView.TopOf(1):F0}）页码={BarPageNow}");
 
+            // 文本编辑中点“下一页”：必须先提交文本框，再翻页（2026-11-15 用户报的问题）。
+            BarGoto(1);
+            SettleFrames((int)DocMemory.FlipMs + 80);
+            SetToolFromUi(Tool.Text);
+            InsertPlainTextBoxForTest("翻页前文字");
+            var flipBox = Doc.Selected.Count == 1 ? Doc.Selected[0] : null;
+            if (flipBox != null)
+            {
+                BeginTextBoxEdit(flipBox);
+                Host.SetTextBoxEditTextForTest("翻页前文字");
+                SettleFrames(120);
+                var fbar = PptBarRect();
+                var nextArrow = PptBar.ArrowCell(fbar, left: false, DpiScale);
+                PptBarPointerDown((nextArrow.MinX + nextArrow.MaxX) * 0.5f,
+                                  (nextArrow.MinY + nextArrow.MaxY) * 0.5f);
+                SettleFrames((int)DocMemory.FlipMs + 120);
+                Check("文本编辑中点下一页：先提交再翻页，编辑宿主收掉",
+                      !TextBoxEditing && BarPageNow == 2 && TextBoxCountForTest == 1,
+                      $"editing={TextBoxEditing} 页={BarPageNow} 文本框={TextBoxCountForTest}");
+                // 清掉测试框，回到第 1 页，后面仍从“1 笔”起。
+                BarGoto(1);
+                SettleFrames((int)DocMemory.FlipMs + 80);
+                Doc.Clear();
+                Doc.ClearHistory();
+                SetToolFromUi(Tool.Pen);
+                SettleFrames(80);
+            }
+
             BarGoto(3);
             SettleFrames((int)DocMemory.FlipMs + 120);
             Check("跳页（面板同一入口）：到第 3 页", BarPageNow == 3, $"{BarPageNow}");

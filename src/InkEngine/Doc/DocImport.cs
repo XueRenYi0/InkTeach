@@ -82,6 +82,8 @@ public partial class InkEngine
     /// <summary>跳到第 <paramref name="page"/> 页（1 起；页号面板用）。文档模式 = 页顶对齐视口顶。</summary>
     internal void BarGoto(int page)
     {
+        // 同 FlipPage：文本编辑中跳页，先把文本框提交。
+        if (_textBoxEditing) EndTextBoxEditFromUi(true);
         if (BoardOn)
         {
             int idx = Math.Clamp(page - 1, 0, Math.Max(0, BoardPageCount - 1));
@@ -514,6 +516,8 @@ public partial class InkEngine
     internal void CloseDocument()
     {
         if (!DocView.IsOpen && _pdfDoc == null) return;
+        // 退出文档也先提交文本框：关掉页图/切回桌面后，编辑宿主不能还挂着。
+        if (_textBoxEditing) EndTextBoxEditFromUi(true);
         string title = DocView.Title;
 
         // 白板是独立槽：关文档前先退出白板，回到文档页，避免出现
