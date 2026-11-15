@@ -1087,7 +1087,7 @@ internal sealed partial class App
 
         // ---- 5) 常驻块数不超过预算 --------------------------------------
         Check("常驻分块不超预算", w0.LastTileCount <= Math.Max(w0.LastTileBudget, 1),
-              $"{w0.LastTileCount} 块 / 预算 {w0.LastTileBudget}（每块 {CanvasTileCache.TileBytes / 1024}KB）");
+              $"{w0.LastTileCount} 块 / 预算 {w0.LastTileBudget}（每块 {T * T * 4 / 1024}KB）");
 
         Console.WriteLine();
         Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：块边界无缝、跨块笔画完整、回程免重画、内存有上界");

@@ -1695,13 +1695,83 @@ public partial class InkEngine
     private float ClampOffsetX(float x)
     {
         // 100% 时横向相机必须严格为 0：这是"阶段 1 逐像素不变"的硬保证。
-        if (ViewScale <= 1.0001f) return 0f;
+        // 100% 以下（文档缩到 50~75%）允许横向摆正——否则缩小后页会贴死在左边。
+        if (MathF.Abs(ViewScale - 1f) <= 0.0005f) return 0f;
         var extent = CanvasExtent;
         // 左右各夹到"内容边贴住视口边"：x 的正方向 = 内容右移。
         float minX = _virtualX + _virtualW - extent.MaxX * ViewScale;   // 内容右边缘贴视口右边缘
         float maxX = _virtualX - extent.MinX * ViewScale;               // 内容左边缘贴视口左边缘
         if (maxX < minX) { float t = minX; minX = maxX; maxX = t; }
         return Math.Clamp(x, minX, maxX);
+    }
+
+    // =====================================================================
+    //  文档缩放（v1：只缩文档，50/75/100/125/150/200）
+    //
+    //  参考：Acrobat / 浏览器 PDF 阅读器的"以视口中心缩放"——缩放前后
+    //  **中心压着的那个画布点不动**，用户不会"点一下放大就找不到刚才看的地方"。
+    //  只缩文档（白板 / 桌面批注不缩）：页和墨一起缩，页位图按新倍率重渲。
+    // =====================================================================
+
+    /// <summary>文档缩放档（1 = 100%）。只在文档开着时有效，关文档 / 打开新文档回到 1。</summary>
+    internal float DocZoom = 1f;
+
+    internal const float DocZoomMin = 0.5f;
+    internal const float DocZoomMax = 2f;
+
+    /// <summary>缩放档位（v1 只有这六档；不做 300%）。</summary>
+    internal static readonly float[] DocZoomSteps = { 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f };
+
+    /// <summary>
+    /// 文档缩放（界面 / 自检共用）。**只有文档开着才有意义**，其它情况是空操作。
+    ///
+    /// 相机换算：屏幕中心压着的画布点 (cx,cy) 在缩放后仍压在同一处：
+    ///   offset = centerScreen − c × scale。
+    /// 然后按 X/Y 夹取（夹取可能让中心点偏一点：页比视口窄时"不越过页边"优先）。
+    /// </summary>
+    internal void SetDocZoomFromUi(float zoom)
+    {
+        if (!DocView.IsOpen) return;
+        if (float.IsNaN(zoom) || float.IsInfinity(zoom)) return;
+        zoom = Math.Clamp(zoom, DocZoomMin, DocZoomMax);
+        if (MathF.Abs(zoom - ViewScale) < 0.0005f) { DocZoom = zoom; return; }
+
+        float centerScreenX = _virtualX + _virtualW * 0.5f;
+        float centerScreenY = _virtualY + _virtualH * 0.5f;
+        float cx = ScreenToCanvasX(centerScreenX);
+        float cy = ScreenToCanvasY(centerScreenY);
+
+        _camAnimating = false;                 // 缩放和翻页动画不能同时抢相机
+        ViewScale = zoom;
+        ViewOffsetX = centerScreenX - cx * zoom;
+        ViewOffsetY = centerScreenY - cy * zoom;
+        ClampViewOffset();
+
+        DocZoom = zoom;
+        DocView.SetViewScale(ViewScale);       // 页位图按新倍率重渲（≤100% 不重渲）
+        _dirty = true;
+        Console.WriteLine($"[文档] 缩放 {MathF.Round(zoom * 100f):F0}%"
+            + $"（页位图 {DocView.PageRenderScale:F2}x / 相机 {ViewScale:F2}x）");
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>放大一档（到头就停在 200%）。</summary>
+    internal void DocZoomIn() => SetDocZoomFromUi(NextDocZoomStep(+1));
+
+    /// <summary>缩小一档（到 50% 就停）。</summary>
+    internal void DocZoomOut() => SetDocZoomFromUi(NextDocZoomStep(-1));
+
+    private float NextDocZoomStep(int dir)
+    {
+        if (dir > 0)
+        {
+            foreach (var z in DocZoomSteps)
+                if (z > DocZoom + 0.0005f) return z;
+            return DocZoomMax;
+        }
+        for (int i = DocZoomSteps.Length - 1; i >= 0; i--)
+            if (DocZoomSteps[i] < DocZoom - 0.0005f) return DocZoomSteps[i];
+        return DocZoomMin;
     }
 
     /// <summary>
@@ -1817,10 +1887,14 @@ public partial class InkEngine
             // **白板是独立纸**：板开着时不能再把下面 PDF / 图片的页数算进来，
             // 否则白板会凭空多出很多空白屏，页码也会被底层文档带偏。
             if (!BoardOn && DocView.IsOpen) r.Add(DocView.Extent());
+            // "视口下方一屏空白"是**屏幕**一屏：画布单位要除以 ViewScale。
+            // 100% 时就是 _virtualH（老行为逐像素不变）；放大时空白跟着变短，
+            // 缩小时变长——否则缩放后"滚到底"的位置会差一整屏。
+            float oneScreen = _virtualH / ViewScaleSafe;
             r.Add(new RectF
             {
                 MinX = vp.MinX, MinY = vp.MaxY,
-                MaxX = vp.MaxX, MaxY = vp.MaxY + _virtualH,
+                MaxX = vp.MaxX, MaxY = vp.MaxY + oneScreen,
             });
             return r;
         }

@@ -503,7 +503,7 @@ public partial class InkEngine
             int primaryW = Native.GetSystemMetrics(0);       // 页锚在主屏中心 → 按主屏宽渲染
             if (primaryW <= 0) primaryW = _virtualW;
             int layoutW = DocMemory.LayoutWidth(primaryW);
-            int maxPx = DocMemory.MaxPagePixels;
+            int maxPx = DocMemory.MaxPagePixelsBase;
             for (int i = 0; i < doc.PageCount; i++)
             {
                 var (pw, ph) = doc.Size(i);
@@ -558,6 +558,13 @@ public partial class InkEngine
     /// </summary>
     private void StartDocView(List<DocPages.Spec> specs, string title, string storeKey)
     {
+        // 新文档 = 100%：缩放是**这一份文档的临时视图状态**，不跨文档继承
+        // （上一份放到 200%，打开下一份还是 200% 会让人以为"文件变大了"）。
+        // 必须在 EnterDocPageSpace / ClampViewOffset 之前复位：夹取要按新缩放算。
+        DocZoom = 1f;
+        ViewScale = 1f;
+        ViewOffsetX = 0f;
+
         DocView.Generator = DocRenderSpec;
         DocView.UseWorker = DocPageWorker;      // 后台渲染（产品默认开；见那行注释）
         DocView.OnResultReady = WakeForDocPage; // 后台渲完一页叫醒主循环（不叫就不上屏）
@@ -576,6 +583,7 @@ public partial class InkEngine
 
         float gap = 24f * DpiScale;                       // 页缝 = 24 逻辑像素（和白板页界线同语言）
         DocView.Open(specs, title, PrimaryScreenCenterX(), 0f, gap);
+        DocView.SetViewScale(1f);
         LoadDocInk(storeKey);
         ClampViewOffset();
         _docSavedVersion = Doc.Version;
@@ -624,6 +632,13 @@ public partial class InkEngine
         _pdfDoc?.Dispose();
         _pdfDoc = null;
         DiagLog.PdfNote = "";
+
+        // 缩放在文档关闭时复位（相机先回 100%，再回桌面槽——桌面槽的偏移是
+        // 按 1:1 记的，带着 200% 的 ViewOffsetY 回去会落到别的屏上）。
+        ViewScale = 1f;
+        DocZoom = 1f;
+        ViewOffsetX = 0f;
+        DocView.SetViewScale(1f);
 
         LeaveDocPageSpace();                // 回桌面（含相机位置恢复）
 

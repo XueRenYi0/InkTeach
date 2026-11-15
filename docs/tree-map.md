@@ -1,6 +1,6 @@
 # 目录树（自动生成，勿手改）
 
-> 生成：2026-11-15 ／ 脚本：`tools/gen-tree-map.ps1`
+> 生成：2026-11-16 ／ 脚本：`tools/gen-tree-map.ps1`
 > 用途：目录 = 功能域、文件名 = 功能块；先看树定位目录，再看行数决定读哪一段。
 > 语义导航（“某个需求该看哪 1–2 个文件”）看 `docs/module-map.md`；段落行号看 `docs/section-map.md`。
 
@@ -22,7 +22,7 @@
     **InkEngine/Core/**
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 156 行
-      - `Engine.cs` 2,686 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
+      - `Engine.cs` 2,763 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
       - `Engine.Host.cs` 2,223 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
@@ -49,9 +49,9 @@
 
     **InkEngine/Doc/**
       - `DocImageSource.cs` 292 行
-      - `DocImport.cs` 776 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
-      - `DocMemory.cs` 64 行
-      - `DocPages.cs` 533 行
+      - `DocImport.cs` 791 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
+      - `DocMemory.cs` 84 行
+      - `DocPages.cs` 662 行 — 文档页底层：页配方、惰性生成、视口窗口回收、文档缩放的页位图倍率。
       - `DocStore.cs` 246 行
       - `Pdfium.cs` 314 行
 
@@ -123,16 +123,16 @@
       - `InkPredictorLinear.cs` 273 行
 
     **InkEngine/Rendering/**
-      - `CanvasTiles.cs` 444 行
+      - `CanvasTiles.cs` 474 行
       - `Cursors.cs` 505 行
       - `Engine.Cursor.cs` 799 行 — 光标形状与滚动条交互。
-      - `Engine.UiBridge.cs` 992 行 — 引擎 ↔ 界面边界：IOverlayUi 命令转发。
+      - `Engine.UiBridge.cs` 993 行 — 引擎 ↔ 界面边界：IOverlayUi 命令转发。
       - `GlyphFill.cs` 341 行
       - `Icons.Paths.cs` 142 行
       - `LegacyOverlayLayer.cs` 74 行
       - `Overlay.Capture.cs` 789 行 — 截图取景框绘制：遮罩/准线/读数/手柄。
-      - `Overlay.Content.cs` 577 行
-      - `Overlay.cs` 1,381 行 — 覆盖层主文件：窗口/初始化/生命周期。
+      - `Overlay.Content.cs` 597 行
+      - `Overlay.cs` 1,383 行 — 覆盖层主文件：窗口/初始化/生命周期。
       - `Overlay.Frame.cs` 1,638 行 — 覆盖层帧渲染：内容/界面/装饰合成。
       - `Overlay.PptBar.cs` 705 行 — PPT 条/回放条/滚动条绘制。
       - `Overlay.Radial.cs` 657 行 — 呼出盘绘制。
@@ -143,7 +143,7 @@
       - `OverlayLayerManager.cs` 192 行
       - `OverlayLayerRegistration.cs` 215 行
       - `SvgPath.cs` 271 行
-      - `Ui.cs` 1,654 行 — 界面接入契约：IOverlayUi / IEngineCommands / UiState。
+      - `Ui.cs` 1,660 行 — 界面接入契约：IOverlayUi / IEngineCommands / UiState。
       - `UiHost.cs` 259 行
       - `UiImageBytes.cs` 40 行
 
@@ -182,7 +182,7 @@
       - `LatexCompat.cs` 387 行
       - `MathRenderer.cs` 234 行
       - `TextBoxBackground.cs` 82 行
-      - `TextBoxEditing.cs` 2,662 行 — 普通文本框插入/编辑/结束/富文本只读卡。
+      - `TextBoxEditing.cs` 2,677 行 — 普通文本框插入/编辑/结束/富文本只读卡。
       - `TextBoxSelection.cs` 474 行
       - `TextInputService.cs` 568 行
       - `TextStyles.cs` 413 行
@@ -228,7 +228,7 @@
       - `App.Dev.Show.cs` 429 行
       - `App.Modes.Catalog.cs` 46 行 — 自检模式注册表：总表与查找（ADR-005 D2）。
       - `App.Modes.Dev.cs` 188 行 — 自检模式注册表：Dev 域（ADR-005 D2）。新增模式只改本文件。
-      - `App.Modes.Doc.cs` 80 行 — 自检模式注册表：Doc 域（ADR-005 D2）。新增模式只改本文件。
+      - `App.Modes.Doc.cs` 87 行 — 自检模式注册表：Doc 域（ADR-005 D2）。新增模式只改本文件。
       - `App.Modes.Ink.cs` 614 行 — 自检模式注册表：Ink 域（ADR-005 D2）。新增模式只改本文件。
       - `App.Modes.Shape.cs` 244 行 — 自检模式注册表：Shape 域（ADR-005 D2）。新增模式只改本文件。
       - `App.Modes.Sys.cs` 577 行 — 自检模式注册表：Sys 域（ADR-005 D2）。新增模式只改本文件。
@@ -290,6 +290,7 @@
         - `TextStyleShow.cs` 125 行
         - `ToastTest.cs` 43 行
         - `Touch.cs` 1,271 行 — 触摸手势 E2E。
+        - `Zoom.cs` 361 行 — 文档缩放 E2E（阶段 2：渲染核心 + 引擎缩放 API）。
 
       **InkTeach/SelfTests/Unit/**
         - `UnitTestRunner.cs` 135 行

@@ -427,6 +427,9 @@ internal sealed partial class OverlayWindow : IDisposable
     private int _zCacheVersion = -1;
     /// <summary>上一帧的相机偏移。变了 → 整屏合成位置都变了，后缓冲整块作废。</summary>
     private float _lastCamY = float.NaN;
+    private float _lastCamX = float.NaN;
+    /// <summary>上一帧的相机缩放。变了 → 分块纹理倍率要换、两个后缓冲都作废。</summary>
+    private float _lastViewScale = float.NaN;
     private bool _lastBoardOn;
     private Color4 _lastBoardColor = new(0f, 0f, 0f, -1f);
     /// <summary>上一帧"文档垫白"在不在（进/出会整层重铺，和板色同一套）。</summary>

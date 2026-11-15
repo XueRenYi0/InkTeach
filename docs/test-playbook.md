@@ -51,7 +51,7 @@
 | 光标 | `--cursortest` | 工具 × 设备的落点反馈 |
 | 渲染与缓存 | `--tiletest`、`--selftest 8` | 分块、上屏、一万笔 |
 | 滚动 / 翻页 | `--wheeltest`、`--scrollwrite`、`--ghosttest`、`--pagetest` | 残影、翻页 |
-| 文档 / PPT | `--doctest`、`--ppttest` | 文档页、放映隔离 |
+| 文档 / PPT | `--doctest`、`--zoomtest`、`--ppttest` | 文档页、缩放、放映隔离 |
 | 导出 | `--iotest` | PNG/JPEG 逐像素 |
 | 白板底纹 | `--patterntest` | 线距、空闲 0 开销 |
 | 实笔轨迹 | `--trailtest` | 委托墨迹 |

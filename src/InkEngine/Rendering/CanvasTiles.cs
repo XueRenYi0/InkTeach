@@ -27,7 +27,8 @@ namespace InkEngine;
 ///
 /// ## 代价与边界
 ///
-/// - 每块 <see cref="TileSize"/>² × 4 字节显存（256 → 256KB）。
+/// - 每块 `(TileSize × RenderScale)`² × 4 字节显存（100% 时 256 → 256KB；
+///   200% 时 512 → 1MB，但可见块数少 4 倍，可见显存 ≈ 屏幕像素数）。
 /// - 常驻块数有上限（<see cref="BudgetTiles"/>），超了按最近使用淘汰。
 ///   这是**有界**内存：不像老做法那样随书写无限涨。
 /// - 块边界必须和画布像素**严格对齐**（块原点取整数倍），并且合成时
@@ -54,8 +55,37 @@ internal sealed class CanvasTileCache : IDisposable
     /// </summary>
     public static int TileSize = 256;
 
-    /// <summary>每块的字节数。</summary>
-    public static int TileBytes => TileSize * TileSize * 4;
+    /// <summary>
+    /// 块纹理的**超采样倍率**（= 相机缩放；见 <see cref="SetRenderScale"/>）。
+    ///
+    /// 画布矩形永远是 <see cref="TileSize"/>²（块网格、脏区、笔画筛选全按它算），
+    /// 只有**纹理**跟着这个倍率变大：200% 时一张纹理 512²，一块画布地方在屏幕上
+    /// 正好一格屏幕像素，墨迹和页图都是"按屏幕像素密度"烘的，不会糊。
+    ///
+    /// 反过来缩到 50% 时纹理是 128²：可见范围变成 4 倍画布面积，但每块纹理只有
+    /// 1/4 面积，**可见块的显存 ≈ 屏幕像素数**，不会因为"看得更多"而爆。
+    /// </summary>
+    public float RenderScale { get; private set; } = 1f;
+
+    /// <summary>一块纹理的实际边长（像素）= round(TileSize × RenderScale)。</summary>
+    public int TextureSize => Math.Max(1, (int)MathF.Round(TileSize * RenderScale));
+
+    /// <summary>每块纹理的字节数（跟着 <see cref="RenderScale"/> 走，预算按它算）。</summary>
+    public int TileBytes => TextureSize * TextureSize * 4;
+
+    /// <summary>
+    /// 换超采样倍率：**一次换、整层重烘**（旧纹理尺寸对不上，留着就是花屏）。
+    ///
+    /// 只在倍率真的变了的时候动手——相机每帧都会把 ViewScale 递进来，这里必须
+    /// 是幂等的，否则等于每帧重建整层缓存（那比不缓存还慢）。
+    /// </summary>
+    public void SetRenderScale(float scale)
+    {
+        if (!(scale > 0f)) scale = 1f;
+        if (MathF.Abs(scale - RenderScale) < 0.0005f) return;
+        RenderScale = scale;
+        Reset();          // 纹理尺寸变了：旧纹理一个都不能留（内容/显存一起放）
+    }
 
     /// <summary>
     /// 常驻分块上限。**0 = 自动：可见块数 + 32**。
@@ -75,8 +105,8 @@ internal sealed class CanvasTileCache : IDisposable
     /// </summary>
     public const int ScrollBackBytes = 8 * 1024 * 1024;
 
-    /// <summary>留给"往回滚"的额外块数。</summary>
-    public static int ScrollBackMargin => Math.Max(8, ScrollBackBytes / TileBytes);
+    /// <summary>留给"往回滚"的额外块数（按当前倍率的块大小算）。</summary>
+    public int ScrollBackMargin => Math.Max(8, ScrollBackBytes / TileBytes);
 
     /// <summary>一块内容层。持有者：<see cref="CanvasTileCache"/>。</summary>
     internal sealed class Tile
@@ -398,8 +428,8 @@ internal sealed class CanvasTileCache : IDisposable
     {
         var desc = new Texture2DDescription
         {
-            Width = (uint)TileSize,
-            Height = (uint)TileSize,
+            Width = (uint)TextureSize,
+            Height = (uint)TextureSize,
             MipLevels = 1,
             ArraySize = 1,
             Format = Format.B8G8R8A8_UNorm,

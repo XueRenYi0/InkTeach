@@ -1185,6 +1185,12 @@ public readonly struct UiState
     /// 只在文档开着时有意义：关文档 / 换工具 / 进穿透都会把它关掉（见引擎）。
     /// </summary>
     public bool DocPanMode { get; init; }
+    /// <summary>
+    /// 文档缩放档（1 = 100%，范围 0.5~2.0）。**只在文档开着时有意义**，关文档回到 1。
+    ///
+    /// 界面用它显示当前百分比（v1 还没有按钮，先走状态快照）。
+    /// </summary>
+    public float DocZoom { get; init; }
     /// <summary>白板开着（板面模式）。界面用它判断“箭头清屏”这条设置现在生效不生效。</summary>
     public bool BoardOn { get; init; }
     /// <summary>设置项「箭头清屏」开着。</summary>

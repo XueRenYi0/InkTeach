@@ -210,14 +210,24 @@ internal sealed partial class OverlayWindow
 
         // 相机变了：**分块一律不动**，只是贴的位置变了。后缓冲里躺着的是
         // 滚动前的画面，整块都不可信，所以这一帧整屏重合成。
-        if (ViewOffsetY != _lastCamY)
+        if (ViewOffsetY != _lastCamY || ViewOffsetX != _lastCamX)
         {
             // 普通内容只换贴合位置；但白板冻结的 PDF 页是按"冻结相机 − 当前相机"
             // 补偿画进分块的，相机一动就必须重烘，否则页图会跟着白板一起滚走。
             if (app.BoardFrozenDocActive)
                 _tiles.MarkAllDirty();
             _lastCamY = ViewOffsetY;
+            _lastCamX = ViewOffsetX;
             _fullFramesLeft = 2;      // 相机变了：两个缓冲都要重画到新位置（见字段说明）
+        }
+
+        // 缩放变了：分块纹理的倍率要跟着换（SetRenderScale 内部幂等——只有倍率真的
+        // 变了才整层重烘，不会每帧清一遍）。后缓冲里躺的是上一倍率下的画面，两个都作废。
+        if (MathF.Abs(ViewScaleSafe - _lastViewScale) > 0.0005f)
+        {
+            _lastViewScale = ViewScaleSafe;
+            _tiles.SetRenderScale(ViewScaleSafe);
+            _fullFramesLeft = 2;
         }
 
         // 底色是**画进分块里**的（透明批注 = 擦成全透明；白板 = 板色；文档开着 = 文档垫白），
@@ -289,7 +299,11 @@ internal sealed partial class OverlayWindow
 
         _ctx.Target = target;
         _ctx.BeginDraw();
-        _ctx.Transform = Matrix3x2.CreateTranslation(-canvas.MinX, -canvas.MinY);
+        // **先缩放、再减块原点**：块纹理是 (TileSize × RenderScale) 像素，
+        // 画布 1 单位 = RenderScale 纹理像素；平移仍是整数画布单位，
+        // 所以同一段几何在相邻块里的像素覆盖完全一致（接缝防线不变）。
+        _ctx.Transform = Matrix3x2.CreateScale(_tiles.RenderScale)
+                       * Matrix3x2.CreateTranslation(-canvas.MinX, -canvas.MinY);
 
         // 只补画新增的笔画：不清空、不遍历块内原有的笔画。
         // 内容层"只增不减"（正在写字）时才走这条路，见 SyncTiles 里的判断。
@@ -415,6 +429,16 @@ internal sealed partial class OverlayWindow
             MaxY = WindowToCanvasY(windowRect.MaxY),
         };
 
+        // 块纹理 = 画布 × RenderScale；src 必须写在**纹理像素**里。
+        float tex = _tiles.RenderScale;
+        bool oneToOne = MathF.Abs(tex - ViewScaleSafe) < 0.0005f;
+        // 纹理像素 = 屏幕像素时用 NearestNeighbor：线性过滤会在块边界上把邻居的
+        // 像素混进来（半透明笔迹会糊出淡边）。只有页位图被内存档位压低、和相机
+        // 倍率不一致时，才交给 Linear 做那一次放大。
+        var interp = oneToOne
+            ? Vortice.Direct2D1.InterpolationMode.NearestNeighbor
+            : Vortice.Direct2D1.InterpolationMode.Linear;
+
         foreach (var tile in _tiles.Visible)
         {
             var tr = CanvasTileCache.RectOf(tile.Tx, tile.Ty);
@@ -425,17 +449,15 @@ internal sealed partial class OverlayWindow
             float b = MathF.Min(tr.MaxY, canvasRect.MaxY);
             if (r <= l || b <= t) continue;
 
-            // src 仍然是**画布/纹理像素**（分块纹理目前 1 画布单位 = 1 像素，不改）；
+            // src = (画布子矩形 − 块原点) × RenderScale（纹理像素）；
             // dst 由 CanvasToWindow 换算：缩放时同一块在窗口上更大，由 DrawBitmap 拉伸。
-            var src = new Vortice.RawRectF(l - tr.MinX, t - tr.MinY, r - tr.MinX, b - tr.MinY);
+            var src = new Vortice.RawRectF((l - tr.MinX) * tex, (t - tr.MinY) * tex,
+                                           (r - tr.MinX) * tex, (b - tr.MinY) * tex);
             var dst = new Vortice.RawRectF(
                 CanvasToWindowX(l), CanvasToWindowY(t),
                 CanvasToWindowX(r), CanvasToWindowY(b));
 
-            // NearestNeighbor：画布和窗口是 1:1，不需要插值；用线性过滤反而
-            // 会在块边界上把邻居的像素混进来（半透明笔迹会糊出淡边）。
-            _ctx.DrawBitmap(tile.Source, dst, 1f,
-                Vortice.Direct2D1.InterpolationMode.NearestNeighbor, src, null);
+            _ctx.DrawBitmap(tile.Source, dst, 1f, interp, src, null);
         }
     }
 

@@ -1,6 +1,6 @@
 # 段落地图（自动生成，勿手改）
 
-> 生成：2026-11-15 ／ 脚本：`tools/gen-section-map.ps1` ／ 只列 >= 600 行的文件。
+> 生成：2026-11-16 ／ 脚本：`tools/gen-section-map.ps1` ／ 只列 >= 600 行的文件。
 > 用法：``Read`` 大文件前先在这里找段落标题，再只读那一段（行号漂移后重跑脚本即可）。
 
 ## src/InkEngine/Ai/AiCard.cs（2,761 行）
@@ -94,7 +94,7 @@
 | 537 | 底行：名单 / 学号范围 |
 | 563 | 绘制小工具 |
 
-## src/InkEngine/Core/Engine.cs（2,686 行）
+## src/InkEngine/Core/Engine.cs（2,763 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -102,11 +102,11 @@
 | 28 | `internal enum PassThroughMode` |
 | 45 | `public partial class InkEngine` |
 | 563 | `internal enum CaptureDrag { None, Move, L, R, T, B, TL, TR, BL, BR }` |
-| 2021 | `internal enum VertexReadoutKind` |
-| 2151 | `internal enum AlignSnapKind` |
-| 2160 | `private enum AlignLineRole` |
-| 2167 | `private struct AlignAxisCandidate` |
-| 2269 | `private enum FrameDrive` |
+| 2098 | `internal enum VertexReadoutKind` |
+| 2228 | `internal enum AlignSnapKind` |
+| 2237 | `private enum AlignLineRole` |
+| 2244 | `private struct AlignAxisCandidate` |
+| 2346 | `private enum FrameDrive` |
 
 | 行 | 段落 |
 | --- | --- |
@@ -123,17 +123,18 @@
 | 1316 | 湿墨档位（2026-10-13 新增；2026-10-15 精简为两档：应用湿墨层撤除） |
 | 1385 | 自绘预测尾（2026-10-15 接入：线性预测，Chromium 同族） |
 | 1465 | 长度限速（在"像素"上做，治"跳跃的笔头"） |
-| 1834 | 交互矢量图的参数滑杆（v2.1） |
-| 1882 | 图形定义元素编辑（直线 / 箭头 / 圆 / 椭圆）：和"拖对象"同一条快路 |
-| 2140 | 对象吸附（2026-10-18） |
-| 2294 | 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictorLinear.cs） |
-| 2317 | 书写期间的分配 / GC 仪表（低配机排查用） |
-| 2400 | perf accounting |
-| 2413 | 界面接入口 |
-| 2421 | 工具带色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成 8 个可改色位） |
-| 2450 | 荧光笔的 5 个色位 / 5 档浓度（2026-10-28） |
-| 2474 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
-| 2532 | 延时探针（见 Latency.cs） |
+| 1708 | 文档缩放（v1：只缩文档，50/75/100/125/150/200） |
+| 1911 | 交互矢量图的参数滑杆（v2.1） |
+| 1959 | 图形定义元素编辑（直线 / 箭头 / 圆 / 椭圆）：和"拖对象"同一条快路 |
+| 2217 | 对象吸附（2026-10-18） |
+| 2371 | 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictorLinear.cs） |
+| 2394 | 书写期间的分配 / GC 仪表（低配机排查用） |
+| 2477 | perf accounting |
+| 2490 | 界面接入口 |
+| 2498 | 工具带色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成 8 个可改色位） |
+| 2527 | 荧光笔的 5 个色位 / 5 档浓度（2026-10-28） |
+| 2551 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
+| 2609 | 延时探针（见 Latency.cs） |
 
 ## src/InkEngine/Core/Engine.Host.cs（2,223 行）
 
@@ -368,7 +369,7 @@
 | 2632 | 自定义取色板（8.2.0，色相条 + 饱和度/明度方块）的尺寸（逻辑像素） |
 | 3293 | 选中条弹层（AI / `⋯` 共用一套几何，2026-11-08） |
 
-## src/InkEngine/Doc/DocImport.cs（776 行）
+## src/InkEngine/Doc/DocImport.cs（791 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -378,9 +379,25 @@
 | --- | --- |
 | 32 | 底部页码条（"像打开 PPT 一样"——2026-10-07 用户定，见 计划-文档模式-状态模型.md） |
 | 142 | 文档页空间（墨迹和桌面板书 / PPT 批注互不污染；相机各自记忆） |
-| 639 | 文档「手掌」平移（2026-11-15：PDF 模式像放映） |
-| 750 | 真实指针接进来的入口（引擎只看"这一串消息归不归手掌"） |
-| 771 | 自检钩子（--doctest）：拖动 / 抬手直接喂给同一套方法 |
+| 654 | 文档「手掌」平移（2026-11-15：PDF 模式像放映） |
+| 765 | 真实指针接进来的入口（引擎只看"这一串消息归不归手掌"） |
+| 786 | 自检钩子（--doctest）：拖动 / 抬手直接喂给同一套方法 |
+
+## src/InkEngine/Doc/DocPages.cs（662 行）
+
+| 行 | 顶层类型 |
+| --- | --- |
+| 31 | `internal sealed class DocPages` |
+| 37 | `public sealed class Spec` |
+| 77 | `public sealed class Page` |
+
+| 行 | 段落 |
+| --- | --- |
+| 137 | 诊断计数（自检判据；HUD 的补充口径） |
+| 147 | 打开 / 关闭 |
+| 287 | 后台渲染线程（worker） |
+| 394 | 视口窗口：生成与回收 |
+| 605 | 查询（翻页 / 相机范围 / 渲染） |
 
 ## src/InkEngine/Export/Export.cs（1,178 行）
 
@@ -707,7 +724,7 @@
 | 495 | 滚动条（拖动 + 悬停） |
 | 523 | 整屏翻页（"一屏 = 一页"） |
 
-## src/InkEngine/Rendering/Engine.UiBridge.cs（992 行）
+## src/InkEngine/Rendering/Engine.UiBridge.cs（993 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -716,9 +733,9 @@
 | 行 | 段落 |
 | --- | --- |
 | 18 | 界面接入（引擎边界） |
-| 311 | 自检钩子（测试要驱动"换工具/操作条按钮/拖动中移动"这些私有路径） |
-| 907 | 浮层主题（选中操作条 / 小面板用它画） |
-| 925 | 界面偏好的存取（引擎只当仓库，不解释内容） |
+| 312 | 自检钩子（测试要驱动"换工具/操作条按钮/拖动中移动"这些私有路径） |
+| 908 | 浮层主题（选中操作条 / 小面板用它画） |
+| 926 | 界面偏好的存取（引擎只当仓库，不解释内容） |
 
 ## src/InkEngine/Rendering/Overlay.Capture.cs（789 行）
 
@@ -741,7 +758,7 @@
 | 517 | 触点诊断浮层（8.3.3，默认关） |
 | 568 | 橡皮读数浮层（8.3.7，默认关；调参用） |
 
-## src/InkEngine/Rendering/Overlay.cs（1,381 行）
+## src/InkEngine/Rendering/Overlay.cs（1,383 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -753,10 +770,10 @@
 | 行 | 段落 |
 | --- | --- |
 | 419 | 内容层（画布空间分块缓存） |
-| 437 | 界面缓存 |
-| 452 | 脏区上屏状态 |
-| 721 | 延时探针 |
-| 770 | 委托墨迹轨迹（微软的低延迟湿墨通道） |
+| 439 | 界面缓存 |
+| 454 | 脏区上屏状态 |
+| 723 | 延时探针 |
+| 772 | 委托墨迹轨迹（微软的低延迟湿墨通道） |
 
 ## src/InkEngine/Rendering/Overlay.Frame.cs（1,638 行）
 
@@ -825,7 +842,7 @@
 | --- | --- |
 | 23 | 界面层 |
 
-## src/InkEngine/Rendering/Ui.cs（1,654 行）
+## src/InkEngine/Rendering/Ui.cs（1,660 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -837,9 +854,9 @@
 | 955 | `public static class Hsv` |
 | 1007 | `public static class ShapeSpec` |
 | 1151 | `public static class LibraryCategoryIds` |
-| 1517 | `public enum UiTouchScrollPhase` |
-| 1553 | `public static class UiTouchFling` |
-| 1640 | `public sealed class NullUi : IOverlayUi` |
+| 1523 | `public enum UiTouchScrollPhase` |
+| 1559 | `public static class UiTouchFling` |
+| 1646 | `public sealed class NullUi : IOverlayUi` |
 
 ## src/InkEngine/Shapes/Engine.Library.cs（1,105 行）
 
@@ -922,13 +939,13 @@
 | 22 | `private enum HandOcrMode { Handwriting, TextBox, Plot }` |
 | 24 | `private sealed class HandOcrDone` |
 
-## src/InkEngine/Text/TextBoxEditing.cs（2,662 行）
+## src/InkEngine/Text/TextBoxEditing.cs（2,677 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 18 | `public partial class InkEngine` |
-| 2510 | `internal sealed class TextBoxTextAction : EditAction` |
-| 2608 | `internal sealed class TextBoxAnswersAction : EditAction` |
+| 2525 | `internal sealed class TextBoxTextAction : EditAction` |
+| 2623 | `internal sealed class TextBoxAnswersAction : EditAction` |
 
 | 行 | 段落 |
 | --- | --- |
@@ -1727,4 +1744,4 @@
 
 ---
 
-共 78 个文件。重跑：`powershell -ExecutionPolicy Bypass -File tools/gen-section-map.ps1`
+共 79 个文件。重跑：`powershell -ExecutionPolicy Bypass -File tools/gen-section-map.ps1`

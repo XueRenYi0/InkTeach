@@ -849,6 +849,9 @@ public partial class InkEngine
             return true;
         }
 
+        // 缩放 ≠100% 时先回到 100%：编辑宿主是**屏幕坐标**的原生窗口，字号 / 光标 /
+        // 截图背景都按 1:1 算，缩放态下会错位。先回 100% 再新建，行为简单可预期。
+        EnsureTextEditAt100();
         float cx = ScreenToCanvasX(screenX), cy = ScreenToCanvasY(screenY);
         var other = Doc.HitObjectAt(cx, cy, ClickToleranceLogical * DpiScale);
         if (other != null)
@@ -1120,11 +1123,23 @@ public partial class InkEngine
         BeginTextBoxEdit(s, caretScreenX: x, caretScreenY: y);
     }
 
+    /// <summary>
+    /// 文本编辑要求 100%：编辑宿主是屏幕坐标的原生窗口（字号、光标、截图背景
+    /// 全按 1:1 算），缩放态下会错位。文档开着时顺带把文档缩放复位到 100%。
+    /// 没开文档（桌面 / 白板）时 ViewScale 本来就是 1，不会进这里。
+    /// </summary>
+    private void EnsureTextEditAt100()
+    {
+        if (ViewScale > 0f && MathF.Abs(ViewScale - 1f) > 0.0005f) SetDocZoomFromUi(1f);
+    }
+
     internal void BeginTextBoxEdit(Stroke s, bool isNew = false,
                                    float? caretScreenX = null, float? caretScreenY = null)
     {
         if (s?.TextBox == null || s.TextBox.Role != TextBoxRole.Normal
             || s.TextBox.ReadOnly) return;
+        // 文本编辑只在 100% 下做：见 EnsureTextEditAt100 的说明。
+        EnsureTextEditAt100();
         BakeTextBoxTranslation(s);
         EnsureTextBoxEditWindow();
         if (_textBoxEditHwnd == IntPtr.Zero) return;

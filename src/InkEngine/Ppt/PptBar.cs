@@ -10,6 +10,10 @@ internal enum PptBarZone
     RightArrow,     // ▶ 下一页
     Page,           // 页码格：**点它直接开页号面板**；按下后移动 = 拖条
     Menu,           // 最右 ☰：**点它开 / 收菜单**
+    // ---- 下面三档只在文档模式（PDF / 图片）里有：缩放组插在页码组和 ☰ 之间 ----
+    ZoomOut,        // −：缩小一档
+    ZoomPct,        // 百分比：**点它开缩放档位浮层**
+    ZoomIn,         // ＋：放大一档
 }
 
 /// <summary>
@@ -53,11 +57,18 @@ internal static class PptBar
     /// <summary>页码组与 ☰ 之间的分隔带：**1px 竖线画在正中间**，两边各留 3.5 的呼吸。
     /// 这一带不算热区（见 <see cref="ZoneAt"/>）——点在线上不动作，也不会漏成画布笔画。</summary>
     public const float MenuGapW = 8f;
-    /// <summary>条宽。**缩放组将来插在页码组和 ☰ 之间**（结构已经就位：`MidCell` / `MenuCell`
-    /// 各算各的，加一组只需 `BarW += ZoomW + MenuGapW` 并补一个 Zone），现在**不放**缩放控件
-    /// （用户 2026-11-15：先把菜单拆出来，缩放下一轮再做）。</summary>
+    /// <summary>条宽（PPT / 白板）。文档模式另加一组缩放控件（见 <see cref="DocBarW"/>）。
+    /// 现在的排布：`[◀] [页码] [▶] │ [☰]`。</summary>
     public const float BarW = ArrowW * 2f + PageCellW + MenuGapW + MenuBtnW;   // ≈ 206
     public const float EdgeMargin = 16f;                     // 默认位置离屏幕左/下边
+
+    // ---- 文档模式的缩放组（2026-11-16）：`│ [−] [100% ▾] [+] │`
+    // 只插在页码组和 ☰ **之间**（顺序固定、不镜像），PPT / 白板一个像素都不变。
+    public const float ZoomBtnW = 40f;                       // − / ＋ 的点击格
+    public const float ZoomPctW = 72f;                       // 百分比格（含 ▾）
+    public const float ZoomGroupW = ZoomBtnW * 2f + ZoomPctW; // 152
+    /// <summary>文档模式的条宽 = 206 + 152 + 8 = 366（多出来的一条分隔带把缩放组和 ☰ 分开）。</summary>
+    public const float DocBarW = BarW + ZoomGroupW + MenuGapW;
 
     /// <summary>拖动的判定阈值（逻辑像素）：移动超过它 = 拖条；
     /// 没动过再松手 = 单击（开面板）。8 比界面的 `DragThreshold`(4) 松一点：
@@ -83,11 +94,53 @@ internal static class PptBar
     /// 因为菜单是"临时摊开的一张纸"，贴边一点无妨）。</summary>
     public const float MenuMargin = 12f;
 
-    /// <summary>由左上角位置算矩形（位置是物理像素）。</summary>
-    public static RectF RectAt(float x, float y, float dpi) => new()
+    // ---- 缩放档位浮层（点百分比弹出来的那张）----
+    /// <summary>浮层宽（**独立浮层**，不跟条同宽；和菜单同一套哲学）。</summary>
+    public const float ZoomMenuW = 140f;
+    public const float ZoomMenuItemH = 32f;
+    public const float ZoomMenuGap = 8f;
+    public const float ZoomMenuPad = 6f;
+    /// <summary>锚在百分比格上：横向以它为中心，纵向**优先开在条上方**（和菜单 / 页号面板同方向）。</summary>
+    public static RectF ZoomMenuRect(in RectF bar, int itemCount, float dpi, in RectF screen)
+    {
+        float w = ZoomMenuW * dpi;
+        float h = (itemCount * ZoomMenuItemH + ZoomMenuPad * 2f) * dpi;
+        float gap = ZoomMenuGap * dpi;
+        float m = MenuMargin * dpi;
+
+        var pct = ZoomPctCell(bar, dpi);
+        float cx = (pct.MinX + pct.MaxX) * 0.5f;
+        float x = cx - w * 0.5f;
+        float minX = screen.MinX + m, maxX = screen.MaxX - m - w;
+        if (maxX < minX) maxX = minX;
+        x = Math.Clamp(x, minX, maxX);
+
+        float minY = screen.MinY + m, maxY = screen.MaxY - m - h;
+        if (maxY < minY) maxY = minY;
+        float top = bar.MinY - gap - h;
+        if (top < minY) top = bar.MaxY + gap;
+        top = Math.Clamp(top, minY, maxY);
+        return new RectF { MinX = x, MinY = top, MaxX = x + w, MaxY = top + h };
+    }
+
+    public static RectF ZoomMenuItemRect(in RectF menu, int index, float dpi)
+    {
+        float pad = ZoomMenuPad * dpi, h = ZoomMenuItemH * dpi;
+        return new RectF
+        {
+            MinX = menu.MinX + pad, MinY = menu.MinY + pad + index * h,
+            MaxX = menu.MaxX - pad, MaxY = menu.MinY + pad + (index + 1) * h,
+        };
+    }
+
+    /// <summary>条宽：文档模式多一组缩放控件。</summary>
+    public static float WidthFor(bool docZoom) => docZoom ? DocBarW : BarW;
+
+    /// <summary>由左上角位置算矩形（位置是物理像素；<paramref name="docZoom"/> = 文档模式的宽条）。</summary>
+    public static RectF RectAt(float x, float y, float dpi, bool docZoom = false) => new()
     {
         MinX = x, MinY = y,
-        MaxX = x + BarW * dpi, MaxY = y + BarH * dpi,
+        MaxX = x + WidthFor(docZoom) * dpi, MaxY = y + BarH * dpi,
     };
 
     /// <summary>默认位置：**屏幕左下角**（用户 2026-09-26 定的："因为 PPT 本来的工具
@@ -97,9 +150,9 @@ internal static class PptBar
 
     /// <summary>把位置夹进屏幕（离边至少 <see cref="EdgeMargin"/>）——
     /// **拖出去找不回来**是这个功能最坏的失败模式。</summary>
-    public static Vector2 ClampTopLeft(float x, float y, in RectF screen, float dpi)
+    public static Vector2 ClampTopLeft(float x, float y, in RectF screen, float dpi, bool docZoom = false)
     {
-        float w = BarW * dpi, h = BarH * dpi, m = EdgeMargin * dpi;
+        float w = WidthFor(docZoom) * dpi, h = BarH * dpi, m = EdgeMargin * dpi;
         float minX = screen.MinX + m, maxX = screen.MaxX - m - w;
         if (maxX < minX) maxX = minX;                  // 屏幕比条还窄：钉在左边
         float minY = screen.MinY + m, maxY = screen.MaxY - m - h;
@@ -107,17 +160,13 @@ internal static class PptBar
         return new Vector2(Math.Clamp(x, minX, maxX), Math.Clamp(y, minY, maxY));
     }
 
-    /// <summary>◀ 格（最左 40；条不镜像，翻页组永远在左）。</summary>
+    /// <summary>◀ / ▶ 格（40 宽）。**从左边数**：翻页组永远在最左、不镜像；
+    /// 右边那格落在页码格右边界，和文档模式有没有缩放组无关。</summary>
     public static RectF ArrowCell(in RectF bar, bool left, float dpi)
     {
         float a = ArrowW * dpi;
-        return new RectF
-        {
-            MinX = left ? bar.MinX : bar.MaxX - (MenuBtnW + MenuGapW) * dpi - a,
-            MinY = bar.MinY,
-            MaxX = left ? bar.MinX + a : bar.MaxX - (MenuBtnW + MenuGapW) * dpi,
-            MaxY = bar.MaxY,
-        };
+        float x = left ? bar.MinX : bar.MinX + (ArrowW + PageCellW) * dpi;
+        return new RectF { MinX = x, MinY = bar.MinY, MaxX = x + a, MaxY = bar.MaxY };
     }
 
     /// <summary>页码格（中格，黄金矩形）——**点它开页号面板**，页码文字也在这块里居中。</summary>
@@ -142,8 +191,41 @@ internal static class PptBar
     public static float DividerX(in RectF bar, float dpi)
         => bar.MaxX - (MenuBtnW + MenuGapW * 0.5f) * dpi;
 
-    /// <summary>点到了哪一块（四块 + 一条不算热区的分隔带，不重叠也不留缝）。</summary>
-    public static PptBarZone ZoneAt(in RectF bar, float x, float y, float dpi)
+    /// <summary>页码组与缩放组之间那条 1px 竖线的中心 x。只有文档模式的宽条才有它。</summary>
+    public static float DividerLeftX(in RectF bar, float dpi)
+        => bar.MinX + (ArrowW * 2f + PageCellW + MenuGapW * 0.5f) * dpi;
+
+    /// <summary>缩放组的起点（减号左边界）。</summary>
+    private static float ZoomStartX(in RectF bar, float dpi)
+        => bar.MinX + (ArrowW * 2f + PageCellW + MenuGapW) * dpi;
+
+    /// <summary>− 格（缩放组最左 40）。</summary>
+    public static RectF ZoomOutCell(in RectF bar, float dpi)
+    {
+        float x = ZoomStartX(bar, dpi);
+        return new RectF { MinX = x, MinY = bar.MinY, MaxX = x + ZoomBtnW * dpi, MaxY = bar.MaxY };
+    }
+
+    /// <summary>百分比格（缩放组中间 72；百分比文字和 ▾ 都在这块里）。</summary>
+    public static RectF ZoomPctCell(in RectF bar, float dpi)
+    {
+        float x = ZoomStartX(bar, dpi) + ZoomBtnW * dpi;
+        return new RectF { MinX = x, MinY = bar.MinY, MaxX = x + ZoomPctW * dpi, MaxY = bar.MaxY };
+    }
+
+    /// <summary>＋ 格（缩放组最右 40）。</summary>
+    public static RectF ZoomInCell(in RectF bar, float dpi)
+    {
+        float x = ZoomStartX(bar, dpi) + (ZoomBtnW + ZoomPctW) * dpi;
+        return new RectF { MinX = x, MinY = bar.MinY, MaxX = x + ZoomBtnW * dpi, MaxY = bar.MaxY };
+    }
+
+    /// <summary>
+    /// 点到了哪一块（不重叠也不留缝）。
+    /// <paramref name="docZoom"/> = 文档模式：多出 `[−][百分比][+]` 三档；
+    /// 两条分隔带（8 宽）都**不是热区**——调用方仍然要把它们吃掉。
+    /// </summary>
+    public static PptBarZone ZoneAt(in RectF bar, float x, float y, float dpi, bool docZoom = false)
     {
         if (!bar.Contains(x, y)) return PptBarZone.None;
 
@@ -157,7 +239,23 @@ internal static class PptBar
 
         float a = ArrowW * dpi;
         if (x < bar.MinX + a) return PptBarZone.LeftArrow;
-        if (x >= groupEnd - a) return PptBarZone.RightArrow;
+
+        // 页码组右边界（文档模式里它后面还有分隔带 + 缩放组）。
+        float pageEnd = bar.MinX + (ArrowW * 2f + PageCellW) * dpi;
+        if (x >= pageEnd)
+        {
+            if (!docZoom) return PptBarZone.RightArrow;      // PPT / 白板：▶ 就在这儿
+            // 文档模式：先过一条分隔带，再是 [−][%][+]。
+            float zx = ZoomStartX(bar, dpi);
+            if (x < zx) return PptBarZone.None;              // 页码组 ↔ 缩放组的分隔带
+            float zoomEnd = zx + ZoomGroupW * dpi;
+            if (x >= zoomEnd) return PptBarZone.None;        // 缩放组 ↔ ☰ 的分隔带
+            if (x < zx + ZoomBtnW * dpi) return PptBarZone.ZoomOut;
+            if (x >= zoomEnd - ZoomBtnW * dpi) return PptBarZone.ZoomIn;
+            return PptBarZone.ZoomPct;
+        }
+
+        if (x >= pageEnd - a) return PptBarZone.RightArrow;
         return PptBarZone.Page;
     }
 

@@ -31,8 +31,28 @@ internal static class DocMemory
     /// <summary>PDF 页的渲染宽度上限。0 = 不额外限制（用主屏物理宽）。</summary>
     public static int RenderWidthCap => Low ? 1600 : High ? 0 : 1920;
 
-    /// <summary>单页像素预算（极端长页/超大幅面按它缩；防止一页 96MB）。</summary>
-    public static int MaxPagePixels => Low ? 8_000_000 : 12_000_000;
+    /// <summary>
+    /// 单页**基准**像素预算（极端长页/超大幅面按它缩；防止一页 96MB）。
+    ///
+    /// "基准"= 100% 时的位图尺寸。导入时只按它缩，**不改 100% 的观感**
+    /// （缩放是后加的一层，见 <see cref="PageRenderScaleCap"/>）。
+    /// </summary>
+    public static int MaxPagePixelsBase => Low ? 8_000_000 : 12_000_000;
+
+    /// <summary>
+    /// 单页像素预算的**上限**（含缩放放大后的位图）。用 200% 时的一页 A4 反推：
+    ///   · 2520 宽屏（本机）A4 = 2520×3566 ≈ 9.0MP，2× = 35.9MP ≈ 143MB；
+    ///   · 1920 宽屏 A4 2× ≈ 20.9MP ≈ 83MB。
+    /// 所以高清档给 36MP（16GB 机器只驻留一页，能吃得下）；标准档 24MP；
+    /// 省内存档 9MP（150% 刚好够）。超过它的页在缩放时自动降倍率，极端长页仍被夹住。
+    /// </summary>
+    public static int MaxPagePixels => Low ? 9_000_000 : High ? 36_000_000 : 24_000_000;
+
+    /// <summary>
+    /// 文档缩放时页位图的**重渲染倍率上限**（相机缩放 ≤1 时一律 1：只缩不合，不重渲）。
+    /// 省内存档 1.5（一页 150% 就够看清）；标准/高清 2.0（200%）。
+    /// </summary>
+    public static float PageRenderScaleCap => Low ? 1.5f : 2.0f;
 
     /// <summary>
     /// 页缓存窗口 = 视口本身（0 屏余量）。静止 1 页；跨页缝/翻页时最多 2 页。

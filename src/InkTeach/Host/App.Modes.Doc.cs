@@ -30,6 +30,13 @@ internal sealed partial class App
             DocumentTest();
             return null;
         }),
+        new("--zoomtest", "文档缩放自检（50~200%：中心不动、页矩形不变、页位图倍率、页+墨一起缩、回到 100%）", args =>
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ZoomTest();
+            return null;
+        }),
         new("--handocr", "", args =>
         {
             _autoExitAt = double.MaxValue;

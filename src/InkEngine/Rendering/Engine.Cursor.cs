@@ -513,8 +513,8 @@ public partial class InkEngine
     /// <summary>把一个相机偏移夹进合法范围（翻页要"先算目标再决定动不动"，所以抽出来）。</summary>
     private float ClampOffset(float y)
     {
-        var extent = CanvasExtent;
-        float lowest = _virtualH / ViewScaleSafe - extent.MaxY;
+        // 画布底（含"视口下方一屏空白"）× ViewScale 才是屏幕位置；100% 时 = 老式子。
+        float lowest = _virtualY + _virtualH - CanvasExtent.MaxY * ViewScaleSafe;
         if (y > 0f) y = 0f;
         if (y < lowest) y = lowest;
         return y;
@@ -639,7 +639,7 @@ public partial class InkEngine
     }
 
     /// <summary>当前在第几屏（1 起）。相机偏移除以视口高 + 1。</summary>
-    internal int ScreenIndex => (int)Math.Round(-ViewOffsetY / Math.Max(1f, PageHeightCanvas)) + 1;
+    internal int ScreenIndex => (int)Math.Round((_virtualY - ViewOffsetY) / Math.Max(1f, _virtualH)) + 1;
 
     /// <summary>
     /// 白板自己的页数：内容最远到第几屏，至少当前屏；空白板至少 1 页。

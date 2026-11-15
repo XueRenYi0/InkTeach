@@ -1,3 +1,6 @@
+// [职责] 文档页底层：页配方、惰性生成、视口窗口回收、文档缩放的页位图倍率。
+// [测试] --doctest / --zoomtest
+
 using Vortice.Mathematics;
 
 namespace InkEngine;
@@ -47,10 +50,25 @@ internal sealed class DocPages
         /// 内部渲染位图的宽高（0 = 跟 OutW/OutH 一样）。
         /// PDF 低内存档：OutW 仍是主屏显示宽（页铺满屏），RenderW 只需 1600；
         /// 绘制时 D2D 把它放大到 OutW，内存按 RenderW 算。
+        /// **这是 100% 的基准尺寸**；文档缩放时不要直接改它们（见 <see cref="RenderScale"/>）。
         /// </summary>
         public int RenderW, RenderH;
-        public int BitmapW => RenderW > 0 ? RenderW : OutW;
-        public int BitmapH => RenderH > 0 ? RenderH : OutH;
+
+        /// <summary>
+        /// 页位图的**重渲染倍率**（1 = 100%）。位图实际尺寸 = round(基准 Render×这个倍率)。
+        ///
+        /// 为什么单独一位、不直接改 RenderW/H：缩放要能**回到 100%**（不重渲、
+        /// 用原图），而且 worker 线程可能正拿着旧 Spec 在渲——原地改字段等于
+        /// 边渲边改同一份配方。所以缩放走"克隆 Spec、只改这一位"（见 SetViewScale）。
+        /// </summary>
+        public float RenderScale = 1f;
+
+        /// <summary>位图宽（像素）＝基准 RenderW × <see cref="RenderScale"/>。</summary>
+        public int BitmapW => ScaleDim(RenderW > 0 ? RenderW : OutW);
+        public int BitmapH => ScaleDim(RenderH > 0 ? RenderH : OutH);
+
+        private int ScaleDim(int basePx)
+            => Math.Max(1, (int)MathF.Round(basePx * (RenderScale > 0f ? RenderScale : 1f)));
 
         public override string ToString() =>
             $"{(Kind == 0 ? "图片" : "PDF")} {System.IO.Path.GetFileName(Source)}#{SourceIndex} {OutW}x{OutH}";
@@ -91,6 +109,23 @@ internal sealed class DocPages
 
     /// <summary>"整层变了"（打开 / 关闭）：渲染层看到它就整层作废（MarkAllDirty）。</summary>
     public bool FullDirty;
+
+    /// <summary>相机缩放（引擎每帧的 <c>ViewScale</c>；≤1 时页位图不重渲）。</summary>
+    public float ViewScale { get; private set; } = 1f;
+
+    /// <summary>
+    /// 当前页位图的重渲染倍率（1 = 100%，见 <see cref="DocMemory.PageRenderScaleCap"/>）。
+    /// 只是诊断/自检口径；每页的倍率在 <c>Spec.RenderScale</c>（极端页会被预算夹低）。
+    /// </summary>
+    public float PageRenderScale { get; private set; } = 1f;
+
+    /// <summary>
+    /// 渲染代次：每次换倍率 +1。worker 开工时记下它，渲完对不上就丢掉结果——
+    /// 否则"刚放大到 200%，1x 那张旧图却被采纳"，看着放大了、字还是糊的。
+    /// 背后是 volatile 字段：worker 线程读它必须看到 UI 线程刚写的值。
+    /// </summary>
+    public int RenderGeneration => _renderGeneration;
+    private volatile int _renderGeneration;
 
     /// <summary>变了哪几块（画布矩形）。渲染层照单 MarkDirty——滚动中单页生成就靠它。</summary>
     internal readonly List<RectF> DirtyRects = new();
@@ -141,8 +176,89 @@ internal sealed class DocPages
         }
         FullDirty = true;
         Version++;
+        ViewScale = 1f;              // 新文档一律 100% 起步（引擎随后可能立刻 SetViewScale）
+        PageRenderScale = 1f;
+        _renderGeneration++;          // 换文档：在途结果一律作废
         StartWorker();      // UseWorker 时把后台渲染线程拉起来（不调用 = 零开销）
     }
+
+    /// <summary>
+    /// **文档缩放**：按相机缩放换页位图的重渲染倍率（页面矩形 / OutW/OutH 不变）。
+    ///
+    /// 规则：
+    ///   · 相机 ≤100% → 倍率 1（只缩不合：合成时缩小旧图就够了，绝不重渲一张更大的）；
+    ///   · 相机 &gt;100% → 倍率 = min(相机, <see cref="DocMemory.PageRenderScaleCap"/>)；
+    ///   · 每页再按 <see cref="DocMemory.MaxPagePixels"/> 夹一遍（极端长页不顶爆内存）。
+    ///
+    /// **克隆 Spec、不原地改**：worker 线程可能正拿着旧 Spec 在渲，字段一变就是
+    /// 边渲边改同一份配方（渲染出来的宽高和 Adopt 用的宽高对不上）。
+    /// 旧位图全放、代次/版本 +1、整层标脏（分块里烘着旧倍率的页像素）。
+    /// </summary>
+    public void SetViewScale(float cameraScale)
+    {
+        if (!(cameraScale > 0f)) cameraScale = 1f;
+        if (MathF.Abs(cameraScale - ViewScale) < 0.0005f) return;
+        ViewScale = cameraScale;
+
+        float want = cameraScale <= 1.0001f
+            ? 1f
+            : MathF.Min(cameraScale, DocMemory.PageRenderScaleCap);
+        PageRenderScale = want;
+
+        bool changed = false;
+        foreach (var p in _pages)
+        {
+            var sp = p.Spec;
+            if (sp == null) continue;
+
+            float s = want;
+            if (sp.Kind == 0)
+            {
+                // 图片页：源像素就那么多，放大重渲只是白花内存（GDI+ 再插值一遍还更糊）。
+                s = 1f;
+            }
+            else
+            {
+                long baseW = Math.Max(1, sp.RenderW > 0 ? sp.RenderW : sp.OutW);
+                long baseH = Math.Max(1, sp.RenderH > 0 ? sp.RenderH : sp.OutH);
+                long budget = DocMemory.MaxPagePixels;
+                double scaledPx = (double)baseW * baseH * s * s;
+                if (scaledPx > budget)
+                    s = MathF.Max(1f, MathF.Sqrt((float)budget / ((float)baseW * baseH)));
+            }
+
+            if (MathF.Abs(s - sp.RenderScale) < 0.0005f) continue;
+            p.Spec = CloneSpec(sp, s);
+            ReleasePage(p);                  // 旧倍率的位图立刻放掉（账也跟着减）
+            DirtyRects.Add(p.Rect);
+            changed = true;
+        }
+        if (!changed) return;
+
+        _renderGeneration++;
+        lock (_gate)
+        {
+            _want.Clear();                   // 旧倍率的"想要清单"作废，下一拍按新 Spec 重建
+            _readyPage = null;               // 还是旧倍率的结果：丢掉（账要还回去）
+            _readyImage?.Release();
+            _readyImage = null;
+        }
+        _wake.Set();
+        FullDirty = true;                    // 页像素全换了倍率：整层重铺
+        Version++;
+    }
+
+    /// <summary>复制一份页配方、只换重渲染倍率（见 <see cref="SetViewScale"/>）。</summary>
+    private static Spec CloneSpec(Spec src, float renderScale) => new()
+    {
+        Kind = src.Kind,
+        Source = src.Source,
+        SourceIndex = src.SourceIndex,
+        SrcX = src.SrcX, SrcY = src.SrcY, SrcW = src.SrcW, SrcH = src.SrcH,
+        OutW = src.OutW, OutH = src.OutH,
+        RenderW = src.RenderW, RenderH = src.RenderH,
+        RenderScale = renderScale,
+    };
 
     /// <summary>
     /// 关掉文档：**先停后台线程**（等它把在途那一页渲完——PDF 文档要等它放手了才能关，
@@ -161,6 +277,9 @@ internal sealed class DocPages
         ResidentBytes = 0;
         _pinnedIndex = -1;
         Title = "";
+        ViewScale = 1f;              // 关文档 = 回到 100%（下一份文档也从 100% 起步）
+        PageRenderScale = 1f;
+        _renderGeneration++;
         FullDirty = true;
         Version++;
     }
@@ -240,15 +359,19 @@ internal sealed class DocPages
             }
 
             byte[] bgra = null;
+            // 开工这一刻记下代次：渲的过程中可能被 SetViewScale 换了倍率
+            // （Spec 已被整份替换，手上这份结果就是废的）。
+            int gen = RenderGeneration;
             try { bgra = Generator?.Invoke(job.Spec); }
             catch (Exception ex)
             {
                 Console.WriteLine($"    [文档] 生成失败（{job.Spec}）：{ex.Message}");
             }
-            if (_stop)
+            if (_stop || gen != RenderGeneration)
             {
                 lock (_gate) { _inFlight = null; }
-                break;                    // 关文档了：结果直接丢（文档随后才释放）
+                if (_stop) break;         // 关文档了：结果直接丢（文档随后才释放）
+                continue;                 // 倍率变了：这份结果作废，接着拿新配方
             }
 
             ImageData img = null;
@@ -308,7 +431,9 @@ internal sealed class DocPages
             {
                 if (rp.Image == null && !rp.Failed)
                 {
-                    if (ri != null)
+                    // 尺寸对得上当前 Spec 才收：倍率刚换过的话，这是一张旧倍率的结果。
+                    bool dimsOk = ri != null && ri.Width == rp.Spec.BitmapW && ri.Height == rp.Spec.BitmapH;
+                    if (dimsOk)
                     {
                         rp.Image = ri;
                         adopted = 1;
@@ -316,10 +441,14 @@ internal sealed class DocPages
                         ResidentPages++;
                         ResidentBytes += ri.ByteSize;
                     }
-                    else
+                    else if (ri == null)
                     {
                         rp.Failed = true;          // 后台也失败 → 浅红占位
                         FailCount++;
+                    }
+                    else
+                    {
+                        ri.Release();              // 旧倍率的结果：丢掉，下一拍按新 Spec 重渲
                     }
                     DirtyRects.Add(rp.Rect);
                     Version++;
