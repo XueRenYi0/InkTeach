@@ -15,11 +15,11 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 
-> **Latest 9.8.0 (2026-11-14)**: the international release — the installer and the app now
-> support **10 languages**: Simplified Chinese / English / Japanese / Korean / German / French /
-> Spanish / Brazilian Portuguese / Russian / Italian. Pick one in **Settings → General → Language**
-> and restart. The source is **GPL-3.0** again. It also includes the 9.7.0 image beautifier and
-> image-to-question-card OCR, 41 shape cards, clear-on-arrow; the next release moves device stats to default-on with no modal consent.
+> **Latest 9.9.0 (2026-11-15)**: anonymous device stats are now **on by default with no modal** —
+> country/region only, **no IP, province or city**, and a single 6-second non-blocking notice.
+> Off by default in the EU / UK / Switzerland; turn it off under **Settings → About**, which also
+> deletes this device's card. Log upload stays a separate consent. The app and installer still
+> support 10 languages.
 >
 > *This English README is a summary. The Chinese [README.md](README.md) is the authoritative, most
 > current version.*
@@ -33,7 +33,7 @@ PowerPoint/WPS integration requires PowerPoint or WPS installed; everything else
 
 ## Quick start
 
-1. Download `InkTeach-Setup-9.8.0.exe`, double-click, Next, Done — or unzip the portable build.
+1. Download `InkTeach-Setup-9.9.0.exe`, double-click, Next, Done — or unzip the portable build.
 2. Open PowerPoint/WPS in slideshow mode, or any app; the InkTeach toolbar sits at the bottom.
 3. Write with a pen or mouse. `Ctrl+L` = laser, `Ctrl+E` = eraser, `Ctrl+Alt+Shift+T` hands the mouse back; press it again to return to the pen (9.3.2).
 4. Hold `Ctrl+Alt+Shift+Q` and flick to a sector to switch tools without hunting for the toolbar.
@@ -431,7 +431,7 @@ downloaded package's sha256 is verified before it replaces anything.
 InkTeach uploads an anonymous device card once a day — random install ID, version, UI language,
 Windows country/region, first/last-use dates, OS/CPU/RAM/GPU/screen/DPI, frame rate/slow frames/
 memory, and touch-count/area statistics. It does **not** collect IP, province/city, names, accounts,
-courseware, homework, or screen content. From the next release it is **on by default with a single non-blocking
+courseware, homework, or screen content. From 9.9.0 it is **on by default with a single non-blocking
 notice** (off by default in the EU/UK/Switzerland); turn it off under **Settings → About → Anonymous
 device stats**. Turning it off stops uploads and deletes the old device card for that install ID.
 See [PRIVACY.md](PRIVACY.md).

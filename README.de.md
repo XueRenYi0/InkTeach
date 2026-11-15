@@ -4,7 +4,7 @@
 
 **InkTeach ist eine transparente Anmerkungsebene für Windows, mit der Sie direkt auf PPT / WPS / PDF / Bildern / jeder App schreiben.** Die Datei darunter bleibt unverändert. Stift, Textmarker, Laserpointer, Screenshots, Formenerkennung, 41 Mathe-Formkarten, Objekt-Snapping, Favoriten, Timer und Zufallsauswahl – mit **10 Oberflächensprachen**.
 
-## Download (9.8.0)
+## Download (9.9.0)
 
 - Installer: [GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest) ｜ [GitCode-Spiegel](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 - Portable ZIP: [GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest)
