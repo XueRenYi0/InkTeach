@@ -618,6 +618,7 @@ public partial class InkEngine
         if (_textBoxEditing) EndTextBoxEditFromUi(true);
         // 手掌是"文档模式"的一部分：关文档就关掉（退出文档 = 回到桌面 + 那格恢复成穿透箭头）。
         ExitDocPan("关文档");
+        PptZoomMenuOpen = false;            // 缩放浮层同理：文档都没了，别留一个孤儿浮层吃点击
         string title = DocView.Title;
 
         // 白板是独立槽：关文档前先退出白板，回到文档页，避免出现
@@ -670,7 +671,8 @@ public partial class InkEngine
     /// <summary>正在拖（按下到抬手之间）。只认屏幕坐标的位移差。</summary>
     private bool _docPanDragging;
 
-    /// <summary>上一拍的屏幕 Y（只用来算位移，不参与别处）。</summary>
+    /// <summary>上一拍的屏幕坐标（只用来算位移，不参与别处）。</summary>
+    private float _docPanLastScreenX;
     private float _docPanLastScreenY;
 
     /// <summary>上一拍界面看到的页码；变了才通知界面（免得每帧重建一次状态快照）。</summary>
@@ -707,28 +709,37 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 按下：进入拖页。<paramref name="screenY"/> 是**屏幕**坐标（平移只认屏幕位移，
-    /// 换成画布坐标会被相机自己抵消掉）。
+    /// 按下：进入拖页。<paramref name="screenX"/>/<paramref name="screenY"/> 是**屏幕**坐标
+    /// （平移只认屏幕位移，换成画布坐标会被相机自己抵消掉）。
     /// </summary>
-    private void BeginDocPan(float screenY)
+    private void BeginDocPan(float screenX, float screenY)
     {
         // 翻页动画还在跑就先停在当前帧：否则"手里在拖、相机自己在飞"，两边打架。
         _camAnimating = false;
         _docPanDragging = true;
+        _docPanLastScreenX = screenX;
         _docPanLastScreenY = screenY;
         _docPanLastPage = BarPageNow;
     }
 
-    /// <summary>拖动中：按位移改相机（和滚轮同一套符号），夹进合法范围。</summary>
-    private void UpdateDocPan(float screenY)
+    /// <summary>
+    /// 拖动中：按位移改相机（和滚轮同一套符号），夹进合法范围。
+    /// **放大到 >100% 时横向也跟着拖**（页比视口宽，左右要能看全）；≤100% 保持只走纵向
+    /// （阶段 1 的硬保证：100% 横向相机严格为 0）。
+    /// </summary>
+    private void UpdateDocPan(float screenX, float screenY)
     {
         if (!_docPanDragging) return;
+        float dx = screenX - _docPanLastScreenX;
         float dy = screenY - _docPanLastScreenY;
+        _docPanLastScreenX = screenX;
         _docPanLastScreenY = screenY;
-        if (MathF.Abs(dy) < 0.01f) return;
+        if (MathF.Abs(dx) < 0.01f && MathF.Abs(dy) < 0.01f) return;
 
         // 手指/笔往下拖 = 内容跟着往下走 = 相机偏移变大（screen = canvas + ViewOffsetY）。
-        ViewOffsetY = ClampOffset(ViewOffsetY + dy);
+        if (MathF.Abs(dy) >= 0.01f) ViewOffsetY = ClampOffset(ViewOffsetY + dy);
+        if (ViewScale > 1.0005f && MathF.Abs(dx) >= 0.01f)
+            ViewOffsetX = ClampOffsetX(ViewOffsetX + dx);
         _dirty = true;
 
         // 页码条跟着换页（页号变了才重建界面状态）。
@@ -755,10 +766,13 @@ public partial class InkEngine
     /// **真实输入和自检问同一条判据**（自检直接调它，免得"测的是另一条路"）。
     /// 归 = 进入拖动并返回 true（调用方负责 SetCapture / 光标 / 脏区）。
     /// </summary>
-    internal bool TryBeginDocPanPress(float screenY)
+    internal bool TryBeginDocPanPress(float screenY) => TryBeginDocPanPress(float.NaN, screenY);
+
+    internal bool TryBeginDocPanPress(float screenX, float screenY)
     {
         if (!DocPanMode || !DocView.IsOpen || PassThrough) return false;
-        BeginDocPan(screenY);
+        // 只给 Y 的老入口（自检 / 旧调用）：横向起点用"当前值"，那一拍只有纵向位移。
+        BeginDocPan(float.IsNaN(screenX) ? _docPanLastScreenX : screenX, screenY);
         return true;
     }
 
@@ -768,10 +782,10 @@ public partial class InkEngine
     /// 拖动中的移动：还在拖、而且就是按下的那根指针 → 平移并返回 true。
     /// 返回 false = 不归手掌（调用方继续走原来的悬停/工具分支）。
     /// </summary>
-    internal bool DocPanMoveFromPointer(uint id, float screenY)
+    internal bool DocPanMoveFromPointer(uint id, float screenX, float screenY)
     {
         if (!_docPanDragging || id != _activePointer) return false;
-        UpdateDocPan(screenY);
+        UpdateDocPan(screenX, screenY);
         return true;
     }
 
@@ -783,9 +797,15 @@ public partial class InkEngine
         return true;
     }
 
-    // ---- 自检钩子（--doctest）：拖动 / 抬手直接喂给同一套方法 ----------------
+    // ---- 自检钩子（--doctest / --zoomtest）：拖动 / 抬手直接喂给同一套方法 ----------------
 
-    internal void DocPanDragForTest(float screenY) => UpdateDocPan(screenY);
+    /// <summary>只给 Y 的老入口（阶段 2 及以前的自检）：X 不产生位移。</summary>
+    internal void DocPanDragForTest(float screenY)
+        => UpdateDocPan(_docPanLastScreenX, screenY);
+
+    internal void DocPanDragForTest(float screenX, float screenY)
+        => UpdateDocPan(screenX, screenY);
+
     internal void DocPanReleaseForTest() => EndDocPan();
     internal bool DocPanDraggingForTest => _docPanDragging;
 }

@@ -535,6 +535,9 @@ internal sealed partial class OverlayWindow
                 // 菜单和首次引导都长在条的上方（引导还比菜单窄一点，用同一个矩形兜住就够）
                 if ((!app.BoardOn && app.PptMode && app.PptHintVisible) || app.PptMenuOpen)
                 { app.PptMenuRect(out var pm); cur.Add(pm.MinX, pm.MinY); cur.Add(pm.MaxX, pm.MaxY); }
+                // 缩放档位浮层（文档模式）同理：它开在条的上方，不收进脏区就不上屏。
+                if (app.PptZoomMenuOpen)
+                { app.PptZoomMenuRect(out var zm); cur.Add(zm.MinX, zm.MinY); cur.Add(zm.MaxX, zm.MaxY); }
                 float barPad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
                 r.Add(cur.Inflate(barPad));
             }

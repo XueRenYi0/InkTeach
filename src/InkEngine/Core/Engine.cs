@@ -1716,8 +1716,15 @@ public partial class InkEngine
     /// <summary>文档缩放档（1 = 100%）。只在文档开着时有效，关文档 / 打开新文档回到 1。</summary>
     internal float DocZoom = 1f;
 
+    /// <summary>固定档位的下限（`−` / `+` / 百分比档位只走 50~200）。</summary>
     internal const float DocZoomMin = 0.5f;
     internal const float DocZoomMax = 2f;
+    /// <summary>
+    /// **"适合整页"的硬下限**（2026-11-16）：A4 竖页在 16:9 屏上要缩到 ~40% 才装得下。
+    /// 只有 <see cref="FitDocPageToView"/> 用这个下限；`−` / `+` 和百分比档位仍然 50~200
+    /// （否则用户点一次"适合整页"就再也回不到 50% 这一档的语义了）。
+    /// </summary>
+    internal const float DocZoomFitMin = 0.4f;
 
     /// <summary>缩放档位（v1 只有这六档；不做 300%）。</summary>
     internal static readonly float[] DocZoomSteps = { 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f };
@@ -1731,20 +1738,30 @@ public partial class InkEngine
     /// </summary>
     internal void SetDocZoomFromUi(float zoom)
     {
+        SetDocZoomCore(zoom, DocZoomMin,
+            _virtualX + _virtualW * 0.5f, _virtualY + _virtualH * 0.5f);
+    }
+
+    /// <summary>
+    /// 缩放核心：<paramref name="minZoom"/> = 这一次允许的下限（"适合整页"传
+    /// <see cref="DocZoomFitMin"/>，其余传 <see cref="DocZoomMin"/>）；
+    /// <paramref name="anchorScreenX/Y"/> = 缩放前后压住不动的那个屏幕点
+    /// （界面按钮 = 视口中心；Ctrl+滚轮 = 指针位置）。
+    /// </summary>
+    private void SetDocZoomCore(float zoom, float minZoom, float anchorScreenX, float anchorScreenY)
+    {
         if (!DocView.IsOpen) return;
         if (float.IsNaN(zoom) || float.IsInfinity(zoom)) return;
-        zoom = Math.Clamp(zoom, DocZoomMin, DocZoomMax);
+        zoom = Math.Clamp(zoom, minZoom, DocZoomMax);
         if (MathF.Abs(zoom - ViewScale) < 0.0005f) { DocZoom = zoom; return; }
 
-        float centerScreenX = _virtualX + _virtualW * 0.5f;
-        float centerScreenY = _virtualY + _virtualH * 0.5f;
-        float cx = ScreenToCanvasX(centerScreenX);
-        float cy = ScreenToCanvasY(centerScreenY);
+        float cx = ScreenToCanvasX(anchorScreenX);
+        float cy = ScreenToCanvasY(anchorScreenY);
 
         _camAnimating = false;                 // 缩放和翻页动画不能同时抢相机
         ViewScale = zoom;
-        ViewOffsetX = centerScreenX - cx * zoom;
-        ViewOffsetY = centerScreenY - cy * zoom;
+        ViewOffsetX = anchorScreenX - cx * zoom;
+        ViewOffsetY = anchorScreenY - cy * zoom;
         ClampViewOffset();
 
         DocZoom = zoom;
@@ -1758,8 +1775,12 @@ public partial class InkEngine
     /// <summary>放大一档（到头就停在 200%）。</summary>
     internal void DocZoomIn() => SetDocZoomFromUi(NextDocZoomStep(+1));
 
-    /// <summary>缩小一档（到 50% 就停）。</summary>
-    internal void DocZoomOut() => SetDocZoomFromUi(NextDocZoomStep(-1));
+    /// <summary>缩小一档（到 50% 就停；"适合整页"缩到 40% 时这一下不动）。</summary>
+    internal void DocZoomOut()
+    {
+        if (DocZoom <= DocZoomMin + 0.0005f) return;
+        SetDocZoomFromUi(NextDocZoomStep(-1));
+    }
 
     private float NextDocZoomStep(int dir)
     {
@@ -1771,7 +1792,46 @@ public partial class InkEngine
         }
         for (int i = DocZoomSteps.Length - 1; i >= 0; i--)
             if (DocZoomSteps[i] < DocZoom - 0.0005f) return DocZoomSteps[i];
-        return DocZoomMin;
+        // 已经低于 50%（只可能是"适合整页"留下的 40%）：不再往 50% **放大**。
+        return MathF.Min(DocZoom, DocZoomMin);
+    }
+
+    /// <summary>
+    /// **"适合整页"现算的目标倍率**（把当前页整页装进视口）。
+    /// 参考 Acrobat / Edge 的 Fit Page：`min(视口宽/页宽, 视口高/页高)`。
+    /// A4 竖页在 16:9 屏上 ≈ 0.40，所以这里是**唯一**允许低于 50% 的地方。
+    /// </summary>
+    internal float DocFitPageZoom()
+    {
+        if (!DocView.IsOpen || DocView.Count <= 0) return DocZoom;
+        int i = Math.Clamp(BarPageNow - 1, 0, DocView.Count - 1);
+        var r = DocView.At(i).Rect;
+        float w = MathF.Max(1f, r.MaxX - r.MinX);
+        float h = MathF.Max(1f, r.MaxY - r.MinY);
+        float z = MathF.Min(_virtualW / w, _virtualH / h);
+        return Math.Clamp(z, DocZoomFitMin, 1f);
+    }
+
+    /// <summary>执行"适合整页"（围绕视口中心缩放，保证整页都看得见）。</summary>
+    internal void FitDocPageToView()
+    {
+        if (!DocView.IsOpen) return;
+        SetDocZoomCore(DocFitPageZoom(), DocZoomFitMin,
+            _virtualX + _virtualW * 0.5f, _virtualY + _virtualH * 0.5f);
+    }
+
+    /// <summary>
+    /// Ctrl + 滚轮缩放（只缩文档；**围绕指针**，指针压着的画布点不动）。
+    /// 返回 true = 这一下被缩放吃掉，不再走普通滚轮。
+    /// 普通滚轮（没有 Ctrl）照旧滚画布——见 HandleWheel。
+    /// </summary>
+    internal bool DocZoomWheelFromUi(int delta, float screenX, float screenY)
+    {
+        if (!DocView.IsOpen || PptMode || BoardOn || delta == 0) return false;
+        float target = NextDocZoomStep(delta > 0 ? +1 : -1);
+        if (MathF.Abs(target - DocZoom) < 0.0005f) return true;   // 已到头：吃掉，不改相机
+        SetDocZoomCore(target, DocZoomMin, screenX, screenY);
+        return true;
     }
 
     /// <summary>

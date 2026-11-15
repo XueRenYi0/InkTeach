@@ -74,7 +74,7 @@ public partial class InkEngine
         }
 
         // ---- ① 页码条 / 长按菜单 / 页号面板（白板和 PPT/文档共用同一块）----
-        if ((PptMode || BoardOn) && PptBarHover >= 0)
+        if ((PptMode || BoardOn || DocZoomBar) && PptBarHover >= 0)
         {
             if (PptBarHover >= 100 && PptBarHover < 100 + PptMenuItemCount)
             {
@@ -107,6 +107,25 @@ public partial class InkEngine
                 EngineTooltipHover(13, "菜单", null,
                     BoardOn ? "播放本屏 / 清空白板 / 历史板书 / 退出白板"
                             : "自动保存 / 回放 / 清空 / 退出", PptBar.MenuCell(bar, DpiScale));
+                return;
+            }
+            if ((PptBarZone)PptBarHover == PptBarZone.ZoomOut)
+            {
+                EngineTooltipHover(14, "缩小", "Ctrl+滚轮", "上一档（最小 50%）",
+                    PptBar.ZoomOutCell(bar, DpiScale));
+                return;
+            }
+            if ((PptBarZone)PptBarHover == PptBarZone.ZoomIn)
+            {
+                EngineTooltipHover(15, "放大", "Ctrl+滚轮", "下一档（最大 200%）",
+                    PptBar.ZoomInCell(bar, DpiScale));
+                return;
+            }
+            if ((PptBarZone)PptBarHover == PptBarZone.ZoomPct)
+            {
+                EngineTooltipHover(16, "缩放", null,
+                    "点 = 档位表（适合宽度 / 适合整页 / 50%~200%）；Ctrl+滚轮也行",
+                    PptBar.ZoomPctCell(bar, DpiScale));
                 return;
             }
         }

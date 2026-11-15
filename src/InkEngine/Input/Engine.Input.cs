@@ -164,6 +164,14 @@ public partial class InkEngine
             _dirty = true;
         }
 
+        // 缩放档位浮层同理：点"别的地方"就收起（它也是临时摊开的一张纸）。
+        // 条 / 浮层自己的命中不在这一层处理——由 PptBarPointerDown 分派。
+        if (PptZoomMenuOpen && !PptBarContains(screenX, screenY))
+        {
+            PptZoomMenuOpen = false;
+            _dirty = true;
+        }
+
         // 界面优先：点在悬浮条上就是操作界面，不是画一笔。
         //
         // 两件容易踩的事：
@@ -274,7 +282,7 @@ public partial class InkEngine
         // 文档「手掌」（2026-11-15：PDF 像放映）：文档模式里手掌开着时，**画布按下 = 拖页**——
         // 不落墨、不选中、不进文本/图形。排在穿透之后（穿透下根本收不到这一下）、
         // 工具分流之前（它要压住这一整下的工具语义）。触摸 / 笔 / 鼠标同一套。
-        if (DocPanMode && DocView.IsOpen && TryBeginDocPanPress(sy))
+        if (DocPanMode && DocView.IsOpen && TryBeginDocPanPress(screenX, screenY))
         {
             _activePointer = id;
             _activePointerType = ptype;
@@ -1222,7 +1230,7 @@ public partial class InkEngine
         PointerX = x; PointerY = y; PointerInside = true;
 
         // 文档手掌拖动：这一串移动只归平移（不落墨、不转发界面悬停、不喂工具）。
-        if (DocPanMoveFromPointer(id, sy)) return;
+        if (DocPanMoveFromPointer(id, screenX, screenY)) return;
 
         // 字体下拉：拖动滚动（含惯性）。
         if (FontListPointerMove(x, y, id)) { _dirty = true; return; }

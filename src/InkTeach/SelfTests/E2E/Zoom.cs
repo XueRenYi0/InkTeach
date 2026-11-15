@@ -74,6 +74,7 @@ internal sealed partial class App
 
             ZoomTestScale(Check);           // A–D：倍率 / 页矩形 / 坐标 / 六档 / 复位
             ZoomTestShots(Check);           // E：上屏 + 50/100/200 三张图
+            ZoomTestBarAndPan(Check);       // G：文档条缩放组 / 档位浮层 / 横向拖页 / Ctrl+滚轮
             ZoomTestWorker(Check, pdf);     // F：worker 代次
         }
 
@@ -318,6 +319,324 @@ internal sealed partial class App
             if (w > 4 && h > 4) total += ScreenProbe.CountNear(x, y, w, h, 255, 0, 0, 24);
         }
         return total;
+    }
+
+    /// <summary>
+    /// G 组：**文档条的缩放组 + 档位浮层 + 横向拖页 + Ctrl+滚轮**（2026-11-16）。
+    ///
+    /// 判据全部走真实入口：条用 `PptBarPointerDown`，缩放用 `SetDocZoomFromUi` /
+    /// `RunDocZoomPreset`，拖页用 `TryBeginDocPanPress` / `DocPanDragForTest`。
+    /// 几何用 `PptBar` 的自己算（和绘制 / 命中同一份），不另写一套坐标。
+    /// </summary>
+    private void ZoomTestBarAndPan(Action<string, bool, string> check)
+    {
+        Console.WriteLine("  -- G 文档条：缩放组 / 档位浮层 / 横向拖页 / Ctrl+滚轮 --");
+
+        // 干净起点：100%、无菜单、无手掌、无穿透
+        SetDocZoomFromUi(1f);
+        PptBarPointerDown(_virtualX + 4f, _virtualY + 4f);   // 点别处：收掉任何浮层
+        if (DocPanMode) ToggleDocPanFromUi();
+        // 条的位置清回默认（上一次真机跑可能把位置存进偏好；不清理这条会飘）
+        SetUiPref("pptBarX", null);
+        SetUiPref("pptBarY", null);
+        ResetPptBarPosForTest();
+        SettleFrames(120);
+
+        // ------------------------------------------------------------------
+        Console.WriteLine("  -- G1 条宽与热区：文档 366 / PPT 206，缩放组在页码组和 ☰ 之间 --");
+        // ------------------------------------------------------------------
+        check("条宽常量：PPT / 白板仍 ≈206、文档 = 366",
+              MathF.Abs(PptBar.BarW - 206f) < 0.6f
+              && MathF.Abs(PptBar.DocBarW - 366f) < 0.6f
+              && MathF.Abs(PptBar.DocBarW - (PptBar.BarW + PptBar.ZoomGroupW + PptBar.MenuGapW)) < 0.01f,
+              $"BarW={PptBar.BarW:F0}，DocBarW={PptBar.DocBarW:F0}，ZoomGroupW={PptBar.ZoomGroupW:F0}");
+        check("文档模式：DocZoomBar = true（PPT / 白板为 false 见 --ppttest）", DocZoomBar,
+              $"DocZoomBar={DocZoomBar}（PptMode={PptMode} BoardOn={BoardOn} DocOpen={DocView.IsOpen}）");
+
+        var bar = PptBarRect();
+        check("实际条宽 = 366 逻辑像素（按 DPI 缩放）",
+              MathF.Abs((bar.MaxX - bar.MinX) - PptBar.DocBarW * DpiScale) < 1f,
+              $"{(bar.MaxX - bar.MinX):F1}px（应 {PptBar.DocBarW * DpiScale:F1}）");
+        check("文档条默认位置仍在屏幕左下角（变宽不会跑出屏幕）",
+              MathF.Abs(bar.MinX - (_virtualX + PptBar.EdgeMargin * DpiScale)) < 1f
+              && bar.MaxX <= _virtualX + _virtualW && bar.MaxY <= _virtualY + _virtualH,
+              $"x {bar.MinX:F0}..{bar.MaxX:F0}，屏右 {_virtualX + _virtualW:F0}");
+
+        float midY = (bar.MinY + bar.MaxY) * 0.5f;
+        var zo = PptBar.ZoomOutCell(bar, DpiScale);
+        var zp = PptBar.ZoomPctCell(bar, DpiScale);
+        var zi = PptBar.ZoomInCell(bar, DpiScale);
+        var ra = PptBar.ArrowCell(bar, left: false, DpiScale);
+        var mc = PptBar.MenuCell(bar, DpiScale);
+        PptBarZone ZoneAt(float x) => PptBar.ZoneAt(bar, x, midY, DpiScale, docZoom: true);
+        PptBarZone Z(RectF r) => ZoneAt((r.MinX + r.MaxX) * 0.5f);
+
+        check("热区顺序：◀ 页码 ▶ [−] 百分比 [+] ☰",
+              ZoneAt(bar.MinX + 2f) == PptBarZone.LeftArrow
+              && Z(PptBar.MidCell(bar, DpiScale)) == PptBarZone.Page
+              && Z(ra) == PptBarZone.RightArrow
+              && Z(zo) == PptBarZone.ZoomOut
+              && Z(zp) == PptBarZone.ZoomPct
+              && Z(zi) == PptBarZone.ZoomIn
+              && ZoneAt(bar.MaxX - 2f) == PptBarZone.Menu,
+              $"◀={ZoneAt(bar.MinX + 2f)} 页码={Z(PptBar.MidCell(bar, DpiScale))} ▶={Z(ra)} "
+              + $"−={Z(zo)} %={Z(zp)} += {Z(zi)} ☰={ZoneAt(bar.MaxX - 2f)}");
+        check("缩放三格互不重叠、首尾相接",
+              MathF.Abs(zo.MaxX - zp.MinX) < 0.01f && MathF.Abs(zp.MaxX - zi.MinX) < 0.01f
+              && MathF.Abs(zi.MaxX - (zo.MinX + PptBar.ZoomGroupW * DpiScale)) < 0.5f,
+              $"− {zo.MinX:F0}..{zo.MaxX:F0}，% {zp.MinX:F0}..{zp.MaxX:F0}，+ {zi.MinX:F0}..{zi.MaxX:F0}");
+
+        // 分隔带不是热区、但必须吃掉（两条：页码组↔缩放组、缩放组↔☰）
+        float dl = PptBar.DividerLeftX(bar, DpiScale);
+        float dr = PptBar.DividerX(bar, DpiScale);
+        check("两条分隔带都不算热区",
+              ZoneAt(dl) == PptBarZone.None && ZoneAt(dr) == PptBarZone.None,
+              $"左={ZoneAt(dl)} 右={ZoneAt(dr)}");
+        bool ateL = PptBarPointerDown(dl, midY);
+        bool ateR = PptBarPointerDown(dr, midY);
+        check("点在分隔带上：归条吃掉（不漏成笔画）、也不开始拖条",
+              ateL && ateR && !PptBarDragging && !PptMenuOpen && !PptZoomMenuOpen,
+              $"吃掉={ateL}/{ateR} 拖动={PptBarDragging} 菜单={PptMenuOpen} 浮层={PptZoomMenuOpen}");
+
+        // 菜单 / 面板在文档模式下仍然可用（缩放组没把它们挤走）
+        PptBarPointerDown((mc.MinX + mc.MaxX) * 0.5f, midY);
+        check("文档模式 ☰ 仍开菜单（缩放组没挤走它）", PptMenuOpen && !PptZoomMenuOpen,
+              $"菜单={PptMenuOpen} 浮层={PptZoomMenuOpen}");
+        PptBarPointerDown((mc.MinX + mc.MaxX) * 0.5f, midY);
+        check("再点 ☰ 收起", !PptMenuOpen, $"菜单={PptMenuOpen}");
+
+        // ------------------------------------------------------------------
+        Console.WriteLine("  -- G2 档位浮层：8 项、无 300%、锚在百分比格上方、点外面关 --");
+        // ------------------------------------------------------------------
+        check("档位表：8 项、没有 300%",
+              DocZoomPresetCount == 8
+              && DocZoomPresetText(0) == "适合宽度（100%）"
+              && DocZoomPresetText(1) == "适合整页"
+              && DocZoomPresetText(7) == "200%",
+              $"共 {DocZoomPresetCount} 项；首项「{DocZoomPresetText(0)}」末项「{DocZoomPresetText(7)}」");
+        bool has300 = false;
+        for (int i = 0; i < DocZoomPresetCount; i++)
+            if (DocZoomPresetText(i).Contains("300")) has300 = true;
+        check("档位表里没有 300%", !has300, has300 ? "出现 300%" : "50/75/100/125/150/200 + 适合×2");
+
+        PptBarPointerDown((zp.MinX + zp.MaxX) * 0.5f, midY);
+        check("点百分比：浮层打开（菜单 / 面板不开）",
+              PptZoomMenuOpen && !PptMenuOpen && !PptPagePanelOpen,
+              $"浮层={PptZoomMenuOpen} 菜单={PptMenuOpen} 面板={PptPagePanelOpen}");
+        PptZoomMenuRect(out var zm);
+        check("浮层 ≈140 宽、开在条上方、整块在屏幕里",
+              MathF.Abs((zm.MaxX - zm.MinX) - PptBar.ZoomMenuW * DpiScale) < 1f
+              && zm.MaxY <= bar.MinY + 0.5f
+              && zm.MinX >= _virtualX && zm.MaxX <= _virtualX + _virtualW
+              && zm.MinY >= _virtualY,
+              $"宽 {(zm.MaxX - zm.MinX):F0}，y {zm.MinY:F0}..{zm.MaxY:F0}，条顶 {bar.MinY:F0}");
+        PptZoomMenuItemRectAt(0, out var item0);
+        PptZoomMenuItemRectAt(7, out var item7);
+        check("浮层 8 行都在浮层矩形里",
+              zm.Contains(item0.MinX, item0.MinY) && zm.Contains(item7.MaxX, item7.MaxY),
+              $"首行 y {item0.MinY:F0}，末行 y {item7.MaxY:F0}，浮层底 {zm.MaxY:F0}");
+
+        // 悬停：第 3 项（50%）→ hover = 300+2
+        PptZoomMenuItemRectAt(2, out var item2);
+        PptBarPointerMove((item2.MinX + item2.MaxX) * 0.5f, (item2.MinY + item2.MaxY) * 0.5f);
+        check("浮层悬停命中它自己（300+i）", PptBarHover == 300 + 2, $"hover={PptBarHover}");
+
+        // 再点百分比 = 收起（不鬼打墙）
+        PptBarPointerDown((zp.MinX + zp.MaxX) * 0.5f, midY);
+        check("再点百分比：浮层收起", !PptZoomMenuOpen, $"浮层={PptZoomMenuOpen}");
+
+        // 点浮层外面：收起
+        PptBarPointerDown((zp.MinX + zp.MaxX) * 0.5f, midY);
+        PptBarPointerDown(_virtualX + 4f, _virtualY + 4f);
+        check("点浮层外面：收起", !PptZoomMenuOpen, $"浮层={PptZoomMenuOpen}");
+
+        // ------------------------------------------------------------------
+        Console.WriteLine("  -- G3 档位动作：适合宽度 / 适合整页（可到 40%）/ 200% + 对勾 --");
+        // ------------------------------------------------------------------
+        SetDocZoomFromUi(1f);
+        check("100%：对勾在「适合宽度」、百分比读数 100%",
+              DocZoomPresetChecked(0) && !DocZoomPresetChecked(4) && DocZoomPercentText == "100%",
+              $"读数={DocZoomPercentText} 勾0={DocZoomPresetChecked(0)} 勾100%={DocZoomPresetChecked(4)}");
+
+        SetDocZoomFromUi(1.5f);
+        check("150%：对勾在 150%、读数 150%",
+              DocZoomPresetChecked(6) && !DocZoomPresetChecked(0) && DocZoomPercentText == "150%",
+              $"读数={DocZoomPercentText} 勾150%={DocZoomPresetChecked(6)}");
+
+        SetDocZoomFromUi(1f);
+        float fit = DocFitPageZoom();
+        RunDocZoomPreset(1);                       // 适合整页
+        check("适合整页：装得下整页（≤100%）、且确实可能 <50%",
+              MathF.Abs(DocZoom - fit) < 0.001f && fit <= 1f + 0.0001f && fit >= DocZoomFitMin - 0.0001f,
+              $"适合整页={fit * 100f:F0}%，实际={DocZoom * 100f:F0}%");
+        var pg = DocView.At(Math.Clamp(BarPageNow - 1, 0, DocView.Count - 1)).Rect;
+        bool flooredFit = MathF.Abs(fit - DocZoomFitMin) < 1e-4f;
+        check("适合整页：页在屏幕上完整可见（宽高都装进视口；或落在 40% 硬下限）",
+              ((pg.MaxX - pg.MinX) * ViewScale <= _virtualW + 1f
+               && (pg.MaxY - pg.MinY) * ViewScale <= _virtualH + 1f)
+              || flooredFit,
+              $"页 {(pg.MaxX - pg.MinX) * ViewScale:F0}×{(pg.MaxY - pg.MinY) * ViewScale:F0}，"
+              + $"视口 {_virtualW:F0}×{_virtualH:F0}" + (flooredFit ? "（已到 40% 下限）" : ""));
+        check("适合整页：读数如实显示实际百分比（不当成 50% 静默夹住）",
+              DocZoomPercentText == $"{MathF.Round(DocZoom * 100f):F0}%"
+              && (DocZoom >= DocZoomMin - 0.0001f || DocZoomPercentText != "50%"),
+              $"读数={DocZoomPercentText}（DocZoom={DocZoom:F3}）");
+        if (fit < DocZoomMin - 0.0001f)
+        {
+            float beforeOut = DocZoom;
+            DocZoomOut();
+            check("适合整页的 40% 档：− 不再把它放大回 50%",
+                  MathF.Abs(DocZoom - beforeOut) < 0.0001f,
+                  $"{beforeOut:F2} → {DocZoom:F2}");
+            check("低于 50% 时：− 置灰、＋ 仍可点",
+                  !DocZoomOutEnabled && DocZoomInEnabled,
+                  $"−={DocZoomOutEnabled} ＋={DocZoomInEnabled}");
+        }
+        else
+        {
+            check("本机适合整页 ≥50%（跳过 40% 档断言）", true, $"fit={fit * 100f:F0}%");
+        }
+        if (fit < 1f - 0.006f)
+            check("适合整页之后：对勾在「适合整页」", DocZoomPresetChecked(1),
+                  $"勾={DocZoomPresetChecked(1)}（fit={fit:F3}）");
+
+        RunDocZoomPreset(7);                       // 200%
+        check("档位 200%：生效、读数 200%、＋ 置灰",
+              MathF.Abs(DocZoom - 2f) < 1e-4f && DocZoomPercentText == "200%" && !DocZoomInEnabled,
+              $"DocZoom={DocZoom:F2} 读数={DocZoomPercentText} ＋={DocZoomInEnabled}");
+        RunDocZoomPreset(2);                       // 50%
+        check("档位 50%：生效、读数 50%、− 置灰",
+              MathF.Abs(DocZoom - 0.5f) < 1e-4f && DocZoomPercentText == "50%" && !DocZoomOutEnabled,
+              $"DocZoom={DocZoom:F2} 读数={DocZoomPercentText} −={DocZoomOutEnabled}");
+        RunDocZoomPreset(0);                       // 适合宽度 = 100%
+        check("适合宽度（100%）：回到 100%",
+              MathF.Abs(DocZoom - 1f) < 1e-4f && MathF.Abs(ViewOffsetX) < 0.5f,
+              $"DocZoom={DocZoom:F2} offX={ViewOffsetX:F2}");
+
+        SetDocZoomFromUi(1f);
+        var fit0 = DocFitPageZoom();
+        PptBarPointerDown((zp.MinX + zp.MaxX) * 0.5f, midY);      // 开浮层
+        PptZoomMenuItemRectAt(1, out var fitItem);
+        PptBarPointerDown((fitItem.MinX + fitItem.MaxX) * 0.5f, (fitItem.MinY + fitItem.MaxY) * 0.5f);
+        check("点浮层「适合整页」：执行 + 浮层收起",
+              MathF.Abs(DocZoom - fit0) < 0.001f && !PptZoomMenuOpen,
+              $"DocZoom={DocZoom * 100f:F0}%（应 {fit0 * 100f:F0}%），浮层={PptZoomMenuOpen}");
+
+        // ------------------------------------------------------------------
+        Console.WriteLine("  -- G4 手掌横向拖页：100% 只纵、200% 两轴 --");
+        // ------------------------------------------------------------------
+        if (!DocPanMode) ToggleDocPanFromUi();
+        check("（准备）手掌已开", DocPanMode, $"手掌={DocPanMode}");
+        int strokesBeforePan = Doc.Strokes.Count;
+
+        SetDocZoomFromUi(1f);
+        ZoomTestResetCamera();
+        float sx = _virtualX + _virtualW * 0.5f, sy = _virtualY + _virtualH * 0.5f;
+        bool grabbed1 = TryBeginDocPanPress(sx, sy);
+        DocPanDragForTest(sx + 140f, sy - 130f);
+        float offX100 = ViewOffsetX, offY100 = ViewOffsetY;
+        DocPanReleaseForTest();
+        check("100%：横向拖动不动画布（ViewOffsetX 严格为 0）",
+              grabbed1 && MathF.Abs(offX100) < 0.001f,
+              $"offX={offX100:F3}");
+        check("100%：纵向照旧能拖", MathF.Abs(offY100) > 40f, $"offY={offY100:F1}");
+
+        SetDocZoomFromUi(2f);
+        float baseX = ViewOffsetX, baseY = ViewOffsetY;
+        bool grabbed2 = TryBeginDocPanPress(sx, sy);
+        DocPanDragForTest(sx + 160f, sy - 140f);
+        float offX200 = ViewOffsetX, offY200 = ViewOffsetY;
+        DocPanReleaseForTest();
+        check("200%：横向拖动改 ViewOffsetX（页比视口宽，左右能看全）",
+              grabbed2 && MathF.Abs(offX200 - baseX) > 20f,
+              $"offX {baseX:F0} → {offX200:F0}");
+        check("200%：纵向同时跟着走", MathF.Abs(offY200 - baseY) > 20f,
+              $"offY {baseY:F0} → {offY200:F0}");
+        check("200%：横向被夹在合法范围里（不拖出页边）",
+              offX200 <= 0.5f && offX200 >= -(_virtualW * 3f),
+              $"offX={offX200:F0}（视口 {(_virtualX + _virtualW):F0}）");
+        check("拖页不落墨（笔画数没变）", Doc.Strokes.Count == strokesBeforePan,
+              $"笔画 {strokesBeforePan} → {Doc.Strokes.Count}");
+
+        // 光标仍是手型（横向拖页后不变成别的）
+        PointerX = 200f; PointerY = 200f + ViewOffsetY;
+        LastPointerType = Native.PT_MOUSE;
+        check("横向拖页后光标仍是手型", ComputeCursorKind() == CursorKind.Hand,
+              Cursors.Name(ComputeCursorKind()));
+        if (DocPanMode) ToggleDocPanFromUi();
+
+        // ------------------------------------------------------------------
+        Console.WriteLine("  -- G5 Ctrl+滚轮：围绕指针缩放、普通滚轮不动 --");
+        // ------------------------------------------------------------------
+        SetDocZoomFromUi(1f);
+        float anchorScreenX = _virtualX + _virtualW * 0.37f;
+        float anchorScreenY = _virtualY + _virtualH * 0.41f;
+        float anchorCanvasX = ScreenToCanvasX(anchorScreenX);
+        float anchorCanvasY = ScreenToCanvasY(anchorScreenY);
+        bool wheelOk = DocZoomWheelFromUi(120, anchorScreenX, anchorScreenY);
+        float afterX = ScreenToCanvasX(anchorScreenX);
+        float afterY = ScreenToCanvasY(anchorScreenY);
+        check("Ctrl+滚轮上：放大一档（100→125%）", wheelOk && MathF.Abs(DocZoom - 1.25f) < 1e-4f,
+              $"DocZoom={DocZoom:F2} 吃掉={wheelOk}");
+        check("Ctrl+滚轮：指针压着的画布点不动（围绕指针缩放）",
+              MathF.Abs(afterX - anchorCanvasX) < 1.5f && MathF.Abs(afterY - anchorCanvasY) < 1.5f,
+              $"({anchorCanvasX:F1},{anchorCanvasY:F1}) → ({afterX:F1},{afterY:F1})");
+        DocZoomWheelFromUi(-120, anchorScreenX, anchorScreenY);
+        check("Ctrl+滚轮下：缩回 100%", MathF.Abs(DocZoom - 1f) < 1e-4f, $"{DocZoom:F2}");
+
+        // 普通滚轮：**不得触发缩放**（Ctrl 分支只看 Ctrl，不能误伤滚画布）。
+        ZoomTestResetCamera();
+        float zoomBeforeWheel = DocZoom;
+        int wheelDown = -120;
+        HandleWheel(new IntPtr((long)(ushort)(short)wheelDown << 16));
+        check("普通滚轮（无 Ctrl）：不触发缩放（Ctrl 分支没误伤）",
+              MathF.Abs(DocZoom - zoomBeforeWheel) < 1e-4f,
+              $"DocZoom {zoomBeforeWheel:F2} → {DocZoom:F2}");
+        ZoomTestResetCamera();
+        SetDocZoomFromUi(1f);
+
+        // ------------------------------------------------------------------
+        Console.WriteLine("  -- G6 出图：文档条 100% / 200% / 档位浮层 --");
+        // ------------------------------------------------------------------
+        string shotDir = System.IO.Path.GetFullPath("reports");
+        try { Directory.CreateDirectory(shotDir); } catch { /* 有意忽略：出图失败不影响判据 */ }
+
+        void BarShot(string name, bool openMenu)
+        {
+            SetDocZoomFromUi(name.Contains("200") ? 2f : 1f);
+            SettleFrames(260);
+            var b = PptBarRect();
+            float pad = 16f * DpiScale;
+            float minX = b.MinX, minY = b.MinY, maxX = b.MaxX, maxY = b.MaxY;
+            if (openMenu)
+            {
+                var p = PptBar.ZoomPctCell(b, DpiScale);
+                PptBarPointerMove((p.MinX + p.MaxX) * 0.5f, (b.MinY + b.MaxY) * 0.5f);
+                PptBarPointerDown((p.MinX + p.MaxX) * 0.5f, (b.MinY + b.MaxY) * 0.5f);
+                PptZoomMenuRect(out var zm);
+                minX = MathF.Min(minX, zm.MinX); minY = MathF.Min(minY, zm.MinY);
+                maxX = MathF.Max(maxX, zm.MaxX); maxY = MathF.Max(maxY, zm.MaxY);
+            }
+            SettleFrames(220);
+            int x0 = (int)MathF.Max(_virtualX, minX - pad);
+            int y0 = (int)MathF.Max(_virtualY, minY - pad);
+            int w = (int)MathF.Min(_virtualX + _virtualW - x0, maxX - minX + pad * 2f);
+            int h = (int)MathF.Min(_virtualY + _virtualH - y0, maxY - minY + pad * 2f);
+            string path = System.IO.Path.Combine(shotDir, name + ".bmp");
+            bool ok = ScreenProbe.SaveBmp(path, x0, y0, w, h);
+            Console.WriteLine($"    {name,-22} {(ok ? "已出图 " + path : "出图失败（不影响判据）")}");
+            if (openMenu) PptBarPointerDown(_virtualX + 4f, _virtualY + 4f);   // 收起
+        }
+
+        BarShot("docbar-100", openMenu: false);
+        BarShot("docbar-200", openMenu: false);
+        BarShot("docbar-preset", openMenu: true);
+
+        SetDocZoomFromUi(1f);
+        SettleFrames(120);
+        check("出图后回到 100%（不影响后续 worker 组）",
+              MathF.Abs(DocZoom - 1f) < 1e-4f && !PptZoomMenuOpen,
+              $"DocZoom={DocZoom:F2} 浮层={PptZoomMenuOpen}");
     }
 
     /// <summary>F 组：worker 的代次——倍率换了，1x 在途结果必须丢掉。</summary>

@@ -499,6 +499,7 @@ public partial class InkEngine
         // 菜单/页号面板/等确认收掉，避免切换后留下“看不见但吃输入”的层。
         PptMenuOpen = false;
         PptPagePanelOpen = false;
+        PptZoomMenuOpen = false;
         PptClearConfirm = false;
         PptBarHover = -1;
         CancelPptPress();

@@ -167,6 +167,9 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void Clear() => _engine.ClearCurrentPageFromUi();
     public void SetPassThrough(bool on) => _engine.SetPassThroughFromUi(on, toPen: !on);
     public void ToggleDocPan() => _engine.ToggleDocPanFromUi();
+    public void SetDocZoom(float zoom) => _engine.SetDocZoomFromUi(zoom);
+    public void DocZoomIn() => _engine.DocZoomIn();
+    public void DocZoomOut() => _engine.DocZoomOut();
     public void SetKeyboardMode(bool on) => _engine.SetKeyboardMode(on);
     public void SetAutoStart(bool on) => _engine.SetAutoStartFromUi(on);
     public void RefreshAutoStart() => _engine.RefreshAutoStartFromUi();

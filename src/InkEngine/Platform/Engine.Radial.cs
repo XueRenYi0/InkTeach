@@ -690,6 +690,13 @@ public partial class InkEngine
         StopTouchFling();                      // 滚轮/触控板接管：先刹住双指惯性
         int delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF);
         Native.GetCursorPos(out var cursor);
+        // Ctrl + 滚轮 = **文档缩放**（2026-11-16；参考 Acrobat / Edge 的阅读器）。
+        // 围绕**指针**缩放：指针压着的那个画布点不动。只缩文档，白板 / 桌面批注不缩；
+        // 普通滚轮（没有 Ctrl）仍然往下走，滚画布 —— 老行为一个字节都不变。
+        if (!_textBoxEditing
+            && (Native.GetAsyncKeyState(0x11 /*VK_CONTROL*/) & 0x8000) != 0
+            && DocZoomWheelFromUi(delta, cursor.X, cursor.Y))
+            return IntPtr.Zero;
         // 字体下拉：滚轮翻字体列表。
         if (FontListOpen && FontListRectNow().Contains(PointerX, PointerY))
         {
