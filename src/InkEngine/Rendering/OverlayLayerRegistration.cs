@@ -191,7 +191,7 @@ public partial class InkEngine
         if (BarDrawnCollapsed) return SelectionDotCanvasRect.Contains(x, y);
 
         var aabb = LiveSelectionFrame.CanvasAabb;
-        float ui = UiUnit;
+        float ui = FurnitureDpi;       // 家具尺度：和绘制 / 手势同一把尺子
         if (SelectionBarCanvasRect.Contains(x, y)) return true;
         var menu = SelectionMenuRectNow();
         if (!menu.IsEmpty && menu.Contains(x, y)) return true;

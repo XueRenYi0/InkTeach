@@ -244,7 +244,7 @@ public partial class InkEngine
     private CursorKind? SelectionCursor(float canvasX, float canvasY)
     {
         var frame = SelectionHandles.FrameOf(Doc.Selected);
-        float dpi = UiUnit;
+        float dpi = FurnitureDpi;      // 手柄 / 条 / 面板：屏幕恒定（见 InkEngine.FurnitureDpi）
         var aabb = frame.CanvasAabb;
 
         // **操作条是"一块"，不只是几个按钮**（用户 2026-09-17 报的："操作对应图标的时候

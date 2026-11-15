@@ -630,7 +630,7 @@ internal sealed partial class OverlayWindow
             // 脏区必须跟着它走，否则框和手柄会在新位置上留下擦不掉的残影。
             var frame = app.LiveSelectionFrame;
             var sb = frame.CanvasAabb;
-            float dpi = app.UiUnit;
+            float dpi = app.FurnitureDpi;      // 手柄 / 条 / 面板 / 读数：屏幕恒定
             float margin = SelectionHandles.VisualSizeLogical * 0.5f * dpi + 6f * dpi;
             // 手柄画在**最小操作框**上（小对象时比真实框大一圈），脏区也按它算。
             var ui = SelectionHandles.UiBox(sb, dpi).Inflate(margin);
@@ -1041,7 +1041,7 @@ internal sealed partial class OverlayWindow
         var box = frame.CanvasAabb;
         var c = new Vector2((box.MinX + box.MaxX) * 0.5f,
                             (box.MinY + box.MaxY) * 0.5f);
-        float dpi = app.UiUnit;
+        float dpi = app.FurnitureDpi;      // 瞄准十字：屏幕恒定
         float arm = 7f * dpi;
         float gap = 2.5f * dpi;
         float width = 1.1f * dpi;
@@ -1161,7 +1161,7 @@ internal sealed partial class OverlayWindow
         if (frame.IsEmpty) return;
         var b = frame.CanvasAabb;      // 操作条和脏区用它的轴对齐范围
 
-        float dpi = app.UiUnit;
+        float dpi = app.FurnitureDpi;      // 手柄 / 描边 / 旋转柄 / 读数：屏幕恒定
         var accent = new Color4(0f, 0.47f, 0.83f, 1f);      // #0078D4
 
         // 单选一个"有定义元素的图形"（直线 / 箭头 / 圆 / 椭圆）时，手柄按定义元素给

@@ -21,89 +21,6 @@ namespace InkEngine;
 
 internal sealed partial class OverlayWindow
 {
-    /// <summary>
-    /// 滚动条（样式 B：Win11 / Figma 那根细线）。
-    ///
-    /// 默认隐藏，滚动时浮现，**静止 3 秒淡出**（InkClass 实测 1.5 秒太快，
-    /// 用户会找不到它）。画在浮动层上——它每帧都在变（淡出），进内容层就等于
-    /// 每帧重画内容。
-    ///
-    /// 比例滑块靠"画布范围"（内容边界 ∪ 一屏，见 InkDocument.Extent）：
-    /// 没有总高度就没有比例可算。画布只有一屏时干脆不画。
-    ///
-    /// 用 <c>_scratch</c> 而不是 Brush(颜色)：淡出时颜色每帧都在变，
-    /// Brush() 是按颜色缓存的，会一帧往缓存里塞一个画刷。
-    /// </summary>
-    private void DrawScrollBar(InkEngine app)
-    {
-        if (!app.ScrollBarVisible) return;               // 2026-10-09 起停用（见 Engine.ScrollBarEnabled）
-        if (!TryScrollBar(app, out var sb)) return;      // 画布只有一屏：没有滚动条
-
-        // 悬停/拖动中：不淡出，而且加粗——"这根线能拖"靠它自己说，
-        // 不靠换光标（手型按规范只能表示链接，四向箭头会被读成缩放）。
-        bool hot = app.ScrollBarHover || app.ScrollBarDragging;
-        float dpi = Dpi / 96f;
-        double idle = (app.NowMs - app.ScrollBarActiveAtMs) / 1000.0;
-        float alpha = hot ? 1f
-                    : idle <= 3.0 ? 1f
-                    : MathF.Max(0f, 1f - (float)((idle - 3.0) / 0.4));
-        if (alpha <= 0.01f) return;
-
-        float w = (hot ? 9f : 4f) * dpi;
-        float x0 = sb.AxisX - w * 0.5f;
-        float r = w * 0.5f;
-
-        // 轨道：极淡，只用来"知道这儿有东西"，不抢视觉
-        _scratch.Color = new Color4(0.50f, 0.52f, 0.55f, (hot ? 0.22f : 0.16f) * alpha);
-        _ctx.FillRoundedRectangle(
-            new RoundedRectangle(new Vortice.RawRectF(x0, sb.Top, x0 + w, sb.Bottom), r, r), _scratch);
-
-        // 滑块：中灰带透明度，浅色深色背景上都立得住
-        _scratch.Color = new Color4(0.47f, 0.49f, 0.53f, (hot ? 0.86f : 0.75f) * alpha);
-        _ctx.FillRoundedRectangle(
-            new RoundedRectangle(new Vortice.RawRectF(x0, sb.ThumbTop, x0 + w, sb.ThumbTop + sb.ThumbLen), r, r),
-            _scratch);
-    }
-
-    /// <summary>
-    /// 滚动条的几何（**屏幕坐标**，和 OriginX/Width 同一套）。
-    /// 画和拖动共用它——两处各算一份，改一处忘一处是这类代码的经典翻车点。
-    /// 返回 false = 现在不该有滚动条（画布只有一屏）。
-    /// </summary>
-    internal bool TryScrollBar(InkEngine app, out ScrollBarLayout l)
-    {
-        l = default;
-        float dpi = Dpi / 96f;
-        var extent = app.CanvasExtent;
-        float extentH = extent.MaxY - extent.MinY;
-        if (extentH <= Height + 1f) return false;
-
-        float top = OriginY + 40f * dpi;
-        float bottom = OriginY + Height - 40f * dpi;
-        float trackLen = bottom - top;
-        if (trackLen < 40f * dpi) return false;
-
-        // 滑块长度 = 一屏 / 画布总高；位置 = 视口顶在画布里的比例
-        float thumbLen = MathF.Max(40f * dpi, trackLen * (Height / extentH));
-        float maxTravel = trackLen - thumbLen;
-        float viewTop = WindowToCanvasY(OriginY);       // 视口顶部对应的画布 Y
-        float frac = extentH - Height > 1f
-            ? (viewTop - extent.MinY) / (extentH - Height) : 0f;
-        frac = Math.Clamp(frac, 0f, 1f);
-
-        l = new ScrollBarLayout
-        {
-            AxisX = OriginX + Width - 8f * dpi,
-            Top = top,
-            Bottom = bottom,
-            ThumbTop = top + maxTravel * frac,
-            ThumbLen = thumbLen,
-            MaxTravel = maxTravel,
-            ExtentMinY = extent.MinY,
-            ExtentH = extentH,
-        };
-        return true;
-    }
 
     /// <summary>
     /// 画一个四边形。选中框现在是轴对齐的，但边框仍然用四条线拼：
@@ -849,3 +766,4 @@ internal sealed partial class OverlayWindow
     }
 
 }
+

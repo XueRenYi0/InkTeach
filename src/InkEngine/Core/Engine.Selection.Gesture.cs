@@ -137,7 +137,8 @@ public partial class InkEngine
     /// </summary>
     private AutoSelZone AutoSelectionZoneAt(float x, float y)
     {
-        float dpi = UiUnit;
+        // 家具尺度（屏幕恒定）：手柄 / 条 / 面板的大小与命中在缩放时不能跟着变。
+        float dpi = FurnitureDpi;
         var frame = SelectionHandles.FrameOf(Doc.Selected);
         var aabb = frame.CanvasAabb;
 
@@ -254,7 +255,7 @@ public partial class InkEngine
         if (s.Kind != StrokeKind.Figure || s.Figure == null || s.Locked) return false;
         var keys = FigureParamBar.Keys(s);
         if (keys.Count == 0) return false;
-        float ui = UiUnit;
+        float ui = FurnitureDpi;          // 参数滑杆也是悬浮家具：屏幕恒定
         var panel = FigureParamBar.PanelRect(frame.CanvasAabb, ui, FurnitureViewport, keys.Count);
         int row = FigureParamBar.RowAt(panel, keys.Count, x, y, ui);
         if (row < 0) return false;
@@ -280,7 +281,7 @@ public partial class InkEngine
         var keys = FigureParamBar.Keys(_figureParamStroke);
         int row = keys.IndexOf(_figureParamKey);
         if (row < 0) return;
-        float ui = UiUnit;
+        float ui = FurnitureDpi;
         var frame = SelectionHandles.FrameOf(Doc.Selected);
         var panel = FigureParamBar.PanelRect(frame.CanvasAabb, ui, FurnitureViewport, keys.Count);
         var track = FigureParamBar.TrackRect(FigureParamBar.RowRect(panel, row, ui), ui);
@@ -322,7 +323,7 @@ public partial class InkEngine
         ResetAlignSnapLatch();
         ClearAlignTargets();
         float dpi = DpiScale;      // 内容命中容差 / 粗细换算（"纸上的尺"，不跟界面档）
-        float ui = UiUnit;         // 选中家具（条 / 面板 / 手柄）的尺寸与命中
+        float ui = FurnitureDpi;   // 选中家具（条 / 面板 / 手柄）的尺寸与命中：屏幕恒定
 
         bool move = false;
         var h = SelHandle.None;
@@ -1220,6 +1221,9 @@ public partial class InkEngine
 
         var cur = new Vector2(x, y);
         bool shift = (Native.GetAsyncKeyState(0x10 /* VK_SHIFT */) & 0x8000) != 0;
+        // 拖手柄的换算用**家具尺度**：手柄画在 UiBox（最小操作框）上，那个框的大小是屏幕恒定的，
+        // 换算的锚点 / 最小尺寸下限必须和"画出来的那个框"同一把尺子，否则缩放下按下第一帧会跳。
+        float furniture = FurnitureDpi;
         // Alt = 临时关掉吸附。Shift 是"硬网格 15°"，Alt 是"完全自由"，两个修饰键
         // 各管一头，中间那档（默认的 90° 软吸附）不用按键。
         bool alt = (Native.GetAsyncKeyState(0x12 /* VK_MENU */) & 0x8000) != 0;
@@ -1339,7 +1343,7 @@ public partial class InkEngine
             // 注意它只改 `localM`（框坐标里的矩阵），共轭那一步照旧——这样"转过/镜像过的
             // 框"那种情形（今天框恒轴对齐，但公式留着）不会被绕过。
             if (SelectionHandles.TrySnapSquareCorner(_dragTargets, _dragHandle, _dragFrame,
-                                                     cur, DpiScale, alt, out var squareM))
+                                                     cur, furniture, alt, out var squareM))
             {
                 _shapeSnap = ShapeSnapKind.Square;
                 _shapeSnapAnchor = cur;             // 胶囊贴在指针（= 被拖的那个角）上
@@ -1348,7 +1352,7 @@ public partial class InkEngine
             else
             {
                 localM = SelectionHandles.DragMatrix(_dragHandle, _dragFrame,
-                                                     _dragStartPoint, cur, DpiScale, shift, shift, alt);
+                                                     _dragStartPoint, cur, furniture, shift, shift, alt);
             }
             m = Conjugate(_dragFrame.ToCanvas, localM);
         }

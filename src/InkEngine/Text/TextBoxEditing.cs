@@ -449,7 +449,7 @@ public partial class InkEngine
 
     internal int FontListRecentCount => FontListEntries.Length > 0 ? _fontListRecentCount : 0;
     internal int FontListCapacityNow => SelectionHandles.FontListCapacity;
-    internal float FontListRowHeightNow => SelectionHandles.FontListRowHeightLogical * UiUnit;
+    internal float FontListRowHeightNow => SelectionHandles.FontListRowHeightLogical * FurnitureDpi;
     internal float FontListMaxScroll
         => MathF.Max(0f, FontListEntries.Length * FontListRowHeightNow
                          - FontListCapacityNow * FontListRowHeightNow);
@@ -458,7 +458,7 @@ public partial class InkEngine
     {
         if (!FontListOpen || Doc.Selected.Count != 1 || !SingleTextBoxSelection)
             return RectF.Empty;
-        return SelectionHandles.FontListRect(LiveSelectionFrame.CanvasAabb, UiUnit,
+        return SelectionHandles.FontListRect(LiveSelectionFrame.CanvasAabb, FurnitureDpi,
                                              FurnitureViewport);
     }
 
@@ -619,12 +619,12 @@ public partial class InkEngine
             var r = FontListRectNow();
             // 底部开关：显示 / 隐藏西文字体。
             if (TextBoxFaces.IsCjkUi
-                && SelectionHandles.FontListFooterRect(r, UiUnit).Contains(x, y))
+                && SelectionHandles.FontListFooterRect(r, FurnitureDpi).Contains(x, y))
             {
                 ToggleFontListLatin();
                 return true;
             }
-            int row = SelectionHandles.FontListRowAt(x, y, r, UiUnit,
+            int row = SelectionHandles.FontListRowAt(x, y, r, FurnitureDpi,
                                                      FontListCapacityNow, FontListScrollPx);
             if (row >= 0) ApplyFontListRow(row);
         }
@@ -882,18 +882,18 @@ public partial class InkEngine
 
         if (SelectionBarCanvasRect.Contains(x, y)) return true;
         if (CustomColorOpen
-            && SelectionHandles.PickContains(x, y, LiveSelectionFrame.CanvasAabb, UiUnit,
+            && SelectionHandles.PickContains(x, y, LiveSelectionFrame.CanvasAabb, FurnitureDpi,
                                              FurnitureViewport, SelectionHandles.SwatchCount,
                                              SingleTextBoxSelection))
             return true;
         if (SelPanelOpen != SelPanel.None
-            && SelectionHandles.PanelContains(x, y, LiveSelectionFrame.CanvasAabb, UiUnit,
+            && SelectionHandles.PanelContains(x, y, LiveSelectionFrame.CanvasAabb, FurnitureDpi,
                                               FurnitureViewport, SelPanelOpen,
                                               SelectionHandles.SwatchCount, SingleTextBoxSelection))
             return true;
 
         var frame = SelectionHandles.FrameOf(Doc.Selected);
-        return SelectionHandles.HitTest(x, y, Doc.Selected, frame, UiUnit) != SelHandle.None;
+        return SelectionHandles.HitTest(x, y, Doc.Selected, frame, FurnitureDpi) != SelHandle.None;
     }
 
     /// <summary>自检/摆样：插入一个已有文字的普通文本框，不进入编辑。</summary>

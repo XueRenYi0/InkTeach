@@ -374,6 +374,19 @@ public partial class InkEngine
     /// <summary>界面：一个逻辑单位 = 多少物理像素。**界面相关的换算一律用它**，别再用裸 DpiScale。</summary>
     internal float UiUnit => DpiScale * UiScale;
 
+    /// <summary>
+    /// **选中家具（手柄 / 操作条 / 面板 / 读数标签）的画布单位** = <see cref="UiUnit"/> ÷ 相机缩放。
+    ///
+    /// 为什么要有它：这些家具的位置是画布坐标（跟着墨迹走），但**大小必须恒定在屏幕上**——
+    /// 文档放大到 200% 时，手柄还应该是 10 逻辑像素，不是 20。画布单位里补一个 ÷ViewScale
+    /// 正好抵消相机那一层放大，于是"位置随内容、大小随屏幕"。
+    ///
+    /// **只有这一份**：绘制、命中、拖动换算（`SelectionHandles.UiBox` 的最小操作框、
+    /// 最小尺寸下限）全都问它，任何一处用裸 <see cref="UiUnit"/> 都会在缩放下分家
+    /// （画在一个地方、点不到那个地方）。100% 时它 == UiUnit，行为一个像素都不变。
+    /// </summary>
+    internal float FurnitureDpi => UiUnit / ViewScaleSafe;
+
     internal float EraserRadiusLogical = 22f;
     /// <summary>
     /// 整笔橡皮的落点半径（逻辑像素）的档位。**以前它根本没有档位**——
@@ -1136,8 +1149,11 @@ public partial class InkEngine
         if (sameSel)
             for (int i = 0; i < sel.Count; i++)
                 if (!ReferenceEquals(_barCacheSelection[i], sel[i])) { sameSel = false; break; }
+        // 单位用家具尺度（含相机缩放）：文档放大时条也要保持屏幕大小，
+        // 倍率一变缓存就得重算（比较的就是这个值，不用另加字段）。
+        float unit = FurnitureDpi;
         bool stale = _barCacheVersion != Doc.Version
-                  || MathF.Abs(_barCacheUnit - UiUnit) > 1e-4f
+                  || MathF.Abs(_barCacheUnit - unit) > 1e-4f
                   || MathF.Abs(_barCacheViewW - vw) > 0.5f
                   || MathF.Abs(_barCacheViewH - vh) > 0.5f
                   || !sameSel;
@@ -1145,10 +1161,10 @@ public partial class InkEngine
 
         var aabb = LiveSelectionFrame.CanvasAabb;
         int count = SelectionHandles.BarButtonCountFor(BarSurfaceNow);
-        _barCanvasCache = SelectionHandles.BarRect(aabb, UiUnit, vp, count);
-        _dotCanvasCache = SelectionHandles.BarCollapsedRect(aabb, UiUnit, vp);
+        _barCanvasCache = SelectionHandles.BarRect(aabb, unit, vp, count);
+        _dotCanvasCache = SelectionHandles.BarCollapsedRect(aabb, unit, vp);
         _barCacheVersion = Doc.Version;
-        _barCacheUnit = UiUnit;
+        _barCacheUnit = unit;
         _barCacheViewW = vw;
         _barCacheViewH = vh;
         _barCacheSelection = sel.ToArray();

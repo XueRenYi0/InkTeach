@@ -135,7 +135,7 @@ public partial class InkEngine
         {
             var btn = BarDrawnCollapsed
                 ? SelectionDotCanvasRect
-                : SelectionHandles.BarButtonRectIn(SelectionBarCanvasRect, SelBarHover, UiUnit);
+                : SelectionHandles.BarButtonRectIn(SelectionBarCanvasRect, SelBarHover, FurnitureDpi);
             var (t, k, n) = BarButtonTip(
                 SelectionHandles.BarButtonOf(SelBarHover, BarSurfaceNow));
             if (t != null)

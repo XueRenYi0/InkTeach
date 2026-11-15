@@ -99,9 +99,9 @@ internal sealed partial class App
         if (cmdArgs.Contains("--dragmid"))
         {
             var sl = SelectionHandles.SliderRect(SelectionHandles.FrameOf(Doc.Selected).CanvasAabb,
-                                                  UiUnit, FurnitureViewport, SelectionHandles.SwatchCount);
+                                                  FurnitureDpi, FurnitureViewport, SelectionHandles.SwatchCount);
             float mx = SelectionHandles.SliderXOfT(0.62f, SelectionHandles.FrameOf(Doc.Selected).CanvasAabb,
-                                                   UiUnit, FurnitureViewport, SelectionHandles.SwatchCount);
+                                                   FurnitureDpi, FurnitureViewport, SelectionHandles.SwatchCount);
             SelectionGestureForTest(mx, (sl.MinY + sl.MaxY) * 0.5f);
             PanelDragMoveForTest(mx + 2f, (sl.MinY + sl.MaxY) * 0.5f);
         }
@@ -120,7 +120,7 @@ internal sealed partial class App
         // 操作条挂在框下方（SelectionHandles.BarRect 算的就是那个位置），
         // 所以把它一起并进来，否则出图会把操作条切掉一半。
         var aabb = SelectionHandles.FrameOf(Doc.Selected).CanvasAabb;
-        var bar = SelectionHandles.BarRect(aabb, UiUnit, FurnitureViewport);
+        var bar = SelectionHandles.BarRect(aabb, FurnitureDpi, FurnitureViewport);
         var region = new RectF
         {
             MinX = MathF.Min(aabb.MinX, bar.MinX), MinY = MathF.Min(aabb.MinY, bar.MinY),
@@ -129,14 +129,14 @@ internal sealed partial class App
         if (SelPanelOpen == SelPanel.Ink)
         {
             region.Add(SelectionHandles
-                .PanelRect(aabb, UiUnit, FurnitureViewport, SelectionHandles.SwatchCount));
+                .PanelRect(aabb, FurnitureDpi, FurnitureViewport, SelectionHandles.SwatchCount));
             if (CustomColorOpen)
-                region.Add(SelectionHandles.CustomPanelRect(aabb, UiUnit, FurnitureViewport,
+                region.Add(SelectionHandles.CustomPanelRect(aabb, FurnitureDpi, FurnitureViewport,
                                                            SelectionHandles.SwatchCount));
         }
         else if (SelPanelOpen == SelPanel.Layer)
         {
-            region.Add(SelectionHandles.LayerPanelRect(aabb, UiUnit, FurnitureViewport));
+            region.Add(SelectionHandles.LayerPanelRect(aabb, FurnitureDpi, FurnitureViewport));
         }
         if (!OffscreenFloatingShot(path, region.Inflate(30f))) Console.WriteLine("出图失败");
         _quit = true;

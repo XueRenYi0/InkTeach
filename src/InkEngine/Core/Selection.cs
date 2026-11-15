@@ -342,6 +342,10 @@ internal struct SelectionFrame
 ///   · 命中区是视觉尺寸的两倍（投影上写字手是抖的）；
 ///   · 旋转手柄单独放在上边中点外侧，不和四角缩放抢位置；
 ///   · **拖过头不翻转，而是夹住**（翻转只能从操作条按按钮，避免误触）。
+///
+/// ⚠ **`dpiScale` 参数 = 家具尺度**（`InkEngine.FurnitureDpi` = `UiUnit ÷ ViewScale`）：
+/// 100% 时就是 `UiUnit`；文档放大时它变小，于是手柄 / 命中 / 面板在屏幕上**大小不变**，
+/// 而位置仍是画布坐标（跟着内容走）。别在这里传裸 `DpiScale` 或裸 `UiUnit`。
 /// </summary>
 internal static class SelectionHandles
 {
@@ -2503,8 +2507,10 @@ internal static class SelectionHandles
     /// 图标 24 / 格子 40 = **0.6**，和主工具条同比例；悬停/激活底是 34×34 正方形
     /// （见 <see cref="BarHoverChip"/>）。
     ///
-    /// ⚠ **单位口径（2026-10-25）**：这一整套尺寸的调用方一律传 `UiUnit`
-    /// （`DpiScale × UiScale`），和主工具条同档；画布内容（笔宽/对象/取景框）仍用裸 `DpiScale`。
+    /// ⚠ **单位口径（2026-10-25，2026-11-16 补文档缩放）**：这一整套尺寸的调用方一律传
+    /// `InkEngine.FurnitureDpi`（= `UiUnit ÷ ViewScale`）——100% 时等于 `UiUnit`，
+    /// 文档放大到 200% 时自动减半，于是"条 / 面板 / 手柄在屏幕上一样大"。
+    /// 画布内容（笔宽/对象/取景框）仍用裸 `DpiScale`。
     /// 漏一处就会出现"画得大、点得小"——绘制、命中、光标、提示、脏区必须同一个乘数。
     ///
     /// ⚠ 两端内边距不在这里，用浮层那套 token（<see cref="FloatPadLogical"/> = 8）：

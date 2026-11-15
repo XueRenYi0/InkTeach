@@ -38,7 +38,7 @@ internal sealed partial class OverlayWindow
     /// </summary>
     private void DrawSelectionBar(InkEngine app, in RectF sel)
     {
-        float dpi = app.UiUnit;
+        float dpi = app.FurnitureDpi;
         bool textBoxSel = app.SingleTextBoxSelection;
         // 布局从 SelectionHandles 取，与命中判定同源：分开写迟早差几个像素，
         // 表现就是"看得见按钮却点不中"。
@@ -337,11 +337,11 @@ internal sealed partial class OverlayWindow
         if (!any)                                   // 全是图像对象：画个灰环（禁用态）
         {
             _scratch.Color = new Color4(0.5f, 0.52f, 0.56f, 0.35f);
-            _ctx.DrawEllipse(new Ellipse(new Vector2(cx, cy), r, r), _scratch, 2.6f * app.UiUnit);
+            _ctx.DrawEllipse(new Ellipse(new Vector2(cx, cy), r, r), _scratch, 2.6f * app.FurnitureDpi);
             return;
         }
 
-        float w = 2.2f * app.UiUnit;
+        float w = 2.2f * app.FurnitureDpi;
         var half = new Ellipse(new Vector2(cx, cy), r, r);
         _scratch.Color = disabled ? new Color4(a.R, a.G, a.B, 0.35f) : a;
         // 先整圈画底色，再把"另一种颜色"那一段盖上去（用一小段圆弧当示意，不做精密分色：
@@ -372,7 +372,7 @@ internal sealed partial class OverlayWindow
     private void DrawCollapsedDot(InkEngine app, in RectF sel)
     {
         _ = sel;
-        float dpi = app.UiUnit;
+        float dpi = app.FurnitureDpi;
         var r = app.SelectionDotCanvasRect;
         float d = r.MaxX - r.MinX;
         var c = new Vector2((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
@@ -460,7 +460,7 @@ internal sealed partial class OverlayWindow
     /// </summary>
     private void DrawInkPanel(InkEngine app, in RectF sel)
     {
-        float dpi = app.UiUnit;
+        float dpi = app.FurnitureDpi;
         int sc = SelectionHandles.SwatchCount;
         bool textBar = app.SingleTextBoxSelection;
         var th = app.FloatingTheme;
@@ -671,7 +671,7 @@ internal sealed partial class OverlayWindow
     /// </summary>
     private void DrawPickPanel(InkEngine app, in RectF sel)
     {
-        float dpi = app.UiUnit;
+        float dpi = app.FurnitureDpi;
         int sc = SelectionHandles.SwatchCount;
         bool textBar = app.SingleTextBoxSelection;
         var th = app.FloatingTheme;
@@ -800,7 +800,7 @@ internal sealed partial class OverlayWindow
     /// </summary>
     private void DrawFontPanel(InkEngine app, in RectF sel)
     {
-        float dpi = app.UiUnit;
+        float dpi = app.FurnitureDpi;
         var p = SelectionHandles.FontPanelRect(sel, dpi, app.FurnitureViewport);
         // 属性面板内容密、又有色块，半透明会透出后面的文字，看起来脏；这里用实底。
         DrawPanelCard(app, p, app.FloatingTheme.CornerRadius * dpi, dpi, opaque: true);
@@ -1039,7 +1039,7 @@ internal sealed partial class OverlayWindow
 
     private void DrawLayerPanel(InkEngine app, in RectF sel)
     {
-        float dpi = app.UiUnit;
+        float dpi = app.FurnitureDpi;
         bool textBar = app.SingleTextBoxSelection;
         var p = SelectionHandles.LayerPanelRect(sel, dpi, app.FurnitureViewport, textBar);
         // 圆角同样取界面推上来的主题令牌（三处浮层一个数，8.2.0 收口）。

@@ -181,7 +181,7 @@ public partial class InkEngine
     private bool HandlePanelClick(float x, float y)
     {
         var aabb = LiveSelectionFrame.CanvasAabb;
-        float dpi = UiUnit;
+        float dpi = FurnitureDpi;      // 面板几何：屏幕恒定（见 InkEngine.FurnitureDpi）
         int sc = SelectionHandles.SwatchCount;
         var part = SelectionHandles.PanelPartAt(x, y, aabb, dpi, FurnitureViewport, SelPanelOpen, sc,
             SingleTextBoxSelection);
@@ -287,7 +287,7 @@ public partial class InkEngine
     private bool HandlePickClick(float x, float y)
     {
         var aabb = LiveSelectionFrame.CanvasAabb;
-        var part = SelectionHandles.PickPartAt(x, y, aabb, UiUnit, FurnitureViewport,
+        var part = SelectionHandles.PickPartAt(x, y, aabb, FurnitureDpi, FurnitureViewport,
                                                SelectionHandles.SwatchCount, SingleTextBoxSelection);
         switch (part)
         {
@@ -405,7 +405,7 @@ public partial class InkEngine
     private float SliderValueAtX(float x, in RectF aabb)
     {
         var (min, max) = WidthRangeForSelection();
-        float t = SelectionHandles.SliderTAt(x, aabb, UiUnit, FurnitureViewport, SelectionHandles.SwatchCount);
+        float t = SelectionHandles.SliderTAt(x, aabb, FurnitureDpi, FurnitureViewport, SelectionHandles.SwatchCount);
         return MathF.Round(min + (max - min) * t);
     }
 
@@ -473,12 +473,12 @@ public partial class InkEngine
         bool textBar = SingleTextBoxSelection;
         if (hue)
         {
-            var r = SelectionHandles.PickHueRect(aabb, UiUnit, FurnitureViewport, sc, textBar);
+            var r = SelectionHandles.PickHueRect(aabb, FurnitureDpi, FurnitureViewport, sc, textBar);
             if (r.MaxY > r.MinY) _pickH = Math.Clamp((y - r.MinY) / (r.MaxY - r.MinY), 0f, 1f);
         }
         else
         {
-            var r = SelectionHandles.PickSvRect(aabb, UiUnit, FurnitureViewport, sc, textBar);
+            var r = SelectionHandles.PickSvRect(aabb, FurnitureDpi, FurnitureViewport, sc, textBar);
             if (r.MaxX > r.MinX) _pickS = Math.Clamp((x - r.MinX) / (r.MaxX - r.MinX), 0f, 1f);
             if (r.MaxY > r.MinY) _pickV = Math.Clamp((y - r.MinY) / (r.MaxY - r.MinY), 0f, 1f);
         }
@@ -509,7 +509,7 @@ public partial class InkEngine
         _colorDragAction = null;
         if (act == null) { _dirty = true; return; }
 
-        bool inside = SelectionHandles.PickContains(x, y, LiveSelectionFrame.CanvasAabb, UiUnit,
+        bool inside = SelectionHandles.PickContains(x, y, LiveSelectionFrame.CanvasAabb, FurnitureDpi,
                                                     FurnitureViewport, SelectionHandles.SwatchCount,
                                                     SingleTextBoxSelection);
         if (inside && act.HasChange)
@@ -652,7 +652,7 @@ public partial class InkEngine
         int rows = SelectionMenuRowsNow;
         if (rows <= 0 || BarDrawnCollapsed) return RectF.Empty;
         return SelectionHandles.BarMenuRectIn(
-            SelectionBarCanvasRect, UiUnit, FurnitureViewport, rows,
+            SelectionBarCanvasRect, FurnitureDpi, FurnitureViewport, rows,
             SelectionMenuHasStatusNow,
             SelAiMenuOpen ? SelectionHandles.BarMenuWidthLogical
                           : SelectionHandles.BarMenuNarrowWidthLogical,
@@ -670,7 +670,7 @@ public partial class InkEngine
                 var dot = SelectionDotCanvasRect;
                 hover = dot.Contains(x, y) ? (int)SelBarButton.Collapse : -1;
             }
-            else hover = SelectionHandles.BarButtonAtIn(x, y, SelectionBarCanvasRect, UiUnit,
+            else hover = SelectionHandles.BarButtonAtIn(x, y, SelectionBarCanvasRect, FurnitureDpi,
                 SelectionHandles.BarButtonCountFor(BarSurfaceNow));
         }
 
@@ -678,13 +678,13 @@ public partial class InkEngine
         var menu = SelectionMenuRectNow();
         if (!_drawing && !menu.IsEmpty)
         {
-            menuRow = SelectionHandles.BarMenuRowAt(x, y, menu, UiUnit, SelectionMenuRowsNow);
+            menuRow = SelectionHandles.BarMenuRowAt(x, y, menu, FurnitureDpi, SelectionMenuRowsNow);
             if (menuRow < 0) menuRow = -1;   // -2 = 点在菜单边距/状态行，不算行
         }
         // 字体下拉：悬停行高亮。
         if (FontListOpen)
         {
-            int lr = SelectionHandles.FontListRowAt(x, y, FontListRectNow(), UiUnit, FontListCapacityNow, FontListScrollPx);
+            int lr = SelectionHandles.FontListRowAt(x, y, FontListRectNow(), FurnitureDpi, FontListCapacityNow, FontListScrollPx);
             if (lr != FontListHover) { FontListHover = lr; _dirty = true; }
         }
         if (SelMenuHover != menuRow) { SelMenuHover = menuRow; _dirty = true; }

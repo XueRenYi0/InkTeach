@@ -75,6 +75,7 @@ internal sealed partial class App
             ZoomTestScale(Check);           // A–D：倍率 / 页矩形 / 坐标 / 六档 / 复位
             ZoomTestShots(Check);           // E：上屏 + 50/100/200 三张图
             ZoomTestBarAndPan(Check);       // G：文档条缩放组 / 档位浮层 / 横向拖页 / Ctrl+滚轮
+            ZoomTestSelectionFurniture(Check, pdf);   // H：选中家具在 200% 下保持屏幕尺寸
             ZoomTestWorker(Check, pdf);     // F：worker 代次
         }
 
@@ -330,6 +331,17 @@ internal sealed partial class App
     /// </summary>
     private void ZoomTestBarAndPan(Action<string, bool, string> check)
     {
+        ZoomTestBarZones(check);
+        ZoomTestZoomMenu(check);
+        ZoomTestPresets(check);
+        ZoomTestPan(check);
+        ZoomTestWheel(check);
+        ZoomTestBarShots(check);
+    }
+
+    /// <summary>G1：文档条宽度、缩放组热区、分隔带、☰ 仍可用。</summary>
+    private void ZoomTestBarZones(Action<string, bool, string> check)
+    {
         Console.WriteLine("  -- G 文档条：缩放组 / 档位浮层 / 横向拖页 / Ctrl+滚轮 --");
 
         // 干净起点：100%、无菜单、无手掌、无穿透
@@ -405,6 +417,14 @@ internal sealed partial class App
         PptBarPointerDown((mc.MinX + mc.MaxX) * 0.5f, midY);
         check("再点 ☰ 收起", !PptMenuOpen, $"菜单={PptMenuOpen}");
 
+    }
+
+    /// <summary>G2：百分比格弹出档位浮层（8 项、无 300%）。</summary>
+    private void ZoomTestZoomMenu(Action<string, bool, string> check)
+    {
+        var bar = PptBarRect();
+        float midY = (bar.MinY + bar.MaxY) * 0.5f;
+        var zp = PptBar.ZoomPctCell(bar, DpiScale);
         // ------------------------------------------------------------------
         Console.WriteLine("  -- G2 档位浮层：8 项、无 300%、锚在百分比格上方、点外面关 --");
         // ------------------------------------------------------------------
@@ -449,7 +469,14 @@ internal sealed partial class App
         PptBarPointerDown((zp.MinX + zp.MaxX) * 0.5f, midY);
         PptBarPointerDown(_virtualX + 4f, _virtualY + 4f);
         check("点浮层外面：收起", !PptZoomMenuOpen, $"浮层={PptZoomMenuOpen}");
+    }
 
+    /// <summary>G3：档位动作与对勾（适合宽度 / 适合整页 / 六档）。</summary>
+    private void ZoomTestPresets(Action<string, bool, string> check)
+    {
+        var bar = PptBarRect();
+        float midY = (bar.MinY + bar.MaxY) * 0.5f;
+        var zp = PptBar.ZoomPctCell(bar, DpiScale);
         // ------------------------------------------------------------------
         Console.WriteLine("  -- G3 档位动作：适合宽度 / 适合整页（可到 40%）/ 200% + 对勾 --");
         // ------------------------------------------------------------------
@@ -521,7 +548,11 @@ internal sealed partial class App
         check("点浮层「适合整页」：执行 + 浮层收起",
               MathF.Abs(DocZoom - fit0) < 0.001f && !PptZoomMenuOpen,
               $"DocZoom={DocZoom * 100f:F0}%（应 {fit0 * 100f:F0}%），浮层={PptZoomMenuOpen}");
+    }
 
+    /// <summary>G4：手掌横向拖页（100% 只纵、200% 两轴）。</summary>
+    private void ZoomTestPan(Action<string, bool, string> check)
+    {
         // ------------------------------------------------------------------
         Console.WriteLine("  -- G4 手掌横向拖页：100% 只纵、200% 两轴 --");
         // ------------------------------------------------------------------
@@ -564,7 +595,11 @@ internal sealed partial class App
         check("横向拖页后光标仍是手型", ComputeCursorKind() == CursorKind.Hand,
               Cursors.Name(ComputeCursorKind()));
         if (DocPanMode) ToggleDocPanFromUi();
+    }
 
+    /// <summary>G5：Ctrl+滚轮围绕指针缩放，普通滚轮不缩放。</summary>
+    private void ZoomTestWheel(Action<string, bool, string> check)
+    {
         // ------------------------------------------------------------------
         Console.WriteLine("  -- G5 Ctrl+滚轮：围绕指针缩放、普通滚轮不动 --");
         // ------------------------------------------------------------------
@@ -594,7 +629,11 @@ internal sealed partial class App
               $"DocZoom {zoomBeforeWheel:F2} → {DocZoom:F2}");
         ZoomTestResetCamera();
         SetDocZoomFromUi(1f);
+    }
 
+    /// <summary>G6：文档条出图（100% / 200% / 档位浮层）。</summary>
+    private void ZoomTestBarShots(Action<string, bool, string> check)
+    {
         // ------------------------------------------------------------------
         Console.WriteLine("  -- G6 出图：文档条 100% / 200% / 档位浮层 --");
         // ------------------------------------------------------------------
@@ -678,3 +717,4 @@ internal sealed partial class App
               $"{baseW} → {pgW.Spec.BitmapW}");
     }
 }
+
