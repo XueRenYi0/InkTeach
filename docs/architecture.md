@@ -240,3 +240,22 @@ ADR-002 选择“扁平目录 + 单文件 2,000 行上限”，理由是避免�
 - 不改 `InkEngine.csproj` 的项目引用；不加新项目。
 - 不在移动文件的同时改逻辑；不顺手修 bug。
 - 不引 Roslyn / MCP / 向量索引；目录 + `module-map` + `grep` 足够。
+
+### 执行结果（2026-11-15）
+
+- **P0 完成**：`module-map` / `feature-specs` / `test-playbook` 落地；`baseline-pre` 46/46 PASS。
+- **P1 完成**：195 个文件按 12+5+3 个功能域 `git mv`，Git 全部识别为 `R100`；namespace 未改。
+- **P2 完成（主要巨石）**：
+  - `Model.cs` 9,444 → `Model.Types` 843 / `Model.Stroke` 967 / `Model.Stroke.Curves` 1,117 /
+    `Model.Stroke.Tangent` 2,553 / `Model.Stroke.Solids` 873 / `Model.EditActions` 910 /
+    `Model.InkDocument` 2,002 / `Model.LaserTrail` 175。
+  - `App.cs` 10,340 → `Host/App.cs` 3,940 / `Program` / `DevTools/App.Dev.{Render,Metrics,Input,ClickTarget}`。
+  - `Overlay.cs` 9,782 → `Rendering/Overlay` 1,242 + 6 个 partial（Frame/Content/Ui/Readout/Radial/Capture）。
+  - `FullUi.cs` 9,452 → `Shell/FullUi` 1,673 + `FullUi.Hit` + `Panels/FullUi.{Settings,More}`。
+  - `Engine.cs` 21,685 → `Core/Engine` 2,357 + `Engine.Host` 2,030 + `Engine.Selection` 3,276 +
+    `Input/Engine.Input` 3,220 + `Shapes/Engine.Library` 3,380 + `Engine.ShapeTools` +
+    `Rendering/Engine.{Cursor,UiBridge}` + `Platform/Engine.{Hotkey,Update,Keyboard,Radial}`。
+- **行为等价**：`baseline-post2/3/4` 均 **46/46 PASS**；`compare-baseline` 退出码 0。
+- **仍未降到 2,000 行以下**（下一步 P3）：`App.Dev.ClickTarget` 4,292、`App.cs` 3,940、
+  `Engine.Library` 3,380、`Engine.Selection` 3,276、`Engine.Input` 3,220、`Overlay.Readout` 3,201。
+  这些是单一功能域，按 `section-map` 的 banner 读取；继续拆时同样遵守 Move/Split 分离与逐步验证。

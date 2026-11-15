@@ -260,11 +260,11 @@
 | 426 | user operations |
 | 1630 | 属性编辑（颜色 / 粗细 / 锁定）与层级 |
 
-## src/InkEngine/Core/Model.Stroke.cs（5,514 行）
+## src/InkEngine/Core/Model.Stroke.cs（968 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
-| 10 | `internal sealed class Stroke` |
+| 10 | `internal sealed partial class Stroke` |
 | 382 | `public sealed class InkPiece` |
 
 | 行 | 段落 |
@@ -277,18 +277,44 @@
 | 507 | 正切：一支（一条开曲线）＋ 两条竖直渐近线（细虚线） |
 | 520 | 双曲线：两支（中间有抬笔）＋ 两条渐近线（细虚线） |
 | 535 | 其余（直线 / 箭头 / 矩形 / 椭圆 / 圆 / 三角形 / 平行四边形 / |
-| 968 | 坐标系 / 数轴（2026-09-19 第三批） |
-| 1212 | 四种曲线（2026-09-20 第四批）：抛物线 / 双曲线 / 正弦 / 余弦 |
-| 2085 | **正切 y = tan x**（2026-09-20 第十五批） |
-| 3770 | 空间坐标系：三根从原点出发的轴（抬笔分段，避免连出假线） |
-| 4362 | 空间直角坐标系：原点 → 三个正半轴端点，各带一个箭头 |
-| 4386 | 数轴：一条水平线 + 右端一个箭头 |
-| 4395 | 坐标系：十字轴 + 两个箭头 |
-| 4638 | 立体图形（2026-09-20 第五批：照 InkClass 的 case 6/7 搬过来） |
-| 4743 | 长方体（两笔：正面矩形 → 深度） |
-| 4789 | 四面体（两笔：底面三角形 → 顶点） |
-| 4813 | 棱柱 / 棱锥 / 棱台（两笔：底面正 n 边形 → 顶上那个中心） |
-| 5511 | Undo / redo |
+
+## src/InkEngine/Core/Model.Stroke.Curves.cs（1,127 行）
+
+| 行 | 顶层类型 |
+| --- | --- |
+| 8 | `internal sealed partial class Stroke` |
+
+| 行 | 段落 |
+| --- | --- |
+| 10 | 坐标系 / 数轴（2026-09-19 第三批） |
+| 254 | 四种曲线（2026-09-20 第四批）：抛物线 / 双曲线 / 正弦 / 余弦 |
+
+## src/InkEngine/Core/Model.Stroke.Solids.cs（881 行）
+
+| 行 | 顶层类型 |
+| --- | --- |
+| 8 | `internal sealed partial class Stroke` |
+
+| 行 | 段落 |
+| --- | --- |
+| 10 | 立体图形（2026-09-20 第五批：照 InkClass 的 case 6/7 搬过来） |
+| 115 | 长方体（两笔：正面矩形 → 深度） |
+| 161 | 四面体（两笔：底面三角形 → 顶点） |
+| 185 | 棱柱 / 棱锥 / 棱台（两笔：底面正 n 边形 → 顶上那个中心） |
+
+## src/InkEngine/Core/Model.Stroke.Tangent.cs（2,563 行）
+
+| 行 | 顶层类型 |
+| --- | --- |
+| 8 | `internal sealed partial class Stroke` |
+
+| 行 | 段落 |
+| --- | --- |
+| 10 | **正切 y = tan x**（2026-09-20 第十五批） |
+| 1695 | 空间坐标系：三根从原点出发的轴（抬笔分段，避免连出假线） |
+| 2287 | 空间直角坐标系：原点 → 三个正半轴端点，各带一个箭头 |
+| 2311 | 数轴：一条水平线 + 右端一个箭头 |
+| 2320 | 坐标系：十字轴 + 两个箭头 |
 
 ## src/InkEngine/Core/Model.Types.cs（850 行）
 
@@ -1631,4 +1657,4 @@
 
 ---
 
-共 65 个文件。重跑：`powershell -ExecutionPolicy Bypass -File tools/gen-section-map.ps1`
+共 68 个文件。重跑：`powershell -ExecutionPolicy Bypass -File tools/gen-section-map.ps1`

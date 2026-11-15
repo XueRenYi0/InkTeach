@@ -30,7 +30,8 @@ src/InkTeach/    Host/ DevTools/ SelfTests/{Unit,E2E}
 
 | 功能 | 先看 | 锚点 / 再看 | 测试 |
 | --- | --- | --- | --- |
-| 工具 / 笔迹 / 图片对象 | `Model.Types.cs` | `Model.Stroke.cs` · `Tool` · `Stroke` · `InkPiece` | `--unittest Serializer` |
+| 工具 / 笔迹 / 图片对象 | `Model.Types.cs` | `Model.Stroke.cs`（核心）· `Tool` · `Stroke` | `--unittest Serializer` |
+| 图形几何（坐标/曲线/立体） | `Model.Stroke.Curves.cs` | `Model.Stroke.Tangent.cs` · `Model.Stroke.Solids.cs` | `--shapetest` |
 | 撤销 / 重做 | `Model.EditActions.cs` | `EditAction` 及各 `*Action` | `--unittest EditAction` |
 | 文档 / 页 / 槽 | `Model.InkDocument.cs` | `InkDocument` · `PageSlot` | `--edittest` |
 | 选择 / 变换 / 手柄 | `Selection.cs` | 手柄顺序 / 紧框 / 变换矩阵 | `--seltest` / `--handletest` |

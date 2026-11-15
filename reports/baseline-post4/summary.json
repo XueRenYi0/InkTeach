@@ -1,0 +1,324 @@
+﻿[
+    {
+        "Feature":  "坐标与相机",
+        "Case":  "coordtest",
+        "Verdict":  "PASS",
+        "Seconds":  5.3,
+        "Key":  "shutdown complete"
+    },
+    {
+        "Feature":  "坐标与相机",
+        "Case":  "cameratest",
+        "Verdict":  "PASS",
+        "Seconds":  4,
+        "Key":  "shutdown complete"
+    },
+    {
+        "Feature":  "图形对象",
+        "Case":  "shapetest",
+        "Verdict":  "PASS",
+        "Seconds":  0.6,
+        "Key":  "PASS: 图形命中判定正确"
+    },
+    {
+        "Feature":  "图形对象",
+        "Case":  "imagetest",
+        "Verdict":  "PASS",
+        "Seconds":  1.1,
+        "Key":  "PASS: 图像对象全通（13 项）"
+    },
+    {
+        "Feature":  "图形对象",
+        "Case":  "capturetest",
+        "Verdict":  "PASS",
+        "Seconds":  12.5,
+        "Key":  "PASS: 截图全通（28 项）"
+    },
+    {
+        "Feature":  "剪贴板",
+        "Case":  "clipboardtest",
+        "Verdict":  "PASS",
+        "Seconds":  0.7,
+        "Key":  "合计：通过 16，失败 0"
+    },
+    {
+        "Feature":  "存档",
+        "Case":  "savetest",
+        "Verdict":  "PASS",
+        "Seconds":  0.6,
+        "Key":  "PASS: 保存/加载往返正确"
+    },
+    {
+        "Feature":  "变换与撤销",
+        "Case":  "transformtest",
+        "Verdict":  "PASS",
+        "Seconds":  0.6,
+        "Key":  "PASS: 变换只改矩阵，几何与缓存未受影响"
+    },
+    {
+        "Feature":  "变换与撤销",
+        "Case":  "handletest",
+        "Verdict":  "PASS",
+        "Seconds":  0.6,
+        "Key":  "PASS: 手柄位置、命中与变换矩阵都正确"
+    },
+    {
+        "Feature":  "变换与撤销",
+        "Case":  "edittest",
+        "Verdict":  "PASS",
+        "Seconds":  0.6,
+        "Key":  "PASS: 编辑命令与操作条命中都正确"
+    },
+    {
+        "Feature":  "变换与撤销",
+        "Case":  "rotatetest",
+        "Verdict":  "PASS",
+        "Seconds":  5.4,
+        "Key":  "PASS: 度数读数、三种吸附模式、矩阵自洽与标签上屏都正确"
+    },
+    {
+        "Feature":  "选中与框选",
+        "Case":  "seltest",
+        "Verdict":  "PASS",
+        "Seconds":  18.6,
+        "Key":  "合计 78 项：通过 78，失败 0"
+    },
+    {
+        "Feature":  "选中与框选",
+        "Case":  "lassotest",
+        "Verdict":  "PASS",
+        "Seconds":  2.5,
+        "Key":  "合计：通过 17，失败 0"
+    },
+    {
+        "Feature":  "笔迹形状",
+        "Case":  "widthtest",
+        "Verdict":  "PASS",
+        "Seconds":  1.6,
+        "Key":  "PASS: 各档粗细的墨量都在理论值的 0.75~1.15 倍之间（填充没有出洞）"
+    },
+    {
+        "Feature":  "笔迹形状",
+        "Case":  "captest",
+        "Verdict":  "PASS",
+        "Seconds":  1.4,
+        "Key":  "合计 15 项：通过 15，失败 0"
+    },
+    {
+        "Feature":  "笔迹形状",
+        "Case":  "cornertest",
+        "Verdict":  "PASS",
+        "Seconds":  1.2,
+        "Key":  "合计 6 项：通过 6，失败 0"
+    },
+    {
+        "Feature":  "笔迹形状",
+        "Case":  "selfcross",
+        "Verdict":  "PASS",
+        "Seconds":  1.4,
+        "Key":  "合计 1 项：通过 1，失败 0"
+    },
+    {
+        "Feature":  "输入路径",
+        "Case":  "inputtest",
+        "Verdict":  "PASS",
+        "Seconds":  2.3,
+        "Key":  "PASS: 路径上处处有墨，画出来的是线不是点"
+    },
+    {
+        "Feature":  "输入路径",
+        "Case":  "appendtest",
+        "Verdict":  "PASS",
+        "Seconds":  3.8,
+        "Key":  "合计 8 项：通过 8，失败 0"
+    },
+    {
+        "Feature":  "橡皮擦",
+        "Case":  "erasertest",
+        "Verdict":  "PASS",
+        "Seconds":  2.1,
+        "Key":  "shutdown complete"
+    },
+    {
+        "Feature":  "橡皮擦",
+        "Case":  "pixelerasetest",
+        "Verdict":  "PASS",
+        "Seconds":  1.8,
+        "Key":  "合计：通过 39，失败 0"
+    },
+    {
+        "Feature":  "橡皮擦",
+        "Case":  "dynerasertest",
+        "Verdict":  "PASS",
+        "Seconds":  8.6,
+        "Key":  "合计：通过 13，失败 0"
+    },
+    {
+        "Feature":  "光标",
+        "Case":  "cursortest",
+        "Verdict":  "PASS",
+        "Seconds":  0.7,
+        "Key":  "合计 94 项：通过 94，失败 0"
+    },
+    {
+        "Feature":  "渲染与缓存",
+        "Case":  "tiletest",
+        "Verdict":  "PASS",
+        "Seconds":  3.1,
+        "Key":  "shutdown complete"
+    },
+    {
+        "Feature":  "渲染与缓存",
+        "Case":  "selftest",
+        "Verdict":  "PASS",
+        "Seconds":  8.6,
+        "Key":  "PASS: overlay pixels verified on screen (13226 matching pixels)"
+    },
+    {
+        "Feature":  "滚动",
+        "Case":  "wheeltest",
+        "Verdict":  "PASS",
+        "Seconds":  0.6,
+        "Key":  "shutdown complete"
+    },
+    {
+        "Feature":  "滚动",
+        "Case":  "scrollwrite",
+        "Verdict":  "PASS",
+        "Seconds":  2.2,
+        "Key":  "shutdown complete"
+    },
+    {
+        "Feature":  "滚动",
+        "Case":  "ghosttest",
+        "Verdict":  "PASS",
+        "Seconds":  3.6,
+        "Key":  "PASS: 光标画出来了，且没有残影（扣掉环境噪声后仅剩 0 像素）"
+    },
+    {
+        "Feature":  "滚动",
+        "Case":  "ghosttest-scroll",
+        "Verdict":  "PASS",
+        "Seconds":  3.6,
+        "Key":  "PASS: 光标画出来了，且没有残影（扣掉环境噪声后仅剩 0 像素）"
+    },
+    {
+        "Feature":  "翻页",
+        "Case":  "pagetest",
+        "Verdict":  "PASS",
+        "Seconds":  10.8,
+        "Key":  "shutdown complete"
+    },
+    {
+        "Feature":  "文档导入",
+        "Case":  "doctest",
+        "Verdict":  "PASS",
+        "Seconds":  17.7,
+        "Key":  "合计：通过 139 项，失败 0 项"
+    },
+    {
+        "Feature":  "PPT 模式",
+        "Case":  "ppttest",
+        "Verdict":  "PASS",
+        "Seconds":  12.1,
+        "Key":  "通过 清空后点置灰的回放项：菜单留着、没有起回放 菜单=True，回放=False"
+    },
+    {
+        "Feature":  "导出",
+        "Case":  "iotest",
+        "Verdict":  "PASS",
+        "Seconds":  1.1,
+        "Key":  "shutdown complete"
+    },
+    {
+        "Feature":  "白板底纹",
+        "Case":  "patterntest",
+        "Verdict":  "PASS",
+        "Seconds":  5.1,
+        "Key":  "shutdown complete"
+    },
+    {
+        "Feature":  "实笔轨迹",
+        "Case":  "trailtest",
+        "Verdict":  "PASS",
+        "Seconds":  10.2,
+        "Key":  "PASS: 系统在画（鼠标尾巴峰值 163 像素——只活到下一次上屏，属预期）"
+    },
+    {
+        "Feature":  "穿透模式",
+        "Case":  "passtest",
+        "Verdict":  "PASS",
+        "Seconds":  3.7,
+        "Key":  "shutdown complete"
+    },
+    {
+        "Feature":  "穿透模式",
+        "Case":  "uitest",
+        "Verdict":  "PASS",
+        "Seconds":  12.9,
+        "Key":  "shutdown complete"
+    },
+    {
+        "Feature":  "产品界面",
+        "Case":  "paneltest",
+        "Verdict":  "PASS",
+        "Seconds":  200.4,
+        "Key":  "shutdown complete"
+    },
+    {
+        "Feature":  "产品界面",
+        "Case":  "shapepaneltest",
+        "Verdict":  "PASS",
+        "Seconds":  16.6,
+        "Key":  "图形面板专项：通过 55 项，失败 0 项"
+    },
+    {
+        "Feature":  "产品界面",
+        "Case":  "shapeaudittest",
+        "Verdict":  "PASS",
+        "Seconds":  0.8,
+        "Key":  "shutdown complete"
+    },
+    {
+        "Feature":  "产品界面",
+        "Case":  "bandactiontest",
+        "Verdict":  "PASS",
+        "Seconds":  1,
+        "Key":  "shutdown complete"
+    },
+    {
+        "Feature":  "产品界面",
+        "Case":  "qrtest",
+        "Verdict":  "PASS",
+        "Seconds":  1.5,
+        "Key":  "shutdown complete"
+    },
+    {
+        "Feature":  "键位设置",
+        "Case":  "keytest",
+        "Verdict":  "PASS",
+        "Seconds":  2,
+        "Key":  "PASS: 键位表、冲突检测、落盘读回、真机注册与批注内按键都正确"
+    },
+    {
+        "Feature":  "图形动作",
+        "Case":  "snaptest",
+        "Verdict":  "PASS",
+        "Seconds":  0.6,
+        "Key":  "PASS: 对象吸附（6 项）"
+    },
+    {
+        "Feature":  "启动与自启",
+        "Case":  "autostarttest",
+        "Verdict":  "PASS",
+        "Seconds":  0.6,
+        "Key":  "PASS: autostarttest 19/19"
+    },
+    {
+        "Feature":  "启动与自启",
+        "Case":  "startupcheck",
+        "Verdict":  "PASS",
+        "Seconds":  1.1,
+        "Key":  "PASS: startupcheck 5/5"
+    }
+]
