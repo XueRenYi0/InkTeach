@@ -353,7 +353,7 @@ public sealed partial class FullUi
                       new RectF { MinX = callout.MinX + 16f, MinY = callout.MinY + 10f,
                                   MaxX = callout.MaxX - 14f, MaxY = callout.MinY + 34f },
                       HelpNoteFont, Brush(ctx, MutedCol), center: false);
-        _widgets.Text(ctx, "手势模式：双指上下 = 滚动，左右 = 翻页；三指 = 擦；轮盘中心 = 取消。\n单指模式没有这些手势；面积/手掌擦已取消，擦除请用工具栏的整笔/像素橡皮。",
+        _widgets.Text(ctx, "手势模式：双指上下滚、左右翻页；三指擦；轮盘中心取消；单指模式没有手势。\n文档里：双指捏合 = 缩放，放大后双指拖动 = 平移；H / 按住空格 = 临时手掌。",
                       new RectF { MinX = callout.MinX + 16f, MinY = callout.MinY + 34f,
                                   MaxX = callout.MaxX - 14f, MaxY = callout.MaxY - 9f },
                       HelpBodyFont, Brush(ctx, InkCol), center: false);
@@ -398,6 +398,7 @@ public sealed partial class FullUi
             ("白板开关", HelpKey(KeyAction.ToggleBoard)),
             ("白板 / 文档翻页", $"{HelpKey(KeyAction.FlipPageUp)} / {HelpKey(KeyAction.FlipPageDown)}"),
             ("PPT 翻页", $"{HelpKey(KeyAction.FlipPageUp)} / {HelpKey(KeyAction.FlipPageDown)} / ←→"),
+            ("文档手掌（临时）", "H / 按住空格"),
         },
         new[]
         {

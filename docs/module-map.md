@@ -34,7 +34,7 @@
 | 截图取景框/读数 | `InkEngine/Rendering/Overlay.Capture.cs` | 同文件 `DrawCaptureOverlay` 段 | `--capturetest` |
 | 截图确认/数据 | `InkEngine/Input/Engine.Capture.cs` | `InkEngine/Export/ScreenCapture.cs` | `--capturetest` |
 | 停顿成型 | `InkEngine/Input/Engine.Input.cs` | `InkEngine/Input/DwellAssist.cs` | `--dwelltest` |
-| 触摸手势 | `InkEngine/Input/Engine.TouchGestures.cs` | `InkEngine/Input/Touch.cs` | `--touchtest` |
+| 触摸手势 | `InkEngine/Input/Engine.TouchGestures.cs` | `InkEngine/Input/Touch.cs` · `InkEngine/Doc/DocImport.Pan.cs`（文档捏合缩放 / 放大后两轴平移） | `--touchtest` |
 | 指针输入/橡皮 | `InkEngine/Input/Engine.Input.cs` | `InkEngine/Input/PenInput.cs` · `PointerInput.cs` | `--inputtest` / `--erasertest` |
 | 导出/剪贴板 | `InkEngine/Input/Engine.Clipboard.cs` | `InkEngine/Export/Export.cs` · `Clipboard*.cs` | `--iotest` |
 | 自动存档/恢复 | `InkEngine/Core/Recovery.cs` | `InkEngine/Core/Engine.cs` 自动存档段 | `--recoverytest` |
@@ -50,7 +50,7 @@
 | 设置页 | `InkUi/Panels/FullUi.Settings.cs` | `InkEngine/Core/Settings.cs` | `--settingsaudit` |
 | 更多面板 / 日志页 | `InkUi/Panels/FullUi.MorePanel.cs` | `InkUi/Shell/FullUi.Interaction.cs` | `--paneltest` |
 | 最近文档（更多 → 最近文档） | `InkUi/Panels/FullUi.Pages.cs`（那一小条） | `InkEngine/Doc/DocImport.cs` 打开成功时记一条 · `Doc/DocStore.cs` 的 `RecentDocs` 线格式 | `--paneltest` / `--doctest` |
-| 键位 / 热键 | `InkEngine/Platform/KeyBindings.cs` | `InkEngine/Platform/Engine.Hotkey.cs` | `--keytest` |
+| 键位 / 热键 | `InkEngine/Platform/KeyBindings.cs` | `InkEngine/Platform/Engine.Hotkey.cs` · 文档 `H` / 按住 `空格`（不在键位表）在 `InkEngine/Doc/DocImport.Pan.cs` | `--keytest` |
 | 自动更新 | `InkEngine/Platform/Update.cs` | `InkEngine/Platform/Engine.Update.cs` | `--updatetest` |
 | 启动 / 模式分发 | `InkTeach/Host/App.cs` | `InkEngine/Core/Engine.Host.cs` | `--startupcheck` |
 | 本地化 | `InkLocalization/Loc.cs` | `Locales/*/core.json` | `--langaudit` |

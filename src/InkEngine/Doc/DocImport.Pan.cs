@@ -1,5 +1,7 @@
-// [职责] 文档「手掌」拖页：文档模式下按下拖动平移相机（不落墨、不选中）。
-// [测试] --doctest
+// [职责] 文档「手掌」拖页 + 双指捏合缩放 / 放大后平移（文档相机）。
+// [测试] --doctest / --touchtest
+
+using System.Numerics;
 
 namespace InkEngine;
 
@@ -38,10 +40,17 @@ public partial class InkEngine
     internal void ToggleDocPanFromUi()
     {
         if (!DocView.IsOpen) return;
-        DocPanMode = !DocPanMode;
-        if (!DocPanMode) EndDocPan();
-        SetInkStatus(DocPanMode ? "手掌：拖动画布上下看页（再点一次回到工具）" : "手掌已关：回到工具");
-        Console.WriteLine($"[文档] 手掌{(DocPanMode ? "开" : "关")}");
+        SetDocPan(!DocPanMode);
+    }
+
+    /// <summary>手掌真正的开关（那一格 / `H` / 按住空格都走这里：状态与提示只有一份）。</summary>
+    private void SetDocPan(bool on)
+    {
+        if (DocPanMode == on) return;
+        DocPanMode = on;
+        if (!on) EndDocPan();
+        SetInkStatus(on ? "手掌：拖动画布上下看页（再点一次回到工具）" : "手掌已关：回到工具");
+        Console.WriteLine($"[文档] 手掌{(on ? "开" : "关")}");
         _dirty = true;
         ApplyCursor();
         NotifyUiStateChanged();
@@ -53,6 +62,8 @@ public partial class InkEngine
     /// </summary>
     private void ExitDocPan(string why)
     {
+        // 按住空格开的那一份也跟着作废：否则松手时还去关一个已经换人的手掌。
+        _docTouch.PanBySpace = false;
         if (!DocPanMode && !_docPanDragging) return;
         DocPanMode = false;
         EndDocPan();
@@ -164,4 +175,168 @@ public partial class InkEngine
 
     internal void DocPanReleaseForTest() => EndDocPan();
     internal bool DocPanDraggingForTest => _docPanDragging;
+
+    // ======================================================================
+    //  双指：文档捏合缩放 / 放大后平移（2026-11-16）
+    //
+    //  参考：Acrobat / Edge 阅读器 + iOS/Android 的 ScaleGestureDetector——
+    //  "两指距离变化 → 以两指中点为锚缩放；距离不变 → 按主方向平移/翻页"。
+    //  判据和状态机在 `Engine.TouchGestures.cs`（一个手势只有一个状态机），
+    //  这里只放**文档相机那一步**（和手掌共用夹取），免得手势文件里再抄一套相机数学。
+    // ======================================================================
+
+    /// <summary>
+    /// 文档双指手势 + 「按住空格临时手掌」的那一小撮状态。
+    /// ADR-005 D3：**新状态走组合对象**，不再往 `Engine` 上摊私有字段
+    /// （手势路由仍然只有一个：`Input/Engine.TouchGestures.cs` 读它，判据在下面那一段）。
+    /// </summary>
+    internal sealed class DocTouchState
+    {
+        /// <summary>这一轮双指手势锁成了"文档缩放"。</summary>
+        public bool Pinch;
+        /// <summary>这一轮双指手势锁成了"文档平移"（放大后两轴）。</summary>
+        public bool Pan;
+        /// <summary>锁定时两指距离（从这一刻起连续缩放，首帧不跳；0 = 这一轮没记起点）。</summary>
+        public float PinchDist0;
+        /// <summary>锁定时的相机倍率。</summary>
+        public float PinchZoom0 = 1f;
+        /// <summary>距离变化连续超过门槛的拍数（防"两个触点事件先后到达"的假捏合）。</summary>
+        public int PinchHot;
+        /// <summary>这一次按住空格开的手掌（松手才收；原本就是手掌的不动它）。</summary>
+        public bool PanBySpace;
+    }
+
+    private readonly DocTouchState _docTouch = new();
+
+    /// <summary>
+    /// 双指捏合 / 放大后平移能不能接管文档：文档开着、没选中对象、不在文本编辑、
+    /// 界面上没压着全屏层（设置页这类整页界面先接自己的滚动）。
+    /// </summary>
+    internal bool DocPinchPanEligible =>
+        DocView.IsOpen && !PptMode && !BoardOn && !UiOverlayOpen
+        && Doc.Selected.Count == 0 && !_textBoxEditing;
+
+    /// <summary>
+    /// 双指捏合：按两指距离比例缩放，**锚点 = 当前两指中点**（屏幕坐标）。
+    /// 走 <see cref="SetDocZoomCore"/>，所以 50–300% 夹取、补丁重建、页码/百分比通知全都跟着走。
+    /// </summary>
+    internal void DocPinchZoomFromTouch(float startZoom, float startDist, float dist, float midX, float midY)
+    {
+        if (!DocPinchPanEligible) return;
+        float ratio = startDist > 1f ? dist / startDist : 1f;
+        SetDocZoomCore(startZoom * ratio, DocZoomMin, midX, midY, quiet: true);
+    }
+
+    /// <summary>放大后两指拖动：**两轴**平移画布（夹取和手掌同一套；不再只走纵向滚）。</summary>
+    internal void DocPanByTouch(float dx, float dy)
+    {
+        if (!DocPinchPanEligible) return;
+        if (MathF.Abs(dx) < 0.01f && MathF.Abs(dy) < 0.01f) return;
+        ViewOffsetX = ClampOffsetX(ViewOffsetX + dx);
+        ViewOffsetY = ClampOffset(ViewOffsetY + dy);
+        _dirty = true;
+        NoteDocResumeChange();
+    }
+
+    /// <summary>
+    /// 双指手势里的**文档分支**：捏合缩放 / 放大后两轴平移（2026-11-16）。
+    ///
+    /// 判据（参考 Acrobat / Edge + ScaleGestureDetector 的"先观察再锁"）：
+    ///   ① 两指距离变化 &gt; <see cref="TouchGestures.PinchRatio"/>（且至少 10 逻辑像素）→
+    ///      锁**捏合缩放**（以两指中点为锚；距离没变的横向滑动不会被认成缩放）；
+    ///   ② 距离没变、放大到 &gt;100% 且位移过了方向锁 → 锁**两轴平移**（不再翻页）；
+    ///   ③ 距离没变、100% 下 → 交给原来的方向锁（横 = 翻页、纵 = 漫游）。
+    /// 返回 true = 这一拍已经被文档分支消费（不再往下走翻页 / 漫游）。
+    ///
+    /// ⚠ 这一轮手势的**状态**（<see cref="DocTouchState"/>）声明在本文件上面；手势文件的
+    /// 路由只读它 —— 那个文件已经贴着 800 行上限（ADR-002），再塞进来就要拆文件了。
+    /// </summary>
+    private bool DocTouchGestureMove(in TouchGestures.PairView p, in Vector2 mid, float dx, float dy)
+    {
+        if (!DocPinchPanEligible) return false;
+        float d1 = Vector2.Distance(p.A, p.B);
+
+        if (!_docTouch.Pinch && !_docTouch.Pan && _g2Axis == 0)
+        {
+            // 先看**距离**：变化超过门槛（12% 且至少 10 逻辑像素）→ 认捏合。
+            // 门槛要**连续两拍**都过（两个触点的事件先后到达会把距离骗大一行，下一拍又回去）；
+            // 变化特别大（> 2 倍门槛）则第一拍就锁，快捏合不拖泥带水。
+            float need = MathF.Max(TouchGestures.PinchRatio * _docTouch.PinchDist0,
+                                   TouchGestures.PinchMinLogical * DpiScale);
+            float change = _docTouch.PinchDist0 > 1f ? MathF.Abs(d1 - _docTouch.PinchDist0) : 0f;
+            _docTouch.PinchHot = change > need ? _docTouch.PinchHot + 1 : 0;
+            if (_docTouch.PinchDist0 > 1f && (_docTouch.PinchHot >= 2 || change > need * 2f))
+            {
+                _docTouch.Pinch = true;                    // 从锁定这一刻起连续缩放（首帧不跳）
+                Console.WriteLine($"触摸：双指捏合 → 文档缩放（{DocZoomPercentText} 起，d={d1:F0}）");
+                _docTouch.PinchDist0 = MathF.Max(1f, d1);
+                _docTouch.PinchZoom0 = ViewScale;
+            }
+            else if (ViewScale > 1.0005f
+                     && (mid - _g2StartMid).Length() >= TouchGestures.DirLockLogical * DpiScale)
+            {
+                _docTouch.Pan = true;                      // 放大后两指拖动 = 平移画布（两轴），不翻页
+                Console.WriteLine("触摸：放大后双指拖动 → 平移画布");
+            }
+        }
+
+        if (_docTouch.Pinch)
+        {
+            DocPinchZoomFromTouch(_docTouch.PinchZoom0, _docTouch.PinchDist0, d1, mid.X, mid.Y);
+            return true;
+        }
+        if (_docTouch.Pan)
+        {
+            DocPanByTouch(dx, dy);
+            return true;
+        }
+        return false;
+    }
+
+    // ======================================================================
+    //  键盘：`H` = 手掌开关；按住 `空格` = 临时手掌（2026-11-16）
+    //
+    //  参考：Photoshop / Figma / Acrobat 的"空格临时抓手"——按住才生效、松手回到原工具；
+    //  本来就开着抓手时按空格不动它（避免"按一下反而关掉"）。`H` 是 Acrobat / Edge
+    //  阅读器里"抓手工具"的通用键（空格是临时版）。
+    // ======================================================================
+
+    /// <summary>文档模式才吃这些键：文档开着、不在放映 / 穿透、不在文本编辑。
+    /// （穿透 = 键盘和指针都让给下层，那时画布本来就收不到点击，手掌也没有意义。）</summary>
+    private bool DocKeyModeAllowed => DocView.IsOpen && !PptMode && !PassThrough && !_textBoxEditing;
+
+    /// <summary>
+    /// 文档模式的 `H` / `空格`（按下）。返回 true = 这个键归我们（调用方直接 return）。
+    /// 只认**没有修饰键**的一下：`Ctrl+H` / `Shift+空格` 照旧走原路（一个键都不抢）。
+    /// </summary>
+    internal bool DocPanKeyDown(uint vk, uint mods, bool isRepeat)
+    {
+        if (mods != 0 || !DocKeyModeAllowed) return false;
+        if (vk == 0x48 /*H*/)
+        {
+            if (!isRepeat) ToggleDocPanFromUi();      // 和主条那一格同一条动作
+            return true;
+        }
+        if (vk != 0x20 /*Space*/) return false;
+        if (isRepeat) return true;                    // 按住不放的自动重复照吞
+        if (!DocPanMode) { SetDocPan(true); _docTouch.PanBySpace = true; }
+        return true;
+    }
+
+    /// <summary>
+    /// 松手：**只有按下那一下是我们开的手掌才收回**；原本就是手掌的照旧留着。
+    /// 返回 true = 这一下归我们。
+    /// </summary>
+    internal bool DocPanKeyUp(uint vk)
+    {
+        if (vk != 0x20 /*Space*/ || !_docTouch.PanBySpace) return false;
+        _docTouch.PanBySpace = false;
+        SetDocPan(false);
+        return true;
+    }
+
+    // ---- 自检钩子（--touchtest）：H / 空格走同一条判据，不另写一套 ----------------
+
+    internal bool DocPanSpaceHeldForTest => _docTouch.PanBySpace;
 }
+

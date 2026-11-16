@@ -90,6 +90,13 @@ internal sealed class TouchGestures
     public const float DirLockLogical = 10f;    // 两指方向锁（原来 15，放大后太迟才动）
     public const float DirRatio = 1.25f;        // 主方向占比（原来 1.5，斜一点会一直不锁）
     public const float PageTurnLogical = 60f;   // 横滑翻页阈值（原来 80）
+    /// <summary>双指捏合的门槛：两指距离变化超过 12% 才认"缩放"（2026-11-16）。
+    /// 参考 ScaleGestureDetector 的 span slop：横向滑动时两手平行移动，距离基本不变，
+    /// 而真捏合一开始就会变；12% 足够挡住"滑动时手指微微张合"的噪声。</summary>
+    public const float PinchRatio = 0.12f;
+    /// <summary>捏合门槛的**绝对下限**（逻辑像素）：两指靠得近时 12% 只有几像素，
+    /// 会被"两个触点的事件先后到达"骗过去；再叠一条 10 逻辑像素的地板。</summary>
+    public const float PinchMinLogical = 10f;
 
     // ---- 双指纵滑惯性（2026-10-28；2026-11-07 抽到这里让界面也能用同一套）----
     public const float FlingMaxVy = UiTouchFling.MaxVelocity;        // 最大速度（逻辑像素/ms）

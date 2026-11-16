@@ -94,7 +94,7 @@
 | 537 | 底行：名单 / 学号范围 |
 | 563 | 绘制小工具 |
 
-## src/InkEngine/Core/Engine.cs（2,878 行）
+## src/InkEngine/Core/Engine.cs（2,881 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -102,11 +102,11 @@
 | 28 | `internal enum PassThroughMode` |
 | 45 | `public partial class InkEngine` |
 | 576 | `internal enum CaptureDrag { None, Move, L, R, T, B, TL, TR, BL, BR }` |
-| 2213 | `internal enum VertexReadoutKind` |
-| 2343 | `internal enum AlignSnapKind` |
-| 2352 | `private enum AlignLineRole` |
-| 2359 | `private struct AlignAxisCandidate` |
-| 2461 | `private enum FrameDrive` |
+| 2216 | `internal enum VertexReadoutKind` |
+| 2346 | `internal enum AlignSnapKind` |
+| 2355 | `private enum AlignLineRole` |
+| 2362 | `private struct AlignAxisCandidate` |
+| 2464 | `private enum FrameDrive` |
 
 | 行 | 段落 |
 | --- | --- |
@@ -124,19 +124,19 @@
 | 1401 | 自绘预测尾（2026-10-15 接入：线性预测，Chromium 同族） |
 | 1481 | 长度限速（在"像素"上做，治"跳跃的笔头"） |
 | 1724 | 文档缩放（只缩文档，50/75/100/125/150/200/300） |
-| 2026 | 交互矢量图的参数滑杆（v2.1） |
-| 2074 | 图形定义元素编辑（直线 / 箭头 / 圆 / 椭圆）：和"拖对象"同一条快路 |
-| 2332 | 对象吸附（2026-10-18） |
-| 2486 | 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictorLinear.cs） |
-| 2509 | 书写期间的分配 / GC 仪表（低配机排查用） |
-| 2592 | perf accounting |
-| 2605 | 界面接入口 |
-| 2613 | 工具带色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成 8 个可改色位） |
-| 2642 | 荧光笔的 5 个色位 / 5 档浓度（2026-10-28） |
-| 2666 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
-| 2724 | 延时探针（见 Latency.cs） |
+| 2029 | 交互矢量图的参数滑杆（v2.1） |
+| 2077 | 图形定义元素编辑（直线 / 箭头 / 圆 / 椭圆）：和"拖对象"同一条快路 |
+| 2335 | 对象吸附（2026-10-18） |
+| 2489 | 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictorLinear.cs） |
+| 2512 | 书写期间的分配 / GC 仪表（低配机排查用） |
+| 2595 | perf accounting |
+| 2608 | 界面接入口 |
+| 2616 | 工具带色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成 8 个可改色位） |
+| 2645 | 荧光笔的 5 个色位 / 5 档浓度（2026-10-28） |
+| 2669 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
+| 2727 | 延时探针（见 Latency.cs） |
 
-## src/InkEngine/Core/Engine.Host.cs（2,337 行）
+## src/InkEngine/Core/Engine.Host.cs（2,338 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -162,8 +162,8 @@
 | 998 | "到底有没有中间点可捞"的自适应判据（2026-10-07 加） |
 | 1209 | 放映期间的"临时全局热键"（2026-09-30 用户定方案①） |
 | 1288 | Message loop |
-| 1446 | 文档高清补丁：每帧同步一次（由引擎挑驱动窗口） |
-| 1922 | Window procedure |
+| 1447 | 文档高清补丁：每帧同步一次（由引擎挑驱动窗口） |
+| 1923 | Window procedure |
 
 ## src/InkEngine/Core/Engine.Selection.Gesture.cs（1,466 行）
 
@@ -445,7 +445,7 @@
 | 1129 | 自检入口（`--dwelltest` 用；四条都是"薄封装"，不含任何逻辑） |
 | 1161 | 黑匣子（`--reclive` / `--replayinput`）用的薄钩子 |
 
-## src/InkEngine/Input/Engine.TouchGestures.cs（751 行）
+## src/InkEngine/Input/Engine.TouchGestures.cs（786 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -454,7 +454,8 @@
 | 行 | 段落 |
 | --- | --- |
 | 19 | 触摸手势（8.4.0）——规格与调研见 调研-触摸手势-学校大屏.md |
-| 44 | 双指纵滑的惯性（2026-10-28） |
+| 44 | 文档捏合 / 放大后平移（2026-11-16） |
+| 51 | 双指纵滑的惯性（2026-10-28） |
 
 ## src/InkEngine/Input/GoogleInkSlidingWindow.cs（670 行）
 
@@ -610,7 +611,7 @@
 | 365 | 笔的 8 个色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成可改色位） |
 | 487 | 滚轮 / ↑↓：同一类"阅读视野"输入（放在键盘这一份，避免再开 partial） |
 
-## src/InkEngine/Platform/Engine.Radial.cs（674 行）
+## src/InkEngine/Platform/Engine.Radial.cs（680 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -696,23 +697,23 @@
 | 1363 | synthetic input (used by the automated input-path test) |
 | 1390 | 合成键盘输入（自检用：验证全局热键真的能"按"出来） |
 
-## src/InkEngine/Platform/Update.cs（951 行）
+## src/InkEngine/Platform/Update.cs（990 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 11 | `public enum UpdateStage` |
 | 53 | `internal static class UpdateFeed` |
 | 259 | `private sealed class Probe` |
-| 443 | `internal sealed class Manifest` |
-| 935 | `public static class ProductInfo` |
+| 482 | `internal sealed class Manifest` |
+| 974 | `public static class ProductInfo` |
 
 | 行 | 段落 |
 | --- | --- |
 | 168 | 同时发出，谁先答完谁先被处理（完成顺序 = 响应快慢） |
 | 222 | 下载候选排序（2026-10-03 起"优先国内"） |
-| 454 | 版本比较 |
-| 488 | 取清单 |
-| 587 | 下载与校验 |
+| 493 | 版本比较 |
+| 527 | 取清单 |
+| 626 | 下载与校验 |
 
 ## src/InkEngine/Ppt/Ppt.cs（1,844 行）
 
@@ -859,7 +860,7 @@
 | 23 | 多边形读数（规格 9.7）：三角形的三个内角 / 平行四边形的两个夹角 |
 | 1460 | 文档恢复提示卡（"上次看到第 N 页 · 55%" / 继续 / 从头） |
 
-## src/InkEngine/Rendering/Overlay.SelectionBar.cs（1,065 行）
+## src/InkEngine/Rendering/Overlay.SelectionBar.cs（1,064 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -875,7 +876,7 @@
 | 721 | ③ 当前色预览 |
 | 737 | 取色板两张缓存位图（色相/尺寸变了才重画） |
 
-## src/InkEngine/Rendering/Overlay.Ui.cs（1,445 行）
+## src/InkEngine/Rendering/Overlay.Ui.cs（1,444 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -982,17 +983,17 @@
 | 22 | `private enum HandOcrMode { Handwriting, TextBox, Plot }` |
 | 24 | `private sealed class HandOcrDone` |
 
-## src/InkEngine/Text/TextBoxEditing.cs（2,677 行）
+## src/InkEngine/Text/TextBoxEditing.cs（2,674 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 18 | `public partial class InkEngine` |
-| 2525 | `internal sealed class TextBoxTextAction : EditAction` |
-| 2623 | `internal sealed class TextBoxAnswersAction : EditAction` |
+| 2522 | `internal sealed class TextBoxTextAction : EditAction` |
+| 2620 | `internal sealed class TextBoxAnswersAction : EditAction` |
 
 | 行 | 段落 |
 | --- | --- |
-| 574 | 触摸拖动 + 惯性 |
+| 572 | 触摸拖动 + 惯性 |
 
 ## src/InkEngine/Text/WindowlessTextControl.cs（1,098 行）
 
@@ -1627,7 +1628,7 @@
 | 798 | 两页高度各一份：切回图形页仍是刚才的矮档 |
 | 817 | 白板滚动后切页签：面板必须还钉在屏幕同一位置 |
 
-## src/InkTeach/SelfTests/E2E/Touch.cs（1,271 行）
+## src/InkTeach/SelfTests/E2E/Touch.cs（1,459 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -1657,17 +1658,18 @@
 | 601 | ⑱ 长按选中后：再按住选中的东西拖 = 移动；按框外拖 = 照常写字 |
 | 651 | ⑲ 选中后：拖**旋转手柄** = 旋转（触摸走鼠标同一条路，带度数胶囊） |
 | 695 | ⑳ 三指擦 + 面积橡皮 = 动态大小（快扫变大、松手回基准） |
-| 757 | 压感采集与笔迹预测的自检 |
-| 910 | 预测尾（鼠标 / 触摸那条路） |
-| 948 | ① / ② 几何与模型：不依赖任何输入设备 |
-| 980 | ③ 压感变宽那条渲染路（ID2D1Ink）也要带上尾 |
-| 1023 | ④ / ⑤ 真鼠标拖一笔 |
-| 1115 | B 组：关掉预测，同一套动作再来一次 |
-| 1197 | ① 单指按下，看它是不是以 PT_TOUCH 进来 |
-| 1206 | ①b 触点诊断（8.3.3）：数得到触点数 |
-| 1212 | ② 走一段（预测尾已随老预测系统删除，这里只验点在往里进） |
-| 1226 | ④ 第二根手指按下：正在写的那一笔不许被换掉 |
-| 1251 | 收尾：两根一起抬，交进文档 |
+| 745 | ㉑ 文档模式（PDF / 图片）：双指捏合缩放 / 100% 翻页 / 200% 平移 / H · 空格 |
+| 945 | 压感采集与笔迹预测的自检 |
+| 1098 | 预测尾（鼠标 / 触摸那条路） |
+| 1136 | ① / ② 几何与模型：不依赖任何输入设备 |
+| 1168 | ③ 压感变宽那条渲染路（ID2D1Ink）也要带上尾 |
+| 1211 | ④ / ⑤ 真鼠标拖一笔 |
+| 1303 | B 组：关掉预测，同一套动作再来一次 |
+| 1385 | ① 单指按下，看它是不是以 PT_TOUCH 进来 |
+| 1394 | ①b 触点诊断（8.3.3）：数得到触点数 |
+| 1400 | ② 走一段（预测尾已随老预测系统删除，这里只验点在往里进） |
+| 1414 | ④ 第二根手指按下：正在写的那一笔不许被换掉 |
+| 1439 | 收尾：两根一起抬，交进文档 |
 
 ## src/InkTeach/SelfTests/E2E/Zoom.cs（797 行）
 

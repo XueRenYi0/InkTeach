@@ -1546,10 +1546,10 @@ public sealed partial class FullUi
                 // 1 号（鼠标 / 手掌）：文档模式里它**不是穿透**，是"拖页"（2026-11-15），
                 // 提示必须跟着换——不然悬停写着"打开后点击落到底下的程序"，点下去却是拖页。
                 1 => _host != null && _host.State.DocOpen
-                    ? ("手掌（拖页）", "",
+                    ? ("手掌（拖页）", "H / 空格",
                        _host.State.DocPanMode
-                           ? "拖动画布上下看页；再点一次回到工具"
-                           : "点一下开手掌：拖动上下看页（不落墨）；要穿透先退出文档")
+                           ? "拖动画布上下看页；再点一次回到工具（H 也能关）"
+                           : "点一下开手掌：拖动上下看页（不落墨）；H 开关、按住空格临时用")
                     : (_host != null && _host.State.ClearOnArrowActive ? "清屏并穿透" : c.Tip,
                        Key(KeyAction.TogglePassThrough),
                        _host != null && _host.State.ClearOnArrowActive

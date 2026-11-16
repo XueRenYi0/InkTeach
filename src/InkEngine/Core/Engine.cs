@@ -1769,7 +1769,8 @@ public partial class InkEngine
     /// <paramref name="anchorScreenX/Y"/> = 缩放前后压住不动的那个屏幕点
     /// （界面按钮 = 视口中心；Ctrl+滚轮 = 指针位置）。
     /// </summary>
-    private void SetDocZoomCore(float zoom, float minZoom, float anchorScreenX, float anchorScreenY)
+    private void SetDocZoomCore(float zoom, float minZoom, float anchorScreenX, float anchorScreenY,
+                                bool quiet = false)
     {
         if (!DocView.IsOpen) return;
         if (float.IsNaN(zoom) || float.IsInfinity(zoom)) return;
@@ -1797,8 +1798,10 @@ public partial class InkEngine
         DocView.SetViewScale(ViewScale);       // 只记倍率（页位图恒 1×）
         DocPatch?.SetScale(ViewScale);         // 可见区高清补丁按新倍率重做（旧补丁先留着，不灰闪）
         _dirty = true;
-        Console.WriteLine($"[文档] 缩放 {MathF.Round(zoom * 100f):F0}%"
-            + $"（页位图 {DocView.PageRenderScale:F2}x / 相机 {ViewScale:F2}x）");
+        // `quiet`：双指捏合每秒会来几十次，控制台不必按帧刷（其余入口照旧打一行）。
+        if (!quiet)
+            Console.WriteLine($"[文档] 缩放 {MathF.Round(zoom * 100f):F0}%"
+                + $"（页位图 {DocView.PageRenderScale:F2}x / 相机 {ViewScale:F2}x）");
         NoteDocResumeChange();
         NotifyUiStateChanged();
     }

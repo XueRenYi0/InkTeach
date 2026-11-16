@@ -41,6 +41,13 @@ public partial class InkEngine
     private bool _g2Tap;              // 两指点按候选（松手时结算）
     private float _g2Dist0;           // 变换用：起始两指距离（双指只做缩放，绕选区中心）
 
+    // ---- 文档捏合 / 放大后平移（2026-11-16）--------------------------------
+    // 第二根手指落下后**先观察再锁**（判据见 `Doc/DocImport.Pan.cs::DocTouchGestureMove`）：
+    // 距离变化超过 <see cref="TouchGestures.PinchRatio"/> → 锁"文档缩放"；距离不变又放大了 →
+    // 锁"两轴平移"。一旦锁定，这一轮手势不再换分支（缩放 / 翻页 / 漫游 / 平移四选一）。
+    // 这一小撮状态放在 <see cref="DocTouchState"/> 里（ADR-005 D3：新状态走组合对象，
+    // 不再往 Engine 上摊私有字段）；字段本身在 `Doc/DocImport.Pan.cs` 声明。
+
     // ---- 双指纵滑的惯性（2026-10-28）--------------------------------------
     // 真机反馈：上下滑松手就停，不如浏览器"甩一下继续走"。
     // 速度单位 = 逻辑像素 / 毫秒；滚动仍走 ScrollCanvasBy，和滚轮/上下键同一条路。
@@ -274,7 +281,9 @@ public partial class InkEngine
         bool normalStroke = _touchMode == TouchMode.Write;
 
         // 两指点按要在"减掉这一根之前"判（判据要求两个触点都还在）
-        if (_touchMode == TouchMode.Gesture2 && _touch.TwoFingerTap(NowMs, DpiScale, out _))
+        // 捏合 / 平移分支已经锁了：那两指不是"点一下"，不许在松手时出盘。
+        if (_touchMode == TouchMode.Gesture2 && !_docTouch.Pinch && !_docTouch.Pan
+            && _touch.TwoFingerTap(NowMs, DpiScale, out _))
             _g2Tap = true;
 
         switch (_touchMode)
@@ -331,6 +340,10 @@ public partial class InkEngine
         _g2Axis = 0;
         _g2Turned = false;
         _g2Tap = false;
+        _docTouch.Pinch = false;
+        _docTouch.Pan = false;
+        _docTouch.PinchHot = 0;
+        _docTouch.PinchDist0 = 0f;                // 0 = 这一轮没记起点：捏合判据不成立（防旧值串到下一轮）
         _g2IdA = _g2IdB = 0;               // 手势收场：钉子放掉（下一轮重新钉）
         _g2ScrollSm = 0f;
         StopDwellTimer();
@@ -358,6 +371,10 @@ public partial class InkEngine
         _g2Axis = 0;
         _g2Turned = false;
         _g2Tap = false;
+        _docTouch.Pinch = false;
+        _docTouch.Pan = false;
+        _docTouch.PinchHot = 0;
+        _docTouch.PinchDist0 = 0f;                // 中断：捏合起点一并作废
         _g2IdA = _g2IdB = 0;               // 手势中断：钉子一并放掉
         _g2ScrollSm = 0f;
         Console.WriteLine("触摸手势中断（丢捕获/换设备）");
@@ -475,6 +492,9 @@ public partial class InkEngine
         _g2Turned = false;
         _g2Tap = false;
         _g2Transform = false;
+        _docTouch.Pinch = false;
+        _docTouch.Pan = false;
+        _docTouch.PinchHot = 0;
 
         // 第一根手指按下时可能把选区清掉了（图形工具"点框外 = 收起"，见 ClearSelectionForNewContext）
         // ——这一下紧接着升级成双指手势，说明那个"点框外"根本没发生。把选区救回来，
@@ -491,7 +511,13 @@ public partial class InkEngine
         }
         _touchSelSnapshot.Clear();
 
-        if (Doc.Selected.Count == 0) return;
+        if (Doc.Selected.Count == 0)
+        {
+            // 捏合判据的起点：两指刚落下的距离 / 当时的相机倍率（选中时不记，走对象缩放）。
+            _docTouch.PinchDist0 = MathF.Max(1f, Vector2.Distance(p.A, p.B));
+            _docTouch.PinchZoom0 = ViewScale;
+            return;
+        }
 
         // 有选中：在**选区中心**起一次"整体拖动"。借现成那套的好处：
         // 预览走 _selDragMatrix、松手 EndSelDrag 提交（一步撤销）、锁定对象自动摘掉。
@@ -554,6 +580,9 @@ public partial class InkEngine
         }
         float dx = mid.X - _g2LastMid.X, dy = mid.Y - _g2LastMid.Y;
         _g2LastMid = mid;
+
+        // 文档：捏合缩放 / 放大后两轴平移（先观察再锁；锁住后这一轮不再换分支）。
+        if (DocTouchGestureMove(p, mid, dx, dy)) return;
 
         if (_g2Axis == 0)
         {
@@ -629,7 +658,7 @@ public partial class InkEngine
         // **两指轻点优先于"变换提交"**：点按没有位移，不该走变换那条路。
         // （2026-10-05 实测：画布上有选中对象时，轻点会被 `_g2Transform` 分支吃掉——
         //   老顺序把 transform 放在前面，轻点永远轮不到。）
-        if (_g2Tap && !_g2Turned && _g2Axis == 0 && _touch.Views.Count >= 2)
+        if (_g2Tap && !_docTouch.Pinch && !_docTouch.Pan && !_g2Turned && _g2Axis == 0 && _touch.Views.Count >= 2)
         {
             if (SelDragging) EndSelDrag();     // 万一 transform 那条已经起了拖动（零位移=不进撤销栈）
             _g2Transform = false;
@@ -713,6 +742,9 @@ public partial class InkEngine
         _touch.Tick(NowMs, DpiScale);
         if (_touch.LongPressFired && _touchMode == TouchMode.Write) TouchLongPressFire();
 
+        // 捏合 / 平移分支已经锁住：两指长按在这条分支里没有意义（不许半路冒出盘）。
+        if ((_docTouch.Pinch || _docTouch.Pan) && _touchMode == TouchMode.Gesture2) _touch.ClearLongPress();
+
         // 两指长按成立 → 呼出盘（触屏入口）。进 Radial 模式后：方向由触点平均位喂（TouchMoveDispatch），
         // 松手在 TouchUpDispatch 里确认；没划动就松手 = 留在盘上等点选（见 CommitRadialPalette）。
         if (_touch.TwoFingerHoldFired && _touchMode == TouchMode.Gesture2)
@@ -740,6 +772,9 @@ public partial class InkEngine
     internal int TouchCountForTest => _touch.Count;
     internal bool TouchSelectedForTest => _touchSelected;
     internal int _touchDebugAxis => _g2Axis;
+    /// <summary>自检用：这一轮双指手势锁定的是"文档捏合"还是"放大后平移"（没锁 = 都 false）。</summary>
+    internal bool TouchDocPinchForTest => _docTouch.Pinch;
+    internal bool TouchDocPanForTest => _docTouch.Pan;
     internal bool TouchFlingActiveForTest => _g2FlingActive;
     internal float TouchFlingVelocityForTest => _g2FlingVy;
     internal void StopTouchFlingForTest() => StopTouchFling();

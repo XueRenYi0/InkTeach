@@ -22,8 +22,8 @@
     **InkEngine/Core/**
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 156 行
-      - `Engine.cs` 2,878 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
-      - `Engine.Host.cs` 2,337 行 — 启动、消息循环、窗口过程（WndProc）。
+      - `Engine.cs` 2,881 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
+      - `Engine.Host.cs` 2,338 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
       - `Engine.Selection.Gesture.cs` 1,466 行 — 框选/套索/拖动/对齐吸附/美化入口。
@@ -50,7 +50,7 @@
     **InkEngine/Doc/**
       - `DocImageSource.cs` 292 行
       - `DocImport.cs` 715 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
-      - `DocImport.Pan.cs` 167 行 — 文档「手掌」拖页：文档模式下按下拖动平移相机（不落墨、不选中）。
+      - `DocImport.Pan.cs` 342 行 — 文档「手掌」拖页 + 双指捏合缩放 / 放大后平移（文档相机）。
       - `DocMemory.cs` 86 行
       - `DocPages.cs` 602 行 — 文档页底层：页配方、惰性生成、视口窗口回收；缩放只记相机倍率（页位图恒 1×）。
       - `DocPatch.cs` 800 行 — PDF 页的**视口高清补丁**：1× 整页底图之上，只为可见区域渲一块设备分辨率小图（单 worker、单在飞、落稳 120ms）。
@@ -76,7 +76,7 @@
       - `Engine.Capture.cs` 374 行 — 截图状态、确认/取消、手柄与读数。
       - `Engine.Clipboard.cs` 506 行
       - `Engine.Input.cs` 2,028 行 — 指针输入、停顿成型、动态橡皮。
-      - `Engine.TouchGestures.cs` 751 行 — 触摸手势：单指/双指/三指/长按/惯性。
+      - `Engine.TouchGestures.cs` 786 行 — 触摸手势：单指/双指/三指/长按/惯性。
       - `GoogleInkSlidingWindow.cs` 670 行 — Google Ink 滑动窗口输入。
       - `InkModel.cs` 285 行
       - `InkModelProbe.cs` 278 行
@@ -90,7 +90,7 @@
       - `SmoothProbe.cs` 313 行
       - `StrokeMotion.cs` 837 行 — 笔迹运动模型对照台（M0–M7）。
       - `StrokeSmoothing.cs` 523 行
-      - `Touch.cs` 336 行
+      - `Touch.cs` 343 行
       - `TouchStats.cs` 135 行
       - `WpfInkFit.cs` 599 行
 
@@ -100,7 +100,7 @@
       - `DiagLog.cs` 1,270 行 — 运行日志、设备卡、日志上传同意。
       - `Engine.Hotkey.cs` 625 行 — 热键处理：WM_HOTKEY → 动作。
       - `Engine.Keyboard.cs` 628 行 — 键盘模式与键盘手势：工具键、色带键、滚轮/↑↓ 视野平移。
-      - `Engine.Radial.cs` 674 行 — 呼出盘：按住/划向扇区/松手。
+      - `Engine.Radial.cs` 680 行 — 呼出盘：按住/划向扇区/松手。
       - `Engine.Update.cs` 1,124 行 — 自动更新：检查/下载/换壳。
       - `EraserTelemetry.cs` 329 行
       - `GcLatency.cs` 109 行
@@ -113,7 +113,7 @@
       - `Toast.cs` 40 行
       - `Tooltip.cs` 269 行
       - `UiScale.cs` 63 行
-      - `Update.cs` 951 行 — 自动更新：版本比较、清单解析、下载/换壳。
+      - `Update.cs` 990 行 — 自动更新：版本比较、清单解析、下载/换壳。
       - `UpdateProbe.cs` 364 行
 
     **InkEngine/Ppt/**
@@ -142,9 +142,9 @@
       - `Overlay.PptBar.cs` 785 行 — PPT 条/回放条/滚动条绘制。
       - `Overlay.Radial.cs` 657 行 — 呼出盘绘制。
       - `Overlay.Readout.cs` 1,572 行 — 读数、收藏面板、滚动条、回放/PPT 条绘制。
-      - `Overlay.SelectionBar.cs` 1,065 行 — 选中操作条/色板/字体/图层/菜单的绘制。
+      - `Overlay.SelectionBar.cs` 1,064 行 — 选中操作条/色板/字体/图层/菜单的绘制。
       - `Overlay.Toast.cs` 339 行
-      - `Overlay.Ui.cs` 1,445 行 — 界面层合成与界面位图上传。
+      - `Overlay.Ui.cs` 1,444 行 — 界面层合成与界面位图上传。
       - `OverlayLayerManager.cs` 192 行
       - `OverlayLayerRegistration.cs` 215 行
       - `SvgPath.cs` 271 行
@@ -179,7 +179,7 @@
 
     **InkEngine/Text/**
       - `GlyphInk.cs` 286 行
-      - `GlyphText.cs` 280 行
+      - `GlyphText.cs` 302 行
       - `HandwritingBlocks.cs` 277 行
       - `HandwritingComposer.cs` 187 行
       - `HandwritingOptimize.cs` 848 行 — AI 手写优化：选中文字 → 识别 → 字形重排。
@@ -187,10 +187,10 @@
       - `LatexCompat.cs` 387 行
       - `MathRenderer.cs` 234 行
       - `TextBoxBackground.cs` 82 行
-      - `TextBoxEditing.cs` 2,677 行 — 普通文本框插入/编辑/结束/富文本只读卡。
+      - `TextBoxEditing.cs` 2,674 行 — 普通文本框插入/编辑/结束/富文本只读卡。
       - `TextBoxSelection.cs` 474 行
       - `TextInputService.cs` 568 行
-      - `TextStyles.cs` 413 行
+      - `TextStyles.cs` 468 行
       - `WindowlessTextControl.cs` 1,098 行 — 无窗口 RichEdit（ITextServices）宿主。
 
   **InkLocalization/**
@@ -254,7 +254,7 @@
         - `DocResume.cs` 194 行 — 文档「上次看到第 N 页」恢复提示 E2E（挂在 --doctest 末尾的 F 组）。
         - `Documents.cs` 1,463 行 — 文档导入 E2E。
         - `Erasers.cs` 1,003 行 — 橡皮擦 E2E（整笔/像素/动态）。
-        - `FacesProbe.cs` 186 行
+        - `FacesProbe.cs` 282 行
         - `GlyphEraseTest.cs` 59 行
         - `GlyphInkTest.cs` 213 行
         - `GlyphLineTest.cs` 88 行
@@ -296,7 +296,7 @@
         - `TextInputAudit.cs` 100 行
         - `TextStyleShow.cs` 125 行
         - `ToastTest.cs` 43 行
-        - `Touch.cs` 1,271 行 — 触摸手势 E2E。
+        - `Touch.cs` 1,459 行 — 触摸手势 E2E。
         - `Zoom.cs` 797 行 — 文档缩放 E2E（阶段 2：渲染核心 + 引擎缩放 API）。
         - `ZoomSelection.cs` 211 行 — 文档缩放 E2E（选中家具：手柄 / 操作条 / 面板 / 旋转柄在缩放下的屏幕恒定性）。
         - `ZoomShots.cs` 776 行 — 文档缩放 E2E：出图（50/100/200/300 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
@@ -332,7 +332,7 @@
       - `FullUi.MorePanel.cs` 2,381 行 — 更多面板：首页/设置/说明/日志/AI 服务入口。
       - `FullUi.Pages.cs` 704 行 — 更多面板的各页（启动器 / 设置 / 说明 / 日志 / AI 服务）：绘制与命中；
       - `FullUi.Settings.cs` 3,046 行 — 设置页：工具条/通用/书写/墨迹/AI/备份。
-      - `HelpUi.cs` 499 行
+      - `HelpUi.cs` 500 行
 
     **InkUi/Shell/**
       - `Anim.cs` 89 行

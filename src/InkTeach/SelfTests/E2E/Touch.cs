@@ -742,6 +742,194 @@ internal sealed partial class App
             TouchResetForTest();
         }
 
+        // ---- ㉑ 文档模式（PDF / 图片）：双指捏合缩放 / 100% 翻页 / 200% 平移 / H · 空格 ----
+        // 2026-11-16：判据全部落在"数得出来"的量上（倍率、锚点画布坐标、页码、模式）。
+        // 文档用假页源（和 --doctest 的 A7 同一套），不依赖 pdfium / 外部素材。
+        {
+            TouchResetForTest();
+            Doc.Selected.Clear();
+            Tool = Tool.Pen;
+            if (BoardOn) SetBoardFromUi(false);
+            DocPageWorker = false;
+            DocView.UseWorker = false;
+            float halfW = _virtualW * 0.5f;
+            DocView.Generator = sp => FakeDocPageBgra(sp.OutW, sp.OutH, 245, 245, 245);
+            DocView.Open(new List<DocPages.Spec>
+            {
+                DocSpec(1400, 1500, "pinch1.png"),
+                DocSpec(1400, 1500, "pinch2.png"),
+            }, "触摸捏合测试", halfW, 0f, 48f);
+            ZoomTestResetCamera();
+            SettleFrames(200);
+
+            // ① 捏合 = 缩放：两指**对称**张开（中点不动），锚点画布坐标必须原地不动。
+            TouchResetForTest();
+            float camX0 = ScreenToCanvasX(cx), camY0 = ScreenToCanvasY(cy);
+            Touch2Down(cx - 120, cy, cx + 120, cy);
+            SettleFrames(60);
+            Console.WriteLine($"      [探针] ① 两指落下：模式 = {TouchModeForTest}，触点 = {TouchCountForTest}，"
+                              + $"倍率 = {ViewScale:F2}");
+            int step = 0;
+            for (int i = 1; i <= 80 && ViewScale < 1.98f; i++)
+            {
+                step = i;
+                Touch2Move(cx - 120 - i * 10, cy, cx + 120 + i * 10, cy);
+                SettleFrames(30);
+            }
+            Touch2Up(cx - 120 - step * 10, cy, cx + 120 + step * 10, cy);
+            SettleFrames(250);
+            float zoomPinch = ViewScale;
+            float camX1 = ScreenToCanvasX(cx), camY1 = ScreenToCanvasY(cy);
+            Console.WriteLine($"      [探针] ① 张开 {step} 步：倍率 = {zoomPinch:F2}，"
+                              + $"模式 = {TouchModeForTest}，触点 = {TouchCountForTest}");
+            Check("文档：双指捏合 = 缩放（锁定后连续放大到 ~200%）",
+                  zoomPinch > 1.8f && TouchModeForTest == TouchMode.None,
+                  $"倍率 1.00 → {zoomPinch:F2}，条上 {DocZoomPercentText}，模式 {TouchModeForTest}");
+            Check("文档：捏合锚点 = 两指中点（画布点不动 ≤2px）",
+                  MathF.Abs(camX1 - camX0) <= 2f && MathF.Abs(camY1 - camY0) <= 2f,
+                  $"锚点 ({camX0:F1},{camY0:F1}) → ({camX1:F1},{camY1:F1})");
+
+            // 出图（相机 ~200% + 缩放条百分比）：截图 = 屏幕合成结果，自己抓屏。
+            string shotNote = "未保存";
+            try
+            {
+                System.IO.Directory.CreateDirectory("reports");
+                using var bmp = new System.Drawing.Bitmap((int)_virtualW, (int)_virtualH);
+                using (var g = System.Drawing.Graphics.FromImage(bmp))
+                    g.CopyFromScreen((int)_virtualX, (int)_virtualY, 0, 0, bmp.Size);
+                bmp.Save("reports/doc-pinch.png", System.Drawing.Imaging.ImageFormat.Png);
+                shotNote = "已保存";
+            }
+            catch (Exception ex) { Console.WriteLine($"      截图失败（不影响判定）：{ex.Message}"); }
+            Console.WriteLine($"      出图：reports/doc-pinch.png（{shotNote}，相机 {ViewScale:F2}）");
+
+            // ② 100%：两指横滑仍然翻页（距离不变 → 不许被认成缩放，也不许走平移）。
+            TouchResetForTest();
+            ZoomTestResetCamera();
+            SettleFrames(150);
+            int page0 = BarPageNow;
+            Console.WriteLine($"      [探针] ② 起手：模式 = {TouchModeForTest}，触点 = {TouchCountForTest}，"
+                              + $"页 = {page0}，倍率 = {ViewScale:F2}");
+            Touch2Down(cx + 300, cy - 200, cx + 300, cy - 60);
+            SettleFrames(60);
+            for (int i = 1; i <= 4; i++)
+            {
+                Touch2Move(cx + 300 - i * 60, cy - 200, cx + 300 - i * 60, cy - 60);
+                SettleFrames(30);
+            }
+            SettleFrames(80);
+            int axis100 = _touchDebugAxis;
+            bool pinch100 = TouchDocPinchForTest, pan100 = TouchDocPanForTest;
+            Console.WriteLine($"      [探针] ② 滑完：轴 = {axis100}，捏合 = {pinch100}，平移 = {pan100}，"
+                              + $"倍率 = {ViewScale:F2}，页 = {BarPageNow}");
+            Touch2Up(cx - 60, cy - 200, cx - 60, cy - 60);
+            SettleFrames(1300);      // 文档翻页过渡最长 1000ms（DocMemory.FlipMs）
+            Check("文档 100%：两指横滑 = 翻页（不是缩放 / 平移）",
+                  page0 == 1 && BarPageNow == 2 && axis100 == 1 && !pinch100 && !pan100,
+                  $"页 {page0} → {BarPageNow}，轴 = {axis100}，捏合 = {pinch100}，平移 = {pan100}");
+
+            // ③ 200%：两指横滑 = **两轴平移画布**，不再翻页。
+            TouchResetForTest();
+            ZoomTestResetCamera();
+            SetDocZoomFromUi(2f);
+            SettleFrames(150);
+            int page200 = BarPageNow;
+            float offX0 = ViewOffsetX, offY0 = ViewOffsetY;
+            Touch2Down(cx + 300, cy - 200, cx + 300, cy - 60);
+            SettleFrames(60);
+            for (int i = 1; i <= 4; i++)
+            {
+                Touch2Move(cx + 300 - i * 60, cy - 200 - i * 12, cx + 300 - i * 60, cy - 60 - i * 12);
+                SettleFrames(30);
+            }
+            SettleFrames(80);
+            bool pan200 = TouchDocPanForTest;
+            bool pinch200 = TouchDocPinchForTest;
+            Console.WriteLine($"      [探针] ③ 滑完：平移 = {pan200}，捏合 = {pinch200}，轴 = {_touchDebugAxis}，"
+                              + $"倍率 = {ViewScale:F2}，相机 X {ViewOffsetX:F0} / Y {ViewOffsetY:F0}");
+            Touch2Up(cx - 60, cy - 200 - 48, cx - 60, cy - 60 - 48);
+            SettleFrames(250);
+            Check("文档 200%：两指拖动 = 平移画布（两轴，不翻页）",
+                  pan200 && BarPageNow == page200
+                  && MathF.Abs(ViewOffsetX - offX0) > 40f && MathF.Abs(ViewOffsetY - offY0) > 6f,
+                  $"页 {page200} → {BarPageNow}，相机 X {offX0:F0} → {ViewOffsetX:F0}，"
+                  + $"Y {offY0:F0} → {ViewOffsetY:F0}，平移分支 = {pan200}");
+
+            // ④ 有选中：捏合不接管文档（走原来的"缩放选中对象"）。
+            TouchResetForTest();
+            ZoomTestResetCamera();
+            Doc.Selected.Clear();
+            var selInk = new Stroke { Tool = Tool.Pen, Color = new Color4(0f, 0f, 0f, 1f), Width = 20f * dpi };
+            for (int i = 0; i <= 10; i++) selInk.AddPoint(cx - 100 + i * 20, cy, 0.9f, i);
+            Doc.AddStroke(selInk);
+            Doc.Selected.Add(selInk);
+            SettleFrames(150);
+            float zoomSel0 = ViewScale;
+            Touch2Down(cx - 100, cy + 300, cx + 100, cy + 300);
+            Touch2Move(cx - 300, cy + 300, cx + 300, cy + 300);
+            SettleFrames(80);
+            bool pinchSel = TouchDocPinchForTest;
+            Touch2Up(cx - 300, cy + 300, cx + 300, cy + 300);
+            SettleFrames(200);
+            Check("有选中：捏合不接管文档（相机倍率不变，缩放的是对象）",
+                  !pinchSel && MathF.Abs(ViewScale - zoomSel0) < 1e-3f,
+                  $"捏合分支 = {pinchSel}，倍率 {zoomSel0:F2} → {ViewScale:F2}");
+            Doc.Selected.Clear();
+            Doc.Undo();
+            SettleFrames(120);
+
+            // ⑤ H：文档模式切换手掌；Ctrl+H 不接管。
+            if (DocPanMode) ToggleDocPanFromUi();
+            bool hOn = DocPanKeyDown(0x48, 0, false) && DocPanMode;
+            bool hCtrl = !DocPanKeyDown(0x48, KeyChord.ModCtrl, false) && DocPanMode;
+            bool hOff = DocPanKeyDown(0x48, 0, false) && !DocPanMode;
+            Check("H：文档模式切换手掌（Ctrl+H 不接管）", hOn && hCtrl && hOff,
+                  $"H 开 = {hOn}，Ctrl+H 不动 = {hCtrl}，再按 H 关 = {hOff}");
+
+            // ⑥ 空格：按住 = 临时手掌，松手收回；本来就是手掌时不许被关掉。
+            if (DocPanMode) ToggleDocPanFromUi();
+            Tool tool0 = Tool;
+            bool spaceOn = DocPanKeyDown(0x20, 0, false) && DocPanMode && DocPanSpaceHeldForTest;
+            bool spaceRepeat = DocPanKeyDown(0x20, 0, true) && DocPanMode;
+            bool spaceOff = DocPanKeyUp(0x20) && !DocPanMode && !DocPanSpaceHeldForTest;
+            Check("空格按住 = 临时手掌；松手收回（工具不变）",
+                  spaceOn && spaceRepeat && spaceOff && Tool == tool0,
+                  $"按下开 = {spaceOn}，连发仍开 = {spaceRepeat}，松手关 = {spaceOff}，工具 {tool0} → {Tool}");
+            ToggleDocPanFromUi();                    // 用户自己开着手掌
+            bool alreadyOn = DocPanMode;
+            bool spaceKeep = DocPanKeyDown(0x20, 0, false) && DocPanMode && !DocPanSpaceHeldForTest;
+            bool upKeep = !DocPanKeyUp(0x20) && DocPanMode;
+            ToggleDocPanFromUi();                    // 收起
+            Check("本来就是手掌：按一下空格再松手，手掌仍然开着",
+                  alreadyOn && spaceKeep && upKeep && !DocPanMode,
+                  $"原本开 = {alreadyOn}，空格后仍开 = {spaceKeep}，松手后仍开 = {upKeep}");
+
+            // ⑦ 文本编辑中：H / 空格都不接管（Space 留给输入框）。
+            InsertPlainTextBoxForTest("空格");
+            var tb = Doc.Selected[0];
+            BeginTextBoxEdit(tb);
+            bool editing = TextBoxEditing;
+            bool hGuard = !DocPanKeyDown(0x48, 0, false) && !DocPanMode;
+            bool spaceGuard = !DocPanKeyDown(0x20, 0, false) && !DocPanMode;
+            EndTextBoxEditFromUi(false);
+            Check("文本编辑中：H / 空格都不接管（Space 照常输入）",
+                  editing && hGuard && spaceGuard && !TextBoxEditing,
+                  $"编辑中 = {editing}，H 被拦 = {hGuard}，空格被拦 = {spaceGuard}");
+            Doc.Selected.Clear();
+
+            // ⑧ 关文档之后：H 什么都不做（只在文档模式生效）。
+            CloseDocument();
+            bool hOutside = !DocPanKeyDown(0x48, 0, false) && !DocPanMode;
+            Check("文档关掉后：H 不接管（只在文档模式生效）", hOutside && !DocView.IsOpen,
+                  $"H 接管 = {!hOutside}，文档 = {DocView.IsOpen}，手掌 = {DocPanMode}");
+            ZoomTestResetCamera();
+            DocView.Generator = null;
+            Doc.Clear();
+            Doc.ClearHistory();
+            TouchResetForTest();
+            SettleFrames(150);
+        }
+
         // 收尾
         TouchResetForTest();
         Doc.Clear();

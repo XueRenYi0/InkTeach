@@ -496,6 +496,9 @@ public partial class InkEngine
                 (mods & KeyChord.ModShift) != 0,
                 (mods & KeyChord.ModAlt) != 0,
                 isRepeat)) return true;
+        // 文档模式专用：`H` = 手掌开关；按住 `空格` = 临时手掌（2026-11-16）。
+        // 放在界面层之后（设置页先接自己的 Space）、键位表之前（这两个键不在键位表里）。
+        if (DocPanKeyDown((uint)vk, mods, isRepeat)) return true;
         // 界面最上面那层（AI 面板 / 更多 / 色板）：Esc 先关它。
         if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && Ui != null && Ui.HandleEscape()) return true;
         // 文档恢复提示：Esc = 只关卡（不跳）。排在界面层之后——界面开着时先关界面。
@@ -623,6 +626,9 @@ public partial class InkEngine
     /// <summary>松键：只服务工具键的手势（长按/双击判定），其余键不看松键。</summary>
     private bool HandleKeyUp(IntPtr wParam)
     {
+        // 文档模式：按住空格开的临时手掌，松手收回（只认我们开的那一次）。
+        if (DocPanKeyUp((uint)wParam.ToInt32())) { _dirty = true; return true; }
+
         // 呼出盘：**Q 松手 = 确认；只认主键，不认修饰键**。
         // 为什么：① 用户经常先松 Ctrl/Alt/Shift 再松 Q，按和弦查会漏；
         // ② 先松修饰键之后盘还留着，这时按 Esc 才是"真能送到我们手里"的取消
