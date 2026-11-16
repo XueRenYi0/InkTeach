@@ -768,6 +768,9 @@ internal sealed partial class OverlayWindow : IDisposable
     public bool LastPrefetchPending;
     /// <summary>常驻分块数 / 这一帧可见块数 / 分块预算（诊断用）。</summary>
     public int LastTileCount, LastTileVisible, LastTileBudget;
+    /// <summary>一块分块纹理的字节数 / 纹理边长 / 超采样倍率（诊断用；总字节 = LastTileCount × LastTileBytes）。</summary>
+    public int LastTileBytes, LastTileTextureSize;
+    public float LastTileRenderScale = 1f;
     public string LastError;
 
     public ID2D1DeviceContext Context => _ctx;

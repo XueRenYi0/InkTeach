@@ -135,8 +135,8 @@
       - `Icons.Paths.cs` 142 行
       - `LegacyOverlayLayer.cs` 74 行
       - `Overlay.Capture.cs` 789 行 — 截图取景框绘制：遮罩/准线/读数/手柄。
-      - `Overlay.Content.cs` 685 行 — 内容层合成：分块光栅、相机变换、缩放合成、滚动条。
-      - `Overlay.cs` 1,386 行 — 覆盖层主文件：窗口/初始化/生命周期。
+      - `Overlay.Content.cs` 688 行 — 内容层合成：分块光栅、相机变换、缩放合成、滚动条。
+      - `Overlay.cs` 1,389 行 — 覆盖层主文件：窗口/初始化/生命周期。
       - `Overlay.Frame.cs` 1,662 行 — 覆盖层帧渲染：内容/界面/装饰合成。
       - `Overlay.PptBar.cs` 785 行 — PPT 条/回放条/滚动条绘制。
       - `Overlay.Radial.cs` 657 行 — 呼出盘绘制。
@@ -232,7 +232,7 @@
       - `App.Dev.Show.cs` 429 行
       - `App.Modes.Catalog.cs` 46 行 — 自检模式注册表：总表与查找（ADR-005 D2）。
       - `App.Modes.Dev.cs` 188 行 — 自检模式注册表：Dev 域（ADR-005 D2）。新增模式只改本文件。
-      - `App.Modes.Doc.cs` 87 行 — 自检模式注册表：Doc 域（ADR-005 D2）。新增模式只改本文件。
+      - `App.Modes.Doc.cs` 94 行 — 自检模式注册表：Doc 域（ADR-005 D2）。新增模式只改本文件。
       - `App.Modes.Ink.cs` 614 行 — 自检模式注册表：Ink 域（ADR-005 D2）。新增模式只改本文件。
       - `App.Modes.Shape.cs` 244 行 — 自检模式注册表：Shape 域（ADR-005 D2）。新增模式只改本文件。
       - `App.Modes.Sys.cs` 577 行 — 自检模式注册表：Sys 域（ADR-005 D2）。新增模式只改本文件。
@@ -249,6 +249,7 @@
         - `BandAction.cs` 84 行
         - `BoardAndLaser.cs` 1,377 行 — 白板底纹/激光/光标 E2E。
         - `Diagnostics.cs` 3,295 行 — 诊断/环境/性能 E2E。
+        - `DocMem.cs` 610 行 — PDF 缩放内存归因诊断（--docmem）：WS/私有/托管/LOH/GPU/页位图/分块，含 100ms 峰值与回收后快照。
         - `DocResume.cs` 194 行 — 文档「上次看到第 N 页」恢复提示 E2E（挂在 --doctest 末尾的 F 组）。
         - `Documents.cs` 1,431 行 — 文档导入 E2E。
         - `Erasers.cs` 1,003 行 — 橡皮擦 E2E（整笔/像素/动态）。

@@ -37,6 +37,13 @@ internal sealed partial class App
             ZoomTest();
             return null;
         }),
+        new("--docmem", "文档缩放内存归因（100→200→100 ×3 ＋ 50→200；WS/私有/托管/LOH/GPU/页位图/分块，含 100ms 峰值与回收后快照）", args =>
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            DocMem();
+            return null;
+        }),
         new("--handocr", "", args =>
         {
             _autoExitAt = double.MaxValue;

@@ -263,6 +263,9 @@ internal sealed partial class OverlayWindow
         LastTileCount = _tiles.Count;
         LastTileVisible = _tiles.VisibleCount;
         LastTileBudget = _tiles.BudgetNow;      // 可见 + 回滚余量 + 预取环（见 CanvasTileCache.BudgetNow）
+        LastTileBytes = _tiles.TileBytes;       // 每块纹理字节（随倍率变；诊断用，不影响分块行为）
+        LastTileTextureSize = _tiles.TextureSize;
+        LastTileRenderScale = _tiles.RenderScale;
     }
 
     /// <summary>视口外一圈还有没有欠着的块（引擎据此排空闲预取拍）。</summary>

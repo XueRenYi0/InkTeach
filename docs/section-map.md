@@ -772,18 +772,18 @@
 | 517 | 触点诊断浮层（8.3.3，默认关） |
 | 568 | 橡皮读数浮层（8.3.7，默认关；调参用） |
 
-## src/InkEngine/Rendering/Overlay.Content.cs（685 行）
+## src/InkEngine/Rendering/Overlay.Content.cs（688 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 21 | `internal sealed partial class OverlayWindow` |
-| 550 | `private enum PillPlace` |
+| 553 | `private enum PillPlace` |
 
 | 行 | 段落 |
 | --- | --- |
 | 23 | Content layer |
 
-## src/InkEngine/Rendering/Overlay.cs（1,386 行）
+## src/InkEngine/Rendering/Overlay.cs（1,389 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -798,7 +798,7 @@
 | 440 | 界面缓存 |
 | 455 | 脏区上屏状态 |
 | 726 | 延时探针 |
-| 775 | 委托墨迹轨迹（微软的低延迟湿墨通道） |
+| 778 | 委托墨迹轨迹（微软的低延迟湿墨通道） |
 
 ## src/InkEngine/Rendering/Overlay.Frame.cs（1,662 行）
 
@@ -1138,6 +1138,22 @@
 | 2608 | ⑤ 格距手柄（**开网格才有**）：拖动 / 夹范围 / 一步撤销 |
 | 2691 | ⑥ 存档：v9 往返 + 真·v8 老文件 |
 | 3113 | ⑥ 运行日志（2026-10-16 用户定） |
+
+## src/InkTeach/SelfTests/E2E/DocMem.cs（610 行）
+
+| 行 | 顶层类型 |
+| --- | --- |
+| 17 | `internal sealed partial class App` |
+| 24 | `private sealed class DocMemSample` |
+| 51 | `private sealed class DocMemPeakSampler : IDisposable` |
+
+| 行 | 段落 |
+| --- | --- |
+| 19 | 数据结构 |
+| 112 | 主流程 |
+| 258 | 读数 |
+| 376 | 报告 |
+| 593 | 小工具 |
 
 ## src/InkTeach/SelfTests/E2E/Documents.cs（1,431 行）
 
@@ -1776,4 +1792,4 @@
 
 ---
 
-共 82 个文件。重跑：`powershell -ExecutionPolicy Bypass -File tools/gen-section-map.ps1`
+共 83 个文件。重跑：`powershell -ExecutionPolicy Bypass -File tools/gen-section-map.ps1`
