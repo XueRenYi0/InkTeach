@@ -233,7 +233,7 @@ internal sealed partial class App
             TouchGuardTest();
             return null;
         }),
-        new("--touchtest", "触摸手势自检（单指写 / 双指漫游翻页 / 文档捏合缩放 / 放大后平移 / H·空格手掌 / 三指擦 / 长按选 / 选中变换 / 总开关）", args =>
+        new("--touchtest", "触摸手势自检（单指写 / 双指漫游翻页 / 文档捏合缩放 / 放大后平移 / 触控板捏合(GID_ZOOM) / 真实触摸注入 / H·空格手掌 / 三指擦 / 长按选 / 选中变换 / 总开关）", args =>
         {
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;

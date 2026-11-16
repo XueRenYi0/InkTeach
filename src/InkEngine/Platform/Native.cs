@@ -586,7 +586,9 @@ internal static class Native
     //     —— 官方文档原话就写着它 "disables press and hold (right-click) gesture"，
     //     是**同时关手势和右键消息**的那一条（其余两条只保证关反馈/关手势）；
     //   · `SetProp(MicrosoftTabletPenServiceProperty, 1)` —— 官方 how-to 的等价写法；
-    //   · `SetGestureConfig` 把全部手势挡掉 —— Raymond Chen 给的 Win7+ 路径。
+    //   · `SetGestureConfig` 挡掉系统手势各个 ID —— Raymond Chen 给的 Win7+ 路径。
+    //     2026-11-16 起**只对画布窗口放行 GID_ZOOM**（触控板捏合缩放），
+    //     按住不动仍由前两条关着（见 DisableSystemPressAndHold 的 allowZoom）。
     //
     // ⚠ 拿不准的一条（**不许当结论**）：`SetWindowFeedbackSetting(FEEDBACK_*_PRESSANDHOLD)`
     // 名字和文档都只说"visual feedback（反馈/动画）"，**它到底阻不阻止右键消息，官方没说**。
@@ -604,7 +606,41 @@ internal static class Native
     /// <summary>关掉笔筒按钮那一圈反馈。</summary>
     public const int TABLET_DISABLE_PENBARRELFEEDBACK = 0x0010;
 
-    /// <summary>SetGestureConfig 的一条配置：`dwID = 0` 时 `dwBlock = GC_ALLGESTURES` 挡掉全部手势。</summary>
+    // ---- 系统手势：WM_GESTURE / GID_* / GC_* ------------------------------
+    //
+    // 数值全部照抄 Windows SDK `WinUser.h`（本机核对：10.0.26100.0）：
+    //   #define WM_GESTURE   0x0119
+    //   #define GID_BEGIN 1 / GID_END 2 / GID_ZOOM 3 / GID_PAN 4
+    //   #define GID_ROTATE 5 / GID_TWOFINGERTAP 6 / GID_PRESSANDTAP 7
+    //   #define GID_ROLLOVER GID_PRESSANDTAP
+    //   #define GC_ALLGESTURES 1 / GC_ZOOM 1 / GC_PAN 1 / GC_ROTATE 1 /
+    //           GC_TWOFINGERTAP 1 / GC_PRESSANDTAP 1
+    //
+    // ⚠ **GC_* 的"1"是按 dwID 解释的**：`dwID = 0` 时 1 表示 "all gestures"；
+    //   `dwID = GID_ZOOM` 时同一个 1 表示 "zoom"。所以放行一条、挡掉其余几条，
+    //   要**一条一条写**（见 DisableSystemPressAndHold 里的配置表），不能只写
+    //   一个 `dwID = 0`——那一条要么全挡（连捏合也没了），要么全放（翻页/旋转/
+    //   双指轻点会同时回来）。
+    public const int WM_GESTURE = 0x0119;
+
+    public const uint GID_BEGIN = 1;
+    public const uint GID_END = 2;
+    public const uint GID_ZOOM = 3;
+    public const uint GID_PAN = 4;
+    public const uint GID_ROTATE = 5;
+    public const uint GID_TWOFINGERTAP = 6;
+    public const uint GID_PRESSANDTAP = 7;
+    public const uint GID_ROLLOVER = GID_PRESSANDTAP;
+
+    public const uint GC_ALLGESTURES = 0x00000001;
+    public const uint GC_ZOOM = 0x00000001;
+    public const uint GC_PAN = 0x00000001;
+    public const uint GC_ROTATE = 0x00000001;
+    public const uint GC_TWOFINGERTAP = 0x00000001;
+    public const uint GC_PRESSANDTAP = 0x00000001;
+
+    /// <summary>SetGestureConfig 的一条配置。`dwID = 0` 时 `dwBlock = GC_ALLGESTURES`
+    /// 挡掉全部手势；`dwID = GID_*` 时只对那一条手势生效。</summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct GESTURECONFIG
     {
@@ -613,11 +649,42 @@ internal static class Native
         public uint dwBlock;
     }
 
-    public const uint GC_ALLGESTURES = 0x00000001;
-
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool SetGestureConfig(IntPtr hwnd, uint dwReserved, uint cIDs,
-                                               ref GESTURECONFIG pGestureConfig, uint cbSize);
+                                               [In] GESTURECONFIG[] pGestureConfig, uint cbSize);
+
+    /// <summary>POINTS：两个 **short**（GESTUREINFO.ptsLocation 用的是它，不是 POINT）。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINTS
+    {
+        public short X, Y;
+    }
+
+    /// <summary>GESTUREINFO（WinUser.h 的 tagGESTUREINFO；x64 下 56 字节——`ullArguments`
+    /// 前面有 4 字节对齐填充）。`ptsLocation` 是**屏幕坐标**（物理像素）；
+    /// `ullArguments` 低位按手势解释——GID_ZOOM 时低 16 位 = 两指距离（像素）。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct GESTUREINFO
+    {
+        public uint cbSize;
+        public uint dwFlags;
+        public uint dwID;
+        public IntPtr hwndTarget;
+        public POINTS ptsLocation;
+        public uint dwInstanceID;
+        public uint dwSequenceID;
+        public ulong ullArguments;
+        public uint cbExtraArgs;
+    }
+
+    /// <summary>取一条手势的详情。**句柄在 WM_GESTURE 的 `lParam`**（不是 wParam），
+    /// 用完必须 <see cref="CloseGestureInfoHandle"/>。cbSize 必须先填。</summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool GetGestureInfo(IntPtr hGestureInfo, ref GESTUREINFO pGestureInfo);
+
+    /// <summary>处理完 WM_GESTURE 必须关掉这个句柄（官方示例的固定收尾）。</summary>
+    [DllImport("user32.dll")]
+    public static extern bool CloseGestureInfoHandle(IntPtr hGestureInfo);
 
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     public static extern bool SetProp(IntPtr hWnd, string lpString, IntPtr hData);
@@ -629,8 +696,14 @@ internal static class Native
     /// 而三条都是幂等且互不冲突的。返回"至少一条成功"，调用方把它印进启动横幅
     /// ——**这个开关到底生效没有，必须一眼看得见**（不然"停顿没反应"这件事
     /// 会被记成"识别不准"，排查方向从一开始就错了）。
+    ///
+    /// <paramref name="allowZoom"/>（2026-11-16）：**只有画布那个覆盖层窗口**传 true。
+    /// 它把 `GID_ZOOM` 单独放行，让 Windows 精确式触控板（precision touchpad）的
+    /// 双指捏合以 `WM_GESTURE` 送进来；按住不动/平移/旋转/双指轻点/双指按压仍然全挡。
+    /// 面板/PPT 条/计时卡这些接输入小窗保持**全部挡掉**：它们本来就不吃手势，
+    /// 放行只会让系统在那块区域做默认缩放/滚动。
     /// </summary>
-    public static bool DisableSystemPressAndHold(IntPtr hwnd)
+    public static bool DisableSystemPressAndHold(IntPtr hwnd, bool allowZoom = false)
     {
         if (hwnd == IntPtr.Zero) return false;
         bool ok = false;
@@ -645,12 +718,26 @@ internal static class Native
         }
         catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
 
-        // ② 挡掉全部系统手势（Win7+）。我们本来就不吃 WM_GESTURE —— 笔迹、翻页、
-        //    滚动条全是自己按 WM_POINTER 算的，挡掉不存在"误伤自己"的问题。
+        // ② 系统手势（Win7+）：逐条写，别用 `dwID = 0` 的"全挡/全放"。
+        //    · 放行 GID_ZOOM（触控板捏合 → WM_GESTURE，见 Engine 的 WM_GESTURE 分支）；
+        //    · 其余四条继续挡：平移 / 旋转 / 双指轻点 / 双指按压（GID_PRESSANDTAP，
+        //      也就是 GID_ROLLOVER）——它们会和"双指手势 / 两指轻点呼出盘"打架。
+        //    ⚠ "按住不动 = 右键"不是这五条里的任何一条，它归 ①③ 管（Tpcshrd.h 的
+        //      TABLET_DISABLE_PRESSANDHOLD），所以这里放行 zoom **不会**把右键带回来。
         try
         {
-            var cfg = new GESTURECONFIG { dwID = 0, dwWant = 0, dwBlock = GC_ALLGESTURES };
-            if (SetGestureConfig(hwnd, 0, 1, ref cfg, (uint)Marshal.SizeOf<GESTURECONFIG>())) ok = true;
+            GESTURECONFIG[] cfg = allowZoom
+                ? new[]
+                {
+                    new GESTURECONFIG { dwID = GID_ZOOM, dwWant = GC_ZOOM, dwBlock = 0 },
+                    new GESTURECONFIG { dwID = GID_PAN, dwWant = 0, dwBlock = GC_PAN },
+                    new GESTURECONFIG { dwID = GID_ROTATE, dwWant = 0, dwBlock = GC_ROTATE },
+                    new GESTURECONFIG { dwID = GID_TWOFINGERTAP, dwWant = 0, dwBlock = GC_TWOFINGERTAP },
+                    new GESTURECONFIG { dwID = GID_PRESSANDTAP, dwWant = 0, dwBlock = GC_PRESSANDTAP },
+                }
+                : new[] { new GESTURECONFIG { dwID = 0, dwWant = 0, dwBlock = GC_ALLGESTURES } };
+            if (SetGestureConfig(hwnd, 0, (uint)cfg.Length, cfg,
+                                 (uint)Marshal.SizeOf<GESTURECONFIG>())) ok = true;
         }
         catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
 
@@ -1206,6 +1293,38 @@ internal static class Native
     /// </summary>
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool InjectSyntheticPointerInput(IntPtr device, IntPtr pointerInfo, uint count);
+
+    // ---- 真实触摸注入（只给自检用；产品不走这条路）-------------------------
+    //
+    // 和上面的"合成指针"是两套不同的系统能力：
+    //   · `InjectSyntheticPointerInput` 造出来的是**合成设备**，系统把它当虚拟笔/触摸，
+    //     消息照样走 WM_POINTER，但有些真实链路（手势识别、触摸板、系统手势）不认它；
+    //   · `InitializeTouchInjection` / `InjectTouchInput` 走的是**触摸注入**通道：
+    //     系统把它当真实触摸数字化器的一批触点（可多点、带接触面积），
+    //     所以它是唯一能验证"真触摸屏捏合"这条链路的自动化办法。
+    //
+    // 前提（不满足就 SKIP，不算失败）：
+    //   · 系统支持触摸注入（部分虚拟机/无触摸设备的机器返回 FALSE）；
+    //   · 调用进程要够得着目标窗口（本程序自己是前台覆盖层，正常满足）；
+    //   · 桌面未锁屏、没有 UAC 安全桌面。
+    public const uint TOUCH_FLAG_NONE = 0x00000000;
+    public const uint TOUCH_MASK_ORIENTATION = 0x00000002;
+    public const uint TOUCH_MASK_PRESSURE = 0x00000004;
+
+    public const uint POINTER_FLAG_DOWN = 0x00010000;
+    public const uint POINTER_FLAG_UPDATE = 0x00020000;
+    public const uint POINTER_FLAG_UP = 0x00040000;
+
+    /// <summary>TOUCH_FEEDBACK_DEFAULT：让系统画它自己的触点反馈（和真实手指一致）。</summary>
+    public const uint TOUCH_FEEDBACK_DEFAULT = 0x00000001;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool InitializeTouchInjection(uint maxCount, uint dwMode);
+
+    /// <summary>注入一批触点（`contacts` 是 <see cref="POINTER_TOUCH_INFO"/> 数组）。
+    /// 同一批里的 pointerId 必须各不相同；每个触点第一次是 DOWN、中间是 UPDATE、最后是 UP。</summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool InjectTouchInput(uint count, IntPtr contacts);
 
     // ---- 注册表（只读，用来诊断"系统笔设置"）------------------------------
     //

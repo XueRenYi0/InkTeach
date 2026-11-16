@@ -440,6 +440,97 @@ internal sealed partial class App
         return _syntheticPen != IntPtr.Zero;
     }
 
+    // ---- 真实触摸注入（自检 `--touchtest` 用）-----------------------------
+    //
+    // 为什么不用上面的合成触摸：合成设备（CreateSyntheticPointerDevice）虽然也走
+    // WM_POINTER，但**系统手势/系统级触摸链路不认它**。要回答"真触摸屏捏合到底行不行"，
+    // 只能用 Windows 的触摸注入通道（InitializeTouchInjection / InjectTouchInput）——
+    // 它把自己伪装成真实数字化器的一批触点（可多点、带接触面积）。
+    // 不支持就 SKIP（无触摸设备的机器、部分虚拟机、锁屏/安全桌面）。
+
+    private bool _touchInjectReady;
+    private string _touchInjectNote = "";
+
+    /// <summary>初始化触摸注入（一次）。失败时 <paramref name="why"/> 是给 SKIP 看的原因。</summary>
+    private bool EnsureTouchInjection(out string why)
+    {
+        if (_touchInjectReady) { why = _touchInjectNote; return true; }
+        if (Native.InitializeTouchInjection(10, Native.TOUCH_FEEDBACK_DEFAULT))
+        {
+            _touchInjectReady = true;
+            _touchInjectNote = "ok";
+            why = _touchInjectNote;
+            return true;
+        }
+        int err = Marshal.GetLastWin32Error();
+        _touchInjectNote = $"InitializeTouchInjection 失败（Win32 {err}："
+                         + $"{new System.ComponentModel.Win32Exception(err).Message}）";
+        why = _touchInjectNote;
+        return false;
+    }
+
+    /// <summary>
+    /// 注入一批真实触点。<paramref name="phase"/>：0 = 落下（DOWN）、1 = 移动（UPDATE）、
+    /// 2 = 抬起（UP）。`points` 是"这一刻所有还按着的触点"，下标即 pointerId（0..n-1）。
+    /// 返回 false = 系统拒收（此时调用方按 SKIP 处理，不判失败）。
+    /// </summary>
+    private unsafe bool InjectTouches(int phase, out int win32Err, params (float x, float y)[] points)
+    {
+        win32Err = 0;
+        int stride = Marshal.SizeOf<Native.POINTER_TOUCH_INFO>();
+        int n = Math.Max(1, points.Length);
+        IntPtr buf = Marshal.AllocHGlobal(stride * n + 16);
+        try
+        {
+            for (int i = 0; i < points.Length; i++)
+            {
+                var c = new Native.POINTER_TOUCH_INFO();
+                c.pointerInfo.pointerType = Native.PT_TOUCH;
+                // pointerId 从 0 起（官方 InjectTouch 样例与 fMBT 都是 0/1）——注入通道按
+                // "第几个触点"跟踪，用 1..n 也合法，但 0 起最贴近样例，少一个变量。
+                c.pointerInfo.pointerId = (uint)i;
+                uint flags = Native.POINTER_FLAG_INRANGE;
+                if (phase == 0)
+                    flags |= Native.POINTER_FLAG_DOWN | Native.POINTER_FLAG_INCONTACT;
+                else if (phase == 1)
+                    flags |= Native.POINTER_FLAG_UPDATE | Native.POINTER_FLAG_INCONTACT;
+                else
+                    flags |= Native.POINTER_FLAG_UP;
+                c.pointerInfo.pointerFlags = flags;
+                c.pointerInfo.ptPixelLocationX = (int)points[i].x;
+                c.pointerInfo.ptPixelLocationY = (int)points[i].y;
+                // ⚠ hwndTarget **必须留空**：注入通道自己按屏幕坐标做命中测试，
+                // 传任何窗口句柄都会被判成 ERROR_INVALID_PARAMETER（2026-11-16 实测：
+                // 同一份触点 hwndTarget = 前台窗口 → FALSE 87，= NULL → TRUE）。
+                c.pointerInfo.hwndTarget = IntPtr.Zero;
+
+                // 接触面积/朝向/压力都给上：真实触摸屏就是这么报的，手势层也用得到。
+                const int half = 12;
+                var rc = new Native.RECT
+                {
+                    Left = (int)points[i].x - half,
+                    Top = (int)points[i].y - half,
+                    Right = (int)points[i].x + half,
+                    Bottom = (int)points[i].y + half,
+                };
+                c.touchFlags = Native.TOUCH_FLAG_NONE;
+                c.touchMask = Native.TOUCH_MASK_CONTACTAREA
+                            | Native.TOUCH_MASK_ORIENTATION | Native.TOUCH_MASK_PRESSURE;
+                c.rcContact = rc;
+                // rcContactRaw 留 0：官方 InjectTouch 样例只填 rcContact（实测填了也能过，
+                // 但注入只需要"预测接触区"，原始区由系统自己算，少一个可能被校验的字段）。
+                c.orientation = 90;
+                c.pressure = 32000;
+
+                Marshal.StructureToPtr(c, buf + i * stride, false);
+            }
+            bool ok = Native.InjectTouchInput((uint)points.Length, buf);
+            if (!ok) win32Err = Marshal.GetLastWin32Error();   // 必须紧跟着读（下面还有别的调用）
+            return ok;
+        }
+        finally { Marshal.FreeHGlobal(buf); }
+    }
+
     /// <summary>注入一个合成笔采样点，走的是和真笔同一条 WM_POINTER 路径。</summary>
     private unsafe void SendPenPoint(float x, float y, uint pressure, bool contact, bool first)
     {

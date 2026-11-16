@@ -1116,6 +1116,10 @@ public partial class InkEngine
             Console.WriteLine("长按=右键手势: " + (OverlayWindow.PressAndHoldDisabled
                 ? "已在本窗口内关掉（系统里开着也不影响我们）"
                 : "⚠ 没关掉（真笔上笔尖停住可能弹右键环，会和停顿成型抢）"));
+            // 触控板捏合（2026-11-16）：只放行 GID_ZOOM，其余系统手势仍全挡。
+            // 印出来是为了排查"捏合没反应"时能立刻分清：是没放行、还是没进文档模式。
+            Console.WriteLine("触控板捏合: 已放行 GID_ZOOM（WM_GESTURE；只在文档模式缩放，"
+                              + "按住不动/平移/旋转/双指轻点仍关闭）");
             Console.WriteLine($"压感→粗细: {(PressureWidth.Enabled
                 ? $"开（{PressureWidth.Min:F2}~{PressureWidth.Max:F2} 倍，曲线 gamma {PressureWidth.Gamma:F2}）"
                 : "关（--nopressure）")}；变宽通道: {OverlayWindow.InkNote}");
@@ -2115,6 +2119,13 @@ public partial class InkEngine
             case Native.WM_POINTERUP:
                 OnPointerUp(hWnd, wParam);
                 return IntPtr.Zero;
+
+            // 触控板捏合（precision touchpad）：Windows 以 WM_GESTURE 送进来。
+            // SetGestureConfig 只对**画布窗口**放行了 GID_ZOOM（见 Native.DisableSystemPressAndHold），
+            // 这里只处理它；其余手势本该到不了，到了也吃掉（返回 0 = 不让 DefWindowProc
+            // 再做一遍默认缩放/滚动）。判据与锚点见 Doc/DocImport.Pan.cs。
+            case Native.WM_GESTURE:
+                return HandleGestureMessage(hWnd, wParam, lParam);
 
             case Native.WM_INPUT:                     // `--rawprobe` 只数数；`--rawinput` 顺带补采样点
                 HandleRawInput(lParam);

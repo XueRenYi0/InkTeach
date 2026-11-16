@@ -1,7 +1,8 @@
-// [职责] 文档「手掌」拖页 + 双指捏合缩放 / 放大后平移（文档相机）。
+// [职责] 文档「手掌」拖页 + 双指捏合缩放 / 放大后平移 / 触控板捏合缩放（文档相机）。
 // [测试] --doctest / --touchtest
 
 using System.Numerics;
+using System.Runtime.InteropServices;
 
 namespace InkEngine;
 
@@ -204,6 +205,32 @@ public partial class InkEngine
         public int PinchHot;
         /// <summary>这一次按住空格开的手掌（松手才收；原本就是手掌的不动它）。</summary>
         public bool PanBySpace;
+
+        /// <summary>触控板捏合（WM_GESTURE / GID_ZOOM）的基线；见 <see cref="DocPadGestureState"/>。</summary>
+        public readonly DocPadGestureState PadPinch = new();
+    }
+
+    /// <summary>
+    /// 触控板捏合缩放的基线（2026-11-16）。**一枚手势一段基线**：
+    /// GID_BEGIN / GID_END / 手指导致的空档都清掉，下一段重新记起点。
+    /// 为什么不要"每帧取上一帧距离"：GID_ZOOM 的距离是**指针距离的绝对值**，
+    /// 按比例乘出来的倍率必须始终从这一段手势的起点算，否则会累积漂移。
+    /// </summary>
+    internal sealed class DocPadGestureState
+    {
+        /// <summary>这一段手势已经记下起点（第一帧只记基线，不缩放）。</summary>
+        public bool Active;
+        /// <summary>起点两指距离（GID_ZOOM 的 ullArguments 低 16 位，像素）。</summary>
+        public float Dist0;
+        /// <summary>起点倍率（= 第一帧的 ViewScale）。</summary>
+        public float Zoom0 = 1f;
+
+        public void Reset()
+        {
+            Active = false;
+            Dist0 = 0f;
+            Zoom0 = 1f;
+        }
     }
 
     private readonly DocTouchState _docTouch = new();
@@ -292,6 +319,115 @@ public partial class InkEngine
         }
         return false;
     }
+
+    // ======================================================================
+    //  触控板捏合缩放（WM_GESTURE / GID_ZOOM，2026-11-16）
+    //
+    //  参考：Windows 官方 "Windows Touch Gestures"（WM_GESTURE 的 GID_ZOOM：
+    //  ullArguments 低 16 位 = 两指距离；ptsLocation = 手势中心，屏幕坐标）＋
+    //  Acrobat / Edge / 浏览器 PDF 阅读器的"以手势中心为锚连续缩放"。
+    //
+    //  和触摸屏那条的分工：触摸屏走 WM_POINTER 的**两指捏合判据**（上面一段），
+    //  精确式触控板（precision touchpad）走**系统手势** WM_GESTURE。两条路都汇到
+    //  `SetDocZoomCore`（50–300%、补丁重建、页码/百分比通知只有一份）。
+    //  同一时刻只允许一条生效：触摸已经占着手势状态机时，WM_GESTURE 一律忽略，
+    //  否则一次"两指在触控板上捏 + 一只手在屏幕上捏"会让倍率跳两次。
+    // ======================================================================
+
+    /// <summary>
+    /// 触控板捏合缩放能不能接管：**文档开着、不在放映/白板、不在文本编辑、
+    /// 没有整页界面盖着、触屏手势也没在进行**。
+    /// （比 <see cref="DocPinchPanEligible"/> 少一条"有没有选中对象"——触控板捏合
+    ///  缩的是**文档相机**，和"选中对象缩放"不冲突，用户不必先取消选中。）
+    /// </summary>
+    internal bool DocGestureZoomEligible =>
+        DocView.IsOpen && !PptMode && !BoardOn && !_textBoxEditing
+        && !UiOverlayOpen && _touchMode == TouchMode.None;
+
+    /// <summary>
+    /// 处理一条 `WM_GESTURE`。**只吃 GID_ZOOM**（SetGestureConfig 也只放行了这一条）。
+    ///
+    /// 返回值：`IntPtr.Zero` = 已处理（**不要再交给默认处理**，否则系统会在缩放的
+    /// 同时自己滚/缩一遍）；其余返回 false 的路径（句柄拿不到）也回 0，因为这条消息
+    /// 本来就不该落到 DefWindowProc 去做默认缩放。
+    /// </summary>
+    private IntPtr HandleGestureMessage(IntPtr hWnd, IntPtr wParam, IntPtr lParam)
+    {
+        var gi = new Native.GESTUREINFO { cbSize = (uint)Marshal.SizeOf<Native.GESTUREINFO>() };
+        // ⚠ 句柄在 **lParam**（WinUser.h 的注释原话："HGESTUREINFO is received by a
+        //   window in the lParam of a WM_GESTURE message"），wParam 不参与。
+        if (!Native.GetGestureInfo(lParam, ref gi))
+        {
+            Native.CloseGestureInfoHandle(lParam);
+            return IntPtr.Zero;
+        }
+        try
+        {
+            // 一段手势的首尾：只清基线，不缩放。
+            if (gi.dwID == Native.GID_BEGIN || gi.dwID == Native.GID_END)
+            {
+                _docTouch.PadPinch.Reset();
+                return IntPtr.Zero;
+            }
+            // 其它手势理论上到不了（SetGestureConfig 挡住了）；万一来了也吃掉，
+            // 不让默认处理去翻页/旋转。
+            if (gi.dwID != Native.GID_ZOOM) return IntPtr.Zero;
+
+            ApplyDocGestureZoom((int)(gi.ullArguments & 0xFFFF), gi.ptsLocation.X, gi.ptsLocation.Y);
+            return IntPtr.Zero;
+        }
+        finally
+        {
+            Native.CloseGestureInfoHandle(lParam);
+        }
+    }
+
+    /// <summary>
+    /// 一帧 GID_ZOOM：第一帧记基线，之后 `zoom = zoom0 × dist / dist0`，
+    /// 锚点 = **手势中心**（屏幕坐标；SetDocZoomCore 自己换成画布点并保持不动）。
+    /// 夹取（0.5–3.0）在 SetDocZoomCore 里，只有一份。
+    /// </summary>
+    private void ApplyDocGestureZoom(int distancePx, int screenX, int screenY)
+    {
+        var g = _docTouch.PadPinch;
+        if (!DocGestureZoomEligible)
+        {
+            g.Reset();                       // 文档关掉 / 触屏在捏：这一段不再续
+            return;
+        }
+        if (distancePx < 1) return;          // 没距离（单指/异常帧）不参与比例
+
+        if (!g.Active)
+        {
+            g.Active = true;
+            g.Dist0 = distancePx;
+            g.Zoom0 = ViewScale;
+            return;                          // 第一帧只记起点：首帧不跳
+        }
+
+        float zoom = g.Zoom0 * (distancePx / g.Dist0);
+        if (float.IsNaN(zoom) || float.IsInfinity(zoom)) return;
+        SetDocZoomCore(zoom, DocZoomMin, screenX, screenY, quiet: true);
+    }
+
+    /// <summary>
+    /// 自检钩子（`--touchtest`）：喂一帧合成手势，**和真实 WM_GESTURE 走同一套判据**
+    /// （不造 HWND、不碰手势句柄）。<paramref name="gestureId"/> 用 `Native.GID_*`；
+    /// GID_BEGIN / GID_END 清基线，GID_ZOOM 用 <paramref name="ullArguments"/> 低 16 位。
+    /// </summary>
+    internal void HandleDocGestureForTest(uint gestureId, long ullArguments, int screenX, int screenY)
+    {
+        if (gestureId == Native.GID_BEGIN || gestureId == Native.GID_END)
+        {
+            _docTouch.PadPinch.Reset();
+            return;
+        }
+        if (gestureId != Native.GID_ZOOM) return;
+        ApplyDocGestureZoom((int)(ullArguments & 0xFFFF), screenX, screenY);
+    }
+
+    /// <summary>自检用：这一段触控板手势是否已经记下基线。</summary>
+    internal bool DocPadGestureActiveForTest => _docTouch.PadPinch.Active;
 
     // ======================================================================
     //  键盘：`H` = 手掌开关；按住 `空格` = 临时手掌（2026-11-16）

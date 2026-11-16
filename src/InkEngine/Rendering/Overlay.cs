@@ -1052,7 +1052,9 @@ internal sealed partial class OverlayWindow : IDisposable
         // 我们要用"笔按住不动"当停顿成型的信号，和系统那条同款手势直接撞车。
         // 每个覆盖层窗口都要关一次——手势是按窗口算的，只关主屏那一个，
         // 副屏上写字照样弹右键环。
-        PressAndHoldDisabled = Native.DisableSystemPressAndHold(Hwnd);
+        // 2026-11-16：覆盖层是**画布**，额外放行 GID_ZOOM（触控板捏合 → WM_GESTURE，
+        // 见 Engine 的 WM_GESTURE 分支）；按住不动/平移/旋转/双指轻点仍然全挡。
+        PressAndHoldDisabled = Native.DisableSystemPressAndHold(Hwnd, allowZoom: true);
 
         Dpi = Native.GetDpiForWindow(Hwnd);
         if (Dpi == 0) Dpi = 96;

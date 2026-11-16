@@ -930,6 +930,218 @@ internal sealed partial class App
             SettleFrames(150);
         }
 
+        // ---- ㉒ 触控板捏合（WM_GESTURE / GID_ZOOM）：合成手势喂同一套判据 ----
+        // 为什么要单独喂：触控板的捏合是**系统手势消息**，合成触摸造不出来；
+        // `HandleDocGestureForTest` 走的就是 WM_GESTURE 分支里的同一段判断/换算，
+        // 只是跳过了 HWND 和手势句柄。判据全是数得出来的量（倍率、锚点、基线）。
+        {
+            TouchResetForTest();
+            Doc.Selected.Clear();
+            Tool = Tool.Pen;
+            if (BoardOn) SetBoardFromUi(false);
+            DocPageWorker = false;
+            DocView.UseWorker = false;
+            float halfW = _virtualW * 0.5f;
+            DocView.Generator = sp => FakeDocPageBgra(sp.OutW, sp.OutH, 246, 246, 246);
+            DocView.Open(new List<DocPages.Spec>
+            {
+                DocSpec(1400, 1500, "pad1.png"),
+                DocSpec(1400, 1500, "pad2.png"),
+            }, "触控板捏合测试", halfW, 0f, 48f);
+            ZoomTestResetCamera();
+            SettleFrames(200);
+
+            int strokes0 = Doc.Strokes.Count;
+            float ax0 = ScreenToCanvasX(cx), ay0 = ScreenToCanvasY(cy);
+
+            // 第一段：100 → 150 → 200（比例 1.5 / 2.0），锚点 = 手势中心。
+            HandleDocGestureForTest(Native.GID_BEGIN, 0, (int)cx, (int)cy);
+            HandleDocGestureForTest(Native.GID_ZOOM, 100, (int)cx, (int)cy);   // 只记基线
+            bool baseline = DocPadGestureActiveForTest;
+            float zBase = ViewScale;
+            HandleDocGestureForTest(Native.GID_ZOOM, 150, (int)cx, (int)cy);
+            SettleFrames(60);
+            float z15 = ViewScale;
+            float ax1 = ScreenToCanvasX(cx), ay1 = ScreenToCanvasY(cy);
+            HandleDocGestureForTest(Native.GID_ZOOM, 200, (int)cx, (int)cy);
+            SettleFrames(60);
+            float z20 = ViewScale;
+            Check("触控板捏合：首帧只记基线、之后 100→150→200 = 1.5/2.0 倍",
+                  baseline && MathF.Abs(zBase - 1f) < 1e-3f
+                  && MathF.Abs(z15 - 1.5f) < 0.01f && MathF.Abs(z20 - 2f) < 0.01f,
+                  $"基线 {zBase:F2}（{baseline}）→ {z15:F2} → {z20:F2}，条上 {DocZoomPercentText}");
+            Check("触控板捏合：锚点 = 手势中心（画布点不动 ≤2px）",
+                  MathF.Abs(ax1 - ax0) <= 2f && MathF.Abs(ay1 - ay0) <= 2f,
+                  $"锚点 ({ax0:F1},{ay0:F1}) → ({ax1:F1},{ay1:F1})");
+
+            // 夹取：8 倍 → 300%，0.1 倍 → 50%（和档位按钮同一套上下限）。
+            HandleDocGestureForTest(Native.GID_ZOOM, 800, (int)cx, (int)cy);
+            SettleFrames(50);
+            float zMax = ViewScale;
+            HandleDocGestureForTest(Native.GID_ZOOM, 10, (int)cx, (int)cy);
+            SettleFrames(50);
+            float zMin = ViewScale;
+            Check("触控板捏合：夹取 0.5–3.0（8 倍 → 300%，0.1 倍 → 50%）",
+                  MathF.Abs(zMax - 3f) < 1e-3f && MathF.Abs(zMin - DocZoomMin) < 1e-3f,
+                  $"8 倍 → {zMax:F2}，0.1 倍 → {zMin:F2}（下限 {DocZoomMin}）");
+
+            // 一段手势结束 → 下一段从新距离重新算（不接着上一段的 100）。
+            HandleDocGestureForTest(Native.GID_END, 0, (int)cx, (int)cy);
+            ZoomTestResetCamera();
+            SettleFrames(80);
+            HandleDocGestureForTest(Native.GID_ZOOM, 300, (int)cx, (int)cy);   // 新基线
+            SettleFrames(40);
+            float zNewBase = ViewScale;
+            HandleDocGestureForTest(Native.GID_ZOOM, 450, (int)cx, (int)cy);
+            SettleFrames(60);
+            float zNew = ViewScale;
+            Check("触控板捏合：GID_END 复位基线（下一段 300→450 = 1.5，不接着上一段）",
+                  MathF.Abs(zNewBase - 1f) < 1e-3f && MathF.Abs(zNew - 1.5f) < 0.01f,
+                  $"新基线 {zNewBase:F2} → {zNew:F2}");
+            Check("触控板捏合：全程不落墨（手势不是指针）",
+                  Doc.Strokes.Count == strokes0,
+                  $"笔画 {strokes0} → {Doc.Strokes.Count}");
+
+            // 触屏捏合进行中：触控板手势必须让路（同一时刻只允许一条缩放链路）。
+            // 判据：触屏那一路已经锁了捏合；这时再喂一段"放大到 9 倍"的手势，
+            // 相机不能动、基线也不能被记下（`_touchMode != None` 时 ApplyDocGestureZoom 直接复位）。
+            {
+                ZoomTestResetCamera();
+                TouchResetForTest();
+                SettleFrames(120);
+                Touch2Down(cx - 100, cy, cx + 100, cy);
+                for (int i = 1; i <= 4; i++)
+                {
+                    Touch2Move(cx - 100 - i * 15, cy, cx + 100 + i * 15, cy);
+                    SettleFrames(30);
+                }
+                bool touchPinch = TouchDocPinchForTest;
+                float zBefore = ViewScale;
+                HandleDocGestureForTest(Native.GID_BEGIN, 0, (int)cx, (int)cy);
+                HandleDocGestureForTest(Native.GID_ZOOM, 100, (int)cx, (int)cy);
+                HandleDocGestureForTest(Native.GID_ZOOM, 900, (int)cx, (int)cy);
+                SettleFrames(60);
+                float zAfter = ViewScale;
+                bool padActive = DocPadGestureActiveForTest;
+                Touch2Up(cx - 160, cy, cx + 160, cy);
+                SettleFrames(200);
+                Check("触屏捏合进行中：触控板手势让路（相机不动、基线不记）",
+                      touchPinch && MathF.Abs(zAfter - zBefore) < 1e-3f && !padActive,
+                      $"触屏捏合 = {touchPinch}，倍率 {zBefore:F2} → {zAfter:F2}，触控板基线 = {padActive}");
+                TouchResetForTest();
+                ZoomTestResetCamera();
+                SettleFrames(80);
+            }
+
+            // 文档关掉：手势不许动相机（桌面批注不该被触控板缩放）。
+            HandleDocGestureForTest(Native.GID_END, 0, (int)cx, (int)cy);
+            CloseDocument();
+            SettleFrames(120);
+            float zNoDoc = ViewScale;
+            HandleDocGestureForTest(Native.GID_BEGIN, 0, (int)cx, (int)cy);
+            HandleDocGestureForTest(Native.GID_ZOOM, 100, (int)cx, (int)cy);
+            HandleDocGestureForTest(Native.GID_ZOOM, 400, (int)cx, (int)cy);
+            SettleFrames(60);
+            Check("文档关掉：触控板捏合不动相机（只在文档模式生效）",
+                  MathF.Abs(ViewScale - zNoDoc) < 1e-3f && !DocPadGestureActiveForTest,
+                  $"倍率 {zNoDoc:F2} → {ViewScale:F2}，基线还在 = {DocPadGestureActiveForTest}");
+            DocView.Generator = null;
+            Doc.Clear();
+            Doc.ClearHistory();
+            TouchResetForTest();
+            SettleFrames(120);
+        }
+
+        // ---- ㉓ 真实触摸注入（InitializeTouchInjection / InjectTouchInput）----
+        // 这一条验的是**真触摸屏那条链路**：系统把注入触点当真实数字化器上报，
+        // 引擎收到 WM_POINTER（PT_TOUCH）→ 双指捏合 → 文档缩放，且不落墨。
+        // 注入不可用/被拒收 = SKIP（无触摸设备的机器、锁屏、安全桌面），不算失败。
+        {
+            string skipWhy = null;
+            if (!EnsureTouchInjection(out skipWhy))
+            {
+                Console.WriteLine($"  SKIP: 真实触摸注入不可用（{skipWhy}）——不判失败");
+            }
+            else
+            {
+                Doc.Selected.Clear();
+                Tool = Tool.Pen;
+                if (BoardOn) SetBoardFromUi(false);
+                DocPageWorker = false;
+                DocView.UseWorker = false;
+                float halfW = _virtualW * 0.5f;
+                DocView.Generator = sp => FakeDocPageBgra(sp.OutW, sp.OutH, 246, 246, 246);
+                DocView.Open(new List<DocPages.Spec>
+                {
+                    DocSpec(1400, 1500, "inject1.png"),
+                    DocSpec(1400, 1500, "inject2.png"),
+                }, "触摸注入测试", halfW, 0f, 48f);
+                ZoomTestResetCamera();
+                SettleFrames(200);
+
+                float z0 = ViewScale;
+                int strokes0 = Doc.Strokes.Count;
+                Console.WriteLine($"      [探针] 触摸注入：POINTER_TOUCH_INFO = {Marshal.SizeOf<Native.POINTER_TOUCH_INFO>()} 字节，"
+                                  + $"SM_DIGITIZER = 0x{Native.GetSystemMetrics(Native.SM_DIGITIZER):X}"
+                                  + $"（触摸位 0x1/0x2，笔位 0x4/0x8，就绪 0x80）；"
+                                  + $"桌面 {_virtualW}x{_virtualH}");
+                bool okDown = InjectTouches(0, out int errDown, (cx - 80f, cy), (cx + 80f, cy));
+                SettleFrames(80);
+                bool okMove = true; int errMove = 0;
+                for (int i = 1; i <= 6; i++)
+                {
+                    okMove &= InjectTouches(1, out errMove, (cx - 80f - i * 20f, cy), (cx + 80f + i * 20f, cy));
+                    SettleFrames(40);
+                }
+                bool okUp = InjectTouches(2, out int errUp, (cx - 200f, cy), (cx + 200f, cy));
+                SettleFrames(250);
+                float z1 = ViewScale;
+
+                // 出图：注入之后、关文档之前（图上应能看出页被放大）。
+                string shotNote = "未保存";
+                try
+                {
+                    System.IO.Directory.CreateDirectory("reports");
+                    using var bmp = new System.Drawing.Bitmap((int)_virtualW, (int)_virtualH);
+                    using (var g = System.Drawing.Graphics.FromImage(bmp))
+                        g.CopyFromScreen((int)_virtualX, (int)_virtualY, 0, 0, bmp.Size);
+                    bmp.Save("reports/touch-inject-pinch.png", System.Drawing.Imaging.ImageFormat.Png);
+                    shotNote = "已保存";
+                }
+                catch (Exception ex) { Console.WriteLine($"      截图失败（不影响判定）：{ex.Message}"); }
+                Console.WriteLine($"      出图：reports/touch-inject-pinch.png（{shotNote}，相机 {z1:F2}）");
+
+                int err = errDown != 0 ? errDown : (errMove != 0 ? errMove : errUp);
+                if (!okDown || !okMove || !okUp)
+                {
+                    Console.WriteLine($"  SKIP: 系统拒收触摸注入（DOWN={okDown} MOVE={okMove} UP={okUp}，"
+                                      + $"Win32 {err}：{new System.ComponentModel.Win32Exception(err).Message}）——不判失败");
+                }
+                else if (MathF.Abs(z1 - z0) < 1e-3f)
+                {
+                    Console.WriteLine("  SKIP: 注入被 API 接受但没有送达（本机可能没有触摸数字化器 / 窗口不是桌面焦点）"
+                                      + $"——不判失败；相机 {z0:F2} → {z1:F2}");
+                }
+                else
+                {
+                    Check("真实触摸注入：两指张开 → 文档放大（走真触摸链路）",
+                          z1 > z0 + 0.1f,
+                          $"倍率 {z0:F2} → {z1:F2}（条上 {DocZoomPercentText}）");
+                    Check("真实触摸注入：捏合全程不落墨",
+                          Doc.Strokes.Count == strokes0,
+                          $"笔画 {strokes0} → {Doc.Strokes.Count}");
+                }
+
+                CloseDocument();
+                DocView.Generator = null;
+                Doc.Clear();
+                Doc.ClearHistory();
+                ZoomTestResetCamera();
+                TouchResetForTest();
+                SettleFrames(150);
+            }
+        }
+
         // 收尾
         TouchResetForTest();
         Doc.Clear();
