@@ -97,5 +97,32 @@ $null = curl.exe -s --max-time 60 -o $tmpJson "$api/releases/tags/$tag"
 $rel2 = Read-GcJson $tmpJson
 Write-Host "  附件直链：" -ForegroundColor DarkGray
 @($rel2.assets | Where-Object { $_.type -eq 'attach' }) | ForEach-Object { "    $($_.browser_download_url)" }
+
+# ⑤ 镜像清单（2026-11-17 加）：GitCode 仓库 main 分支上的 update.json 也是客户端的一条清单源。
+#    以前只靠手工同步，漏一次这条源就一直报旧版本。这里用 contents API 直接改（幂等：内容一样就不提交）。
+$localManifest = Join-Path $root 'update.json'
+if (Test-Path $localManifest) {
+    $contentsApi = "https://api.gitcode.com/api/v5/repos/$owner/$repo/contents/update.json"
+    $curFile = $null
+    try { $curFile = curl.exe -s --max-time 60 "$contentsApi`?ref=main&access_token=$tok" | ConvertFrom-Json } catch { }
+    $b64 = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($localManifest))
+    if ($curFile -and $curFile.content -and ($curFile.content -replace '\s', '') -eq $b64) {
+        Write-Host "  镜像清单已是最新（$Version）" -ForegroundColor DarkGray
+    } else {
+        $putBody = @{
+            message = "transitional manifest $Version -> GitHub XueRenYi0/InkTeach"
+            content = $b64
+            branch  = 'main'
+        }
+        if ($curFile -and $curFile.sha) { $putBody.sha = $curFile.sha }
+        $putFile = Join-Path $env:TEMP "inkteach-gc-put-$Version.json"
+        ($putBody | ConvertTo-Json -Compress) | Set-Content -Path $putFile -Encoding UTF8
+        $putOut = curl.exe -s --max-time 60 -X PUT "$contentsApi`?access_token=$tok" -H 'Content-Type: application/json' --data-binary "@$putFile"
+        Remove-Item $putFile -Force -ErrorAction SilentlyContinue
+        if ($putOut -match '"commit"') { Write-Host "  镜像清单已更新（$Version）" -ForegroundColor Green }
+        else { Write-Host "  ⚠ 镜像清单更新失败（不影响附件下载）：$($putOut.Substring(0, [Math]::Min(160, $putOut.Length)))" -ForegroundColor Yellow }
+    }
+}
+
 Write-Host "  完成：https://gitcode.com/$owner/$repo/releases/tag/$tag" -ForegroundColor Green
 Remove-Item $tmpJson -Force -ErrorAction SilentlyContinue
