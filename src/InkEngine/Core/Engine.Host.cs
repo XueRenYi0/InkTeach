@@ -1389,6 +1389,7 @@ public partial class InkEngine
             StepHandwritingOcr(); StepAiPlot();             // 手写优化：把后台识别结果搬回文档
             StepImageCard(); StepCardAnswers();             // 图片→题卡 / 卡上生成答案
             StepAppDataJob();                 // 全局备份/恢复结果轮询（后台线程，界面不卡）
+            StepInkOpen();                    // 后台"打开墨迹"结果采纳（大 .inkb 不卡界面）
             if (NeedsFrame())
             {
                 // VBlankPaced：先等到合成边界，**再抽一次消息**，然后画、提交。
@@ -1597,6 +1598,7 @@ public partial class InkEngine
         StepHandwritingOcr(); StepAiPlot();
         StepImageCard(); StepCardAnswers();
         StepAppDataJob();
+        StepInkOpen();       // 后台"打开墨迹"的结果采纳（自检也是"抽消息＋渲染"驱动，同 StepAppDataJob）
 
         // PPT 状态机。**为什么两处都调**（这里 + 主循环 Loop 里）：主循环那条路
         // 只在"真有帧"时才走到，而自检是用"抽消息＋渲染"驱动的（同 MaybeAutoSave
@@ -2293,6 +2295,9 @@ public partial class InkEngine
         if (DocPatch is { WantsFrame: true }) d |= FrameDrive.Dirty;
         if (AlignSnapPulseActive) d |= FrameDrive.Align;
         if (_g2FlingActive) d |= FrameDrive.TouchFling;
+        // 后台"打开墨迹"在跑：继续出帧（提示可见、结果一到就采纳；否则主循环会睡在
+        // WaitMessage 上等鼠标，加载中看起来像卡住）。
+        if (InkOpenBusy) d |= FrameDrive.Dirty;
 
         _frameDrive = d;
         return d != FrameDrive.None;

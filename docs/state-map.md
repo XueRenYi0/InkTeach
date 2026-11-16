@@ -1,14 +1,14 @@
 # 状态地图（自动生成，勿手改）
 
-> 生成：2026-11-16 18:36 ／ 脚本：`tools/gen-state-map.ps1` ／ ADR-005 D4
+> 生成：2026-11-16 19:29 ／ 脚本：`tools/gen-state-map.ps1` ／ ADR-005 D4
 > 用法：改一个私有字段前，先在这里查它被哪些同族文件读写；只列被 >=2 个文件引用的字段。
 > 它降低定位成本，不降低验证成本；拆不拆类看 ADR-005 D4 的触发条件，不按行数。
 
-## Engine（24 文件 / 343 字段 / 272 个跨文件字段）
+## Engine（24 文件 / 342 字段 / 272 个跨文件字段）
 
 | 字段 | 引用文件 | 主要文件 | 写入点 |
 | --- | --- | --- | --- |
-| `_dirty` | 23 | Engine.cs, Engine.Host.cs, Engine.Selection.Beautify.cs, Engine.Selection.Gesture.cs, Engine.Selection.Vertex.cs, Engine.SelectionBar.Actions.cs …+17 | 304 |
+| `_dirty` | 23 | Engine.cs, Engine.Host.cs, Engine.Selection.Beautify.cs, Engine.Selection.Gesture.cs, Engine.Selection.Vertex.cs, Engine.SelectionBar.Actions.cs …+17 | 303 |
 | `_windows` | 14 | Engine.cs, Engine.Host.cs, Engine.Capture.cs, Engine.Clipboard.cs, Engine.Input.cs, Engine.Hotkey.cs …+8 | 1 |
 | `_drawing` | 9 | Engine.cs, Engine.Host.cs, Engine.SelectionBar.cs, Engine.Input.cs, Engine.TouchGestures.cs, Engine.Radial.cs …+3 | 32 |
 | `_libraryPending` | 8 | Engine.Host.cs, Engine.Hotkey.cs, Engine.Radial.cs, Engine.Library.cs, Engine.Library.Input.cs, Engine.Library.Layout.cs …+2 | 14 |

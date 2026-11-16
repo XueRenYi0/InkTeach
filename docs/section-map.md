@@ -136,7 +136,7 @@
 | 2669 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
 | 2727 | 延时探针（见 Latency.cs） |
 
-## src/InkEngine/Core/Engine.Host.cs（2,349 行）
+## src/InkEngine/Core/Engine.Host.cs（2,354 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -162,8 +162,8 @@
 | 998 | "到底有没有中间点可捞"的自适应判据（2026-10-07 加） |
 | 1213 | 放映期间的"临时全局热键"（2026-09-30 用户定方案①） |
 | 1292 | Message loop |
-| 1451 | 文档高清补丁：每帧同步一次（由引擎挑驱动窗口） |
-| 1927 | Window procedure |
+| 1452 | 文档高清补丁：每帧同步一次（由引擎挑驱动窗口） |
+| 1929 | Window procedure |
 
 ## src/InkEngine/Core/Engine.Selection.Gesture.cs（1,466 行）
 
@@ -195,6 +195,20 @@
 | --- | --- |
 | 19 | 操作条（九格）+ 浮动面板 + 提示条：状态与动作 |
 | 412 | 自定义取色板（8.2.0：色相条 + 饱和度/明度方块 + 当前色预览） |
+
+## src/InkEngine/Core/InkFile.cs（610 行）
+
+| 行 | 顶层类型 |
+| --- | --- |
+| 18 | `internal static class InkFileStore` |
+| 90 | `internal sealed class InkOpenJob` |
+| 116 | `internal sealed class InkOpenGate` |
+| 138 | `public partial class InkEngine` |
+
+| 行 | 段落 |
+| --- | --- |
+| 314 | **异步"打开墨迹"**（2026-11-16）：大 .inkb 不再把界面卡死。 |
+| 566 | 「保存…」/「打开…」——2026-10-16 合并入口（原「保存墨迹」＋「保存图片」、 |
 
 ## src/InkEngine/Core/InkSerializer.cs（882 行）
 
@@ -370,16 +384,16 @@
 | 2638 | 自定义取色板（8.2.0，色相条 + 饱和度/明度方块）的尺寸（逻辑像素） |
 | 3299 | 选中条弹层（AI / `⋯` 共用一套几何，2026-11-08） |
 
-## src/InkEngine/Doc/DocImport.cs（729 行）
+## src/InkEngine/Doc/DocImport.cs（793 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
-| 17 | `public partial class InkEngine` |
+| 18 | `public partial class InkEngine` |
 
 | 行 | 段落 |
 | --- | --- |
-| 39 | 底部页码条（"像打开 PPT 一样"——2026-10-07 用户定，见 计划-文档模式-状态模型.md） |
-| 152 | 文档页空间（墨迹和桌面板书 / PPT 批注互不污染；相机各自记忆） |
+| 40 | 底部页码条（"像打开 PPT 一样"——2026-10-07 用户定，见 计划-文档模式-状态模型.md） |
+| 153 | 文档页空间（墨迹和桌面板书 / PPT 批注互不污染；相机各自记忆） |
 
 ## src/InkEngine/Doc/DocPages.cs（602 行）
 
@@ -611,7 +625,7 @@
 | 365 | 笔的 8 个色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成可改色位） |
 | 487 | 滚轮 / ↑↓：同一类"阅读视野"输入（放在键盘这一份，避免再开 partial） |
 
-## src/InkEngine/Platform/Engine.Radial.cs（725 行）
+## src/InkEngine/Platform/Engine.Radial.cs（683 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -621,7 +635,7 @@
 | --- | --- |
 | 18 | 呼出盘（Ctrl+Alt+Shift+Q）：按住 → 划向扇区 → 松手 |
 | 20 | 来龙去脉：《调研-笔键方案.md》附录 C/D（键盘呼出版；笔身键版留待真机实测硬件）。 |
-| 487 | 呼出盘自检钩子（--radialtest / --radialshow） |
+| 441 | 呼出盘自检钩子（--radialtest / --radialshow） |
 
 ## src/InkEngine/Platform/Engine.Update.cs（1,124 行）
 
@@ -842,7 +856,7 @@
 | --- | --- |
 | 373 | 回放（墨迹 C） |
 
-## src/InkEngine/Rendering/Overlay.Radial.cs（669 行）
+## src/InkEngine/Rendering/Overlay.Radial.cs（651 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -890,7 +904,7 @@
 | --- | --- |
 | 23 | 界面层 |
 
-## src/InkEngine/Rendering/Ui.cs（1,690 行）
+## src/InkEngine/Rendering/Ui.cs（1,691 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -898,13 +912,13 @@
 | 183 | `public interface IUiHost` |
 | 311 | `public enum TimerMode` |
 | 324 | `public interface IEngineCommands` |
-| 838 | `public static class InkPalette` |
-| 979 | `public static class Hsv` |
-| 1031 | `public static class ShapeSpec` |
-| 1175 | `public static class LibraryCategoryIds` |
-| 1553 | `public enum UiTouchScrollPhase` |
-| 1589 | `public static class UiTouchFling` |
-| 1676 | `public sealed class NullUi : IOverlayUi` |
+| 839 | `public static class InkPalette` |
+| 980 | `public static class Hsv` |
+| 1032 | `public static class ShapeSpec` |
+| 1176 | `public static class LibraryCategoryIds` |
+| 1554 | `public enum UiTouchScrollPhase` |
+| 1590 | `public static class UiTouchFling` |
+| 1677 | `public sealed class NullUi : IOverlayUi` |
 
 ## src/InkEngine/Shapes/Engine.Library.cs（1,105 行）
 
@@ -1177,7 +1191,7 @@
 | 424 | 报告 |
 | 775 | 小工具 |
 
-## src/InkTeach/SelfTests/E2E/Documents.cs（1,521 行）
+## src/InkTeach/SelfTests/E2E/Documents.cs（1,524 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -1324,7 +1338,7 @@
 | 974 | 下一笔 B：默认从 A 的左上斜穿到右下；左侧场景在 A 左边再竖写一条 |
 | 1078 | 滚动阶段（--left）：内容垫够两屏 → 滚 5 格，按"S 像素整体平移"逐行对； |
 
-## src/InkTeach/SelfTests/E2E/PanelAndKeys.cs（6,704 行）
+## src/InkTeach/SelfTests/E2E/PanelAndKeys.cs（6,753 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -1441,17 +1455,18 @@
 | 6376 | ⑤ 北格 = 常用色：已经是它时再点，还是这个色（不循环） |
 | 6385 | ⑥ 其余扇区（v3：东北=荧光、南=橡皮、西=上一色、东南=框选、西北=撤销） |
 | 6413 | ⑥.1 西北 = 撤销一步 |
-| 6434 | ⑥.2 西南 = 清屏：停不满 0.8s 不执行，停满才清当前页 |
-| 6456 | ⑥.5 v3 排序与扇面几何（2026-10-25 定稿；2026-11-16 北格改名常用色） |
-| 6472 | ⑥.6 活色带（2026-11-16）：盘上的颜色格跟主条那排色片走 |
-| 6517 | ⑦ 跨扇区滞回：出界 9° 以内不跳扇区 |
-| 6531 | ⑧ 穿透里照样能呼出：这是"把笔从下层抢回来"的入口（2026-10-04 用户定） |
-| 6571 | ⑨ 写字中（笔尖在屏上）不响应 |
-| 6578 | ⑩ 松键轮询：放映那条路没有 KeyUp，靠每帧 GetAsyncKeyState |
-| 6586 | ⑪ 呼出盘现在是常驻全局键（Ctrl+Alt+Shift+Q），放映临时表里不重复挂 |
-| 6599 | ⑫ 真键盘 + 真鼠标：全局热键那条路（RegisterHotKey → WM_HOTKEY → 打开） |
-| 6635 | ⑬ 真键盘：先松修饰键（盘还在）→ 松开 Alt/Shift 后按 Esc 取消 |
-| 6660 | ⑭ 真键盘 + 穿透：开着穿透按 Ctrl+Alt+Shift+Q 也能调出笔来 |
+| 6434 | ⑥.2 西南 = 清屏：单击即清（不再要按住 0.8s；只清当前页、一步可撤销） |
+| 6480 | ⑥.5 v3 排序与扇面几何（2026-10-25 定稿；2026-11-16 北格改名常用色） |
+| 6496 | ⑥.6 活色带（2026-11-16）：盘上的颜色格跟主条那排色片走 |
+| 6541 | ⑦ 跨扇区滞回：出界 9° 以内不跳扇区 |
+| 6555 | ⑧ 穿透里照样能呼出：这是"把笔从下层抢回来"的入口（2026-10-04 用户定） |
+| 6595 | ⑨ 写字中（笔尖在屏上）不响应 |
+| 6602 | ⑩ 松键轮询：放映那条路没有 KeyUp，靠每帧 GetAsyncKeyState |
+| 6610 | ⑪ 呼出盘现在是常驻全局键（Ctrl+Alt+Shift+Q），放映临时表里不重复挂 |
+| 6623 | ⑫ 真键盘 + 真鼠标：全局热键那条路（RegisterHotKey → WM_HOTKEY → 打开） |
+| 6659 | ⑬ 真键盘：先松修饰键（盘还在）→ 松开 Alt/Shift 后按 Esc 取消 |
+| 6684 | ⑭ 真键盘 + 穿透：开着穿透按 Ctrl+Alt+Shift+Q 也能调出笔来 |
+| 6706 | ⑮ 真键盘：西南清屏，松手即清（2026-11-16：不再要按住 0.8 秒） |
 
 ## src/InkTeach/SelfTests/E2E/PptStorage.cs（1,783 行）
 
@@ -1816,4 +1831,4 @@
 
 ---
 
-共 84 个文件。重跑：`powershell -ExecutionPolicy Bypass -File tools/gen-section-map.ps1`
+共 85 个文件。重跑：`powershell -ExecutionPolicy Bypass -File tools/gen-section-map.ps1`

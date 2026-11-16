@@ -2,6 +2,7 @@
 // [测试] --doctest
 
 using Vortice.Mathematics;
+using InkLocalization;
 
 namespace InkEngine;
 
@@ -311,7 +312,7 @@ public partial class InkEngine
             SetInkStatus("板书文件（.inkb）请单独打开（它会替换整块板书）");
             return;
         }
-        if (anyInk) { OpenInkFile(files[0]); return; }
+        if (anyInk) { StartInkOpen(files[0]); return; }   // 大 .inkb 走后台（见 StartInkOpen）
         var err = OpenDocuments(files);
         if (err != null) { SetInkStatus("打开失败：" + err); return; }
         PrepareAnnotateAfterOpen();
@@ -417,11 +418,21 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
-    /// <summary>自检用：绕开对话框，直接按扩展名分派。</summary>
-    internal void OpenBoardAnyForTest(string[] files) => OpenBoardAnyCore(files);
+    /// <summary>
+    /// 自检用：绕开对话框，直接按扩展名分派。`.inkb` 走的是**异步**路，
+    /// 所以这里等它落地（老自检要的是"调完就能判"的确定性，不是同步实现）。
+    /// </summary>
+    internal void OpenBoardAnyForTest(string[] files)
+    {
+        OpenBoardAnyCore(files);
+        WaitInkOpenForTest();
+    }
 
     /// <summary>自检用：只跑"打开成功之后"的准备批（退穿透 / 切画笔），配合 StartDocViewForTest。</summary>
     internal void PrepareAnnotateAfterOpenForTest() => PrepareAnnotateAfterOpen();
+
+    /// <summary>自检用：只跑"正在打开…"提示 + 强制一帧（验提示真的在阻塞调用之前上屏）。</summary>
+    internal void ShowBusyHintForTest(string name) => ShowBusyHintAndPump(name);
 
     /// <summary>「关闭文档」：页位图 / 解码缓存 / PDF 全放；**批注留在画布上**。</summary>
     internal void CloseDocumentFromUi()
@@ -443,6 +454,8 @@ public partial class InkEngine
     internal string OpenDocuments(IReadOnlyList<string> paths)
     {
         if (paths == null || paths.Count == 0) return "没有选中文件";
+        // 打开文档 = 换掉眼前这一份：在途的"打开墨迹"结果不能迟到地盖上来。
+        CancelInkOpen();
 
         var images = new List<string>();
         var pdfs = new List<string>();
@@ -461,16 +474,65 @@ public partial class InkEngine
         {
             if (images.Count > 0 || pdfs.Count > 0) return "PPT 和图片/PDF 不能一起选（一次选一种）";
             if (ppts.Count > 1) return $"PPT 一次放一个（这次选了 {ppts.Count} 个）";
+            // 叫 Office/WPS 起来是**同步阻塞**的（可能几秒）：先把提示贴出去再叫。
+            ShowBusyHintAndPump(System.IO.Path.GetFileName(ppts[0]));
             string msg = LaunchPptShow(ppts[0]);
+            FinishPptHint(msg);
             // 放映喊起来了（含"退回普通打开"的兜底）才算打开成功 → 记「最近文档」。
             if (msg == null) RecordRecentDoc(ppts);
             return msg;
         }
 
-        if (pdfs.Count == 0 && images.Count > 0) return OpenImageDocument(images);
-        if (images.Count == 0 && pdfs.Count == 1) return OpenPdfDocument(pdfs[0]);
+        if (pdfs.Count == 0 && images.Count > 0)
+        {
+            ShowBusyHintAndPump(images.Count == 1
+                ? System.IO.Path.GetFileName(images[0]) : $"{images.Count} 张图片");
+            string err = OpenImageDocument(images);
+            FinishBusyHint(err);
+            return err;
+        }
+        if (images.Count == 0 && pdfs.Count == 1)
+        {
+            ShowBusyHintAndPump(System.IO.Path.GetFileName(pdfs[0]));
+            string err = OpenPdfDocument(pdfs[0]);
+            FinishBusyHint(err);
+            return err;
+        }
         if (pdfs.Count > 0) return "PDF 一次打开一份（图片可以多选）";
         return "没有能打开的文件（支持图片、PDF 和 PPT）";
+    }
+
+    /// <summary>
+    /// **"正在打开…"提示 + 强制出一帧**（2026-11-16）：打开 PDF / 图片 / PPT 的那一步
+    /// 是同步阻塞的（PDFium 原生库、Office/WPS 启动几秒都正常）。不先把这一帧真贴出去，
+    /// 提示就只是内存里的一句话，屏幕上还是上一帧——用户看到的就是"点了没反应"。
+    ///
+    /// ⚠ 只在**消息线程**上调（打开命令都从 WndProc 那条路来，不在 RenderAll 里）。
+    /// </summary>
+    private void ShowBusyHintAndPump(string name)
+    {
+        string text = Loc.T("正在打开 {0}…", name);
+        ShowToast(text, 30000);     // 30 秒兜底；打开一结束就主动收掉（成功/失败都收）
+        SetInkStatus(text);
+        RenderAll();
+    }
+
+    /// <summary>打开结束：成功就收掉提示；失败把提示换成原因（2 秒后自己消失）。</summary>
+    private void FinishBusyHint(string error)
+    {
+        if (string.IsNullOrEmpty(error)) { ClearToast(); return; }
+        ShowToast(error.StartsWith("打开", StringComparison.Ordinal) ? error : "打开失败：" + error);
+    }
+
+    /// <summary>PPT 直映的收尾：状态行里是失败原因就换成一条轻提示，否则收掉提示。</summary>
+    private void FinishPptHint(string error)
+    {
+        bool fail = !string.IsNullOrEmpty(error)
+                 || InkStatus.Contains("失败", StringComparison.Ordinal)
+                 || InkStatus.Contains("不能", StringComparison.Ordinal)
+                 || InkStatus.Contains("没有", StringComparison.Ordinal);
+        if (fail) ShowToast(InkStatus);
+        else ClearToast();
     }
 
     /// <summary>
@@ -679,6 +741,8 @@ public partial class InkEngine
     internal void CloseDocument()
     {
         if (!DocView.IsOpen && _pdfDoc == null) return;
+        // 关文档 = 换目标：在途的"打开墨迹"不许迟到地把白板换掉（同 OpenDocuments）。
+        CancelInkOpen();
         // 退出文档也先提交文本框：关掉页图/切回桌面后，编辑宿主不能还挂着。
         if (_textBoxEditing) EndTextBoxEditFromUi(true);
         // 手掌是"文档模式"的一部分：关文档就关掉（退出文档 = 回到桌面 + 那格恢复成穿透箭头）。

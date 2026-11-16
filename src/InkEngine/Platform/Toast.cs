@@ -29,6 +29,18 @@ public partial class InkEngine
         _dirty = true;
     }
 
+    /// <summary>
+    /// 立刻收起当前提示（"正在打开…"这类**占用型**提示在打开结束时要主动收掉，
+    /// 不能等 60 秒到点）。没有提示时什么都不做。
+    /// </summary>
+    internal void ClearToast()
+    {
+        if (ToastText.Length == 0 && _toastUntilMs == 0) return;
+        ToastText = "";
+        _toastUntilMs = 0;
+        _dirty = true;
+    }
+
     /// <summary>每帧推进：到点清掉并标脏（旧提示那块要被擦掉）。</summary>
     internal void StepToast()
     {
