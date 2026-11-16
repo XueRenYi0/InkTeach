@@ -1,4 +1,4 @@
-// [职责] 文档页底层：页配方、惰性生成、视口窗口回收、文档缩放的页位图倍率。
+// [职责] 文档页底层：页配方、惰性生成、视口窗口回收；缩放只记相机倍率（页位图恒 1×）。
 // [测试] --doctest / --zoomtest
 
 using Vortice.Mathematics;
@@ -55,11 +55,11 @@ internal sealed class DocPages
         public int RenderW, RenderH;
 
         /// <summary>
-        /// 页位图的**重渲染倍率**（1 = 100%）。位图实际尺寸 = round(基准 Render×这个倍率)。
+        /// 页位图的**重渲染倍率**：2026-11-16 起**恒为 1**（100% 基准尺寸）。
         ///
-        /// 为什么单独一位、不直接改 RenderW/H：缩放要能**回到 100%**（不重渲、
-        /// 用原图），而且 worker 线程可能正拿着旧 Spec 在渲——原地改字段等于
-        /// 边渲边改同一份配方。所以缩放走"克隆 Spec、只改这一位"（见 SetViewScale）。
+        /// 以前文档缩放会让每页整页重渲（200% = 143MB/页）；现在高清由
+        /// <see cref="DocPatchCache"/> 的**视口补丁**负责，底图永远不重渲——
+        /// 所以这里的倍率只保留作"诊断/自检口径"，不再有任何写它的路径。
         /// </summary>
         public float RenderScale = 1f;
 
@@ -114,8 +114,8 @@ internal sealed class DocPages
     public float ViewScale { get; private set; } = 1f;
 
     /// <summary>
-    /// 当前页位图的重渲染倍率（1 = 100%，见 <see cref="DocMemory.PageRenderScaleCap"/>）。
-    /// 只是诊断/自检口径；每页的倍率在 <c>Spec.RenderScale</c>（极端页会被预算夹低）。
+    /// 页位图的重渲染倍率：2026-11-16 起**恒为 1**（页位图永远是 100% 整页）。
+    /// 放大后的清晰度由 <see cref="DocPatchCache"/> 提供；这一位只剩诊断/自检口径。
     /// </summary>
     public float PageRenderScale { get; private set; } = 1f;
 
@@ -183,82 +183,22 @@ internal sealed class DocPages
     }
 
     /// <summary>
-    /// **文档缩放**：按相机缩放换页位图的重渲染倍率（页面矩形 / OutW/OutH 不变）。
+    /// **文档缩放**：只记录相机倍率，**页位图一个像素都不重渲**（2026-11-16 架构评审）。
     ///
     /// 规则：
-    ///   · 相机 ≤100% → 倍率 1（只缩不合：合成时缩小旧图就够了，绝不重渲一张更大的）；
-    ///   · 相机 &gt;100% → 倍率 = min(相机, <see cref="DocMemory.PageRenderScaleCap"/>)；
-    ///   · 每页再按 <see cref="DocMemory.MaxPagePixels"/> 夹一遍（极端长页不顶爆内存）。
-    ///
-    /// **克隆 Spec、不原地改**：worker 线程可能正拿着旧 Spec 在渲，字段一变就是
-    /// 边渲边改同一份配方（渲染出来的宽高和 Adopt 用的宽高对不上）。
-    /// 旧位图全放、代次/版本 +1、整层标脏（分块里烘着旧倍率的页像素）。
+    ///   · 底图永远是 100% 的整页（<see cref="Spec.RenderScale"/> 恒为 1）——
+    ///     2520 宽 A4 ≈ 34MB，100% / 200% 一样；缩放只换相机，页矩形/位图都不动；
+    ///   · 放大后的清晰度由 <see cref="DocPatchCache"/> 的可见区补丁提供（设备分辨率、
+    ///     一块屏 ≈ 34MB、与倍率无关）；
+    ///   · 因此这里**不再**克隆配方、不再放旧图、不再动代次/整层脏——
+    ///     旧行为（200% 整页重渲 143MB）正是这次要消掉的内存大头。
     /// </summary>
     public void SetViewScale(float cameraScale)
     {
         if (!(cameraScale > 0f)) cameraScale = 1f;
-        if (MathF.Abs(cameraScale - ViewScale) < 0.0005f) return;
         ViewScale = cameraScale;
-
-        float want = cameraScale <= 1.0001f
-            ? 1f
-            : MathF.Min(cameraScale, DocMemory.PageRenderScaleCap);
-        PageRenderScale = want;
-
-        bool changed = false;
-        foreach (var p in _pages)
-        {
-            var sp = p.Spec;
-            if (sp == null) continue;
-
-            float s = want;
-            if (sp.Kind == 0)
-            {
-                // 图片页：源像素就那么多，放大重渲只是白花内存（GDI+ 再插值一遍还更糊）。
-                s = 1f;
-            }
-            else
-            {
-                long baseW = Math.Max(1, sp.RenderW > 0 ? sp.RenderW : sp.OutW);
-                long baseH = Math.Max(1, sp.RenderH > 0 ? sp.RenderH : sp.OutH);
-                long budget = DocMemory.MaxPagePixels;
-                double scaledPx = (double)baseW * baseH * s * s;
-                if (scaledPx > budget)
-                    s = MathF.Max(1f, MathF.Sqrt((float)budget / ((float)baseW * baseH)));
-            }
-
-            if (MathF.Abs(s - sp.RenderScale) < 0.0005f) continue;
-            p.Spec = CloneSpec(sp, s);
-            ReleasePage(p);                  // 旧倍率的位图立刻放掉（账也跟着减）
-            DirtyRects.Add(p.Rect);
-            changed = true;
-        }
-        if (!changed) return;
-
-        _renderGeneration++;
-        lock (_gate)
-        {
-            _want.Clear();                   // 旧倍率的"想要清单"作废，下一拍按新 Spec 重建
-            _readyPage = null;               // 还是旧倍率的结果：丢掉（账要还回去）
-            _readyImage?.Release();
-            _readyImage = null;
-        }
-        _wake.Set();
-        FullDirty = true;                    // 页像素全换了倍率：整层重铺
-        Version++;
+        PageRenderScale = 1f;            // 诊断口径：页位图恒为 1×
     }
-
-    /// <summary>复制一份页配方、只换重渲染倍率（见 <see cref="SetViewScale"/>）。</summary>
-    private static Spec CloneSpec(Spec src, float renderScale) => new()
-    {
-        Kind = src.Kind,
-        Source = src.Source,
-        SourceIndex = src.SourceIndex,
-        SrcX = src.SrcX, SrcY = src.SrcY, SrcW = src.SrcW, SrcH = src.SrcH,
-        OutW = src.OutW, OutH = src.OutH,
-        RenderW = src.RenderW, RenderH = src.RenderH,
-        RenderScale = renderScale,
-    };
 
     /// <summary>
     /// 关掉文档：**先停后台线程**（等它把在途那一页渲完——PDF 文档要等它放手了才能关，

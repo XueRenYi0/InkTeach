@@ -288,6 +288,7 @@ public partial class InkEngine
         ViewScale = zoom;
         DocZoom = zoom;
         DocView.SetViewScale(zoom);
+        DocPatch?.SetScale(zoom);
 
         var p = DocView.At(idx)?.Rect;
         if (p != null)

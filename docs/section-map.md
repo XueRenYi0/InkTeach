@@ -94,7 +94,7 @@
 | 537 | 底行：名单 / 学号范围 |
 | 563 | 绘制小工具 |
 
-## src/InkEngine/Core/Engine.cs（2,866 行）
+## src/InkEngine/Core/Engine.cs（2,867 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -102,11 +102,11 @@
 | 28 | `internal enum PassThroughMode` |
 | 45 | `public partial class InkEngine` |
 | 576 | `internal enum CaptureDrag { None, Move, L, R, T, B, TL, TR, BL, BR }` |
-| 2201 | `internal enum VertexReadoutKind` |
-| 2331 | `internal enum AlignSnapKind` |
-| 2340 | `private enum AlignLineRole` |
-| 2347 | `private struct AlignAxisCandidate` |
-| 2449 | `private enum FrameDrive` |
+| 2202 | `internal enum VertexReadoutKind` |
+| 2332 | `internal enum AlignSnapKind` |
+| 2341 | `private enum AlignLineRole` |
+| 2348 | `private struct AlignAxisCandidate` |
+| 2450 | `private enum FrameDrive` |
 
 | 行 | 段落 |
 | --- | --- |
@@ -124,19 +124,19 @@
 | 1401 | 自绘预测尾（2026-10-15 接入：线性预测，Chromium 同族） |
 | 1481 | 长度限速（在"像素"上做，治"跳跃的笔头"） |
 | 1724 | 文档缩放（v1：只缩文档，50/75/100/125/150/200） |
-| 2014 | 交互矢量图的参数滑杆（v2.1） |
-| 2062 | 图形定义元素编辑（直线 / 箭头 / 圆 / 椭圆）：和"拖对象"同一条快路 |
-| 2320 | 对象吸附（2026-10-18） |
-| 2474 | 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictorLinear.cs） |
-| 2497 | 书写期间的分配 / GC 仪表（低配机排查用） |
-| 2580 | perf accounting |
-| 2593 | 界面接入口 |
-| 2601 | 工具带色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成 8 个可改色位） |
-| 2630 | 荧光笔的 5 个色位 / 5 档浓度（2026-10-28） |
-| 2654 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
-| 2712 | 延时探针（见 Latency.cs） |
+| 2015 | 交互矢量图的参数滑杆（v2.1） |
+| 2063 | 图形定义元素编辑（直线 / 箭头 / 圆 / 椭圆）：和"拖对象"同一条快路 |
+| 2321 | 对象吸附（2026-10-18） |
+| 2475 | 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictorLinear.cs） |
+| 2498 | 书写期间的分配 / GC 仪表（低配机排查用） |
+| 2581 | perf accounting |
+| 2594 | 界面接入口 |
+| 2602 | 工具带色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成 8 个可改色位） |
+| 2631 | 荧光笔的 5 个色位 / 5 档浓度（2026-10-28） |
+| 2655 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
+| 2713 | 延时探针（见 Latency.cs） |
 
-## src/InkEngine/Core/Engine.Host.cs（2,228 行）
+## src/InkEngine/Core/Engine.Host.cs（2,231 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -369,7 +369,7 @@
 | 2638 | 自定义取色板（8.2.0，色相条 + 饱和度/明度方块）的尺寸（逻辑像素） |
 | 3299 | 选中条弹层（AI / `⋯` 共用一套几何，2026-11-08） |
 
-## src/InkEngine/Doc/DocImport.cs（663 行）
+## src/InkEngine/Doc/DocImport.cs（696 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -377,10 +377,10 @@
 
 | 行 | 段落 |
 | --- | --- |
-| 32 | 底部页码条（"像打开 PPT 一样"——2026-10-07 用户定，见 计划-文档模式-状态模型.md） |
-| 145 | 文档页空间（墨迹和桌面板书 / PPT 批注互不污染；相机各自记忆） |
+| 39 | 底部页码条（"像打开 PPT 一样"——2026-10-07 用户定，见 计划-文档模式-状态模型.md） |
+| 152 | 文档页空间（墨迹和桌面板书 / PPT 批注互不污染；相机各自记忆） |
 
-## src/InkEngine/Doc/DocPages.cs（662 行）
+## src/InkEngine/Doc/DocPages.cs（602 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -392,9 +392,25 @@
 | --- | --- |
 | 137 | 诊断计数（自检判据；HUD 的补充口径） |
 | 147 | 打开 / 关闭 |
-| 287 | 后台渲染线程（worker） |
-| 394 | 视口窗口：生成与回收 |
-| 605 | 查询（翻页 / 相机范围 / 渲染） |
+| 227 | 后台渲染线程（worker） |
+| 334 | 视口窗口：生成与回收 |
+| 545 | 查询（翻页 / 相机范围 / 渲染） |
+
+## src/InkEngine/Doc/DocPatch.cs（602 行）
+
+| 行 | 顶层类型 |
+| --- | --- |
+| 37 | `internal sealed class DocPatchCache : IDisposable` |
+| 46 | `internal sealed class Patch` |
+| 60 | `private sealed class Request` |
+
+| 行 | 段落 |
+| --- | --- |
+| 122 | 查询 |
+| 179 | 倍率 / 让开 / 关闭 |
+| 275 | 每帧同步（UI 线程） |
+| 499 | 后台渲染线程 |
+| 573 | 几何小工具 |
 
 ## src/InkEngine/Export/Export.cs（1,178 行）
 
@@ -772,12 +788,12 @@
 | 517 | 触点诊断浮层（8.3.3，默认关） |
 | 568 | 橡皮读数浮层（8.3.7，默认关；调参用） |
 
-## src/InkEngine/Rendering/Overlay.Content.cs（715 行）
+## src/InkEngine/Rendering/Overlay.Content.cs（756 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 21 | `internal sealed partial class OverlayWindow` |
-| 580 | `private enum PillPlace` |
+| 621 | `private enum PillPlace` |
 
 | 行 | 段落 |
 | --- | --- |
@@ -1139,23 +1155,23 @@
 | 2691 | ⑥ 存档：v9 往返 + 真·v8 老文件 |
 | 3113 | ⑥ 运行日志（2026-10-16 用户定） |
 
-## src/InkTeach/SelfTests/E2E/DocMem.cs（610 行）
+## src/InkTeach/SelfTests/E2E/DocMem.cs（634 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 17 | `internal sealed partial class App` |
 | 24 | `private sealed class DocMemSample` |
-| 51 | `private sealed class DocMemPeakSampler : IDisposable` |
+| 54 | `private sealed class DocMemPeakSampler : IDisposable` |
 
 | 行 | 段落 |
 | --- | --- |
 | 19 | 数据结构 |
-| 112 | 主流程 |
-| 258 | 读数 |
-| 376 | 报告 |
-| 593 | 小工具 |
+| 115 | 主流程 |
+| 266 | 读数 |
+| 388 | 报告 |
+| 617 | 小工具 |
 
-## src/InkTeach/SelfTests/E2E/Documents.cs（1,431 行）
+## src/InkTeach/SelfTests/E2E/Documents.cs（1,463 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -1652,7 +1668,7 @@
 | 1226 | ④ 第二根手指按下：正在写的那一笔不许被换掉 |
 | 1251 | 收尾：两根一起抬，交进文档 |
 
-## src/InkTeach/SelfTests/E2E/Zoom.cs（721 行）
+## src/InkTeach/SelfTests/E2E/Zoom.cs（770 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -1792,4 +1808,4 @@
 
 ---
 
-共 83 个文件。重跑：`powershell -ExecutionPolicy Bypass -File tools/gen-section-map.ps1`
+共 84 个文件。重跑：`powershell -ExecutionPolicy Bypass -File tools/gen-section-map.ps1`

@@ -263,6 +263,54 @@ internal static class Pdfium
         }
         return buf;
     }
+    /// <summary>
+    /// 渲一页的**一块区域**（设备像素）进我们自己的数组：白底、整页按
+    /// <paramref name="fullW"/>×<paramref name="fullH"/> 缩放，只有
+    /// [rx,rx+rw)×[ry,ry+rh) 那块落进缓冲。
+    ///
+    /// 做法：`FPDF_RenderPageBitmap` 的 startX/startY 是**目标位图里的起点**，
+    /// 负值把整页坐标平移过来（PDFium 会按设备裁剪自动只画落在缓冲里的部分），
+    /// 所以 `startX = -rx` 就是"整页渲完后裁出这一块"。
+    /// **不用 `FPDF_RenderPageBitmapWithMatrix`**：矩阵版对裁剪/旋转/表单的行为
+    /// 和整页版不是一套（缩放过 1 倍以上时字重会变），这里要和底图逐像素同一套渲染路径。
+    /// 区域渲染和整页渲染在重叠区必须逐像素一致（`--zoomtest` 有对照断言）。
+    /// </summary>
+    internal static unsafe byte[] RenderRegion(IntPtr doc, int index, int fullW, int fullH,
+                                               int rx, int ry, int rw, int rh)
+    {
+        if (fullW <= 0 || fullH <= 0 || rw <= 0 || rh <= 0) return null;
+        if (rx < 0) rx = 0;
+        if (ry < 0) ry = 0;
+        if (rx >= fullW || ry >= fullH) return null;
+        if (rw > fullW - rx) rw = fullW - rx;
+        if (rh > fullH - ry) rh = fullH - ry;
+
+        long bytes = (long)rw * rh * 4;
+        if (bytes <= 0 || bytes > int.MaxValue) return null;
+        var buf = new byte[(int)bytes];
+
+        lock (Gate)
+        {
+            fixed (byte* p = buf)
+            {
+                IntPtr bitmap = FPDFBitmap_CreateEx(rw, rh, FPDFBitmap_BGRA, (IntPtr)p, rw * 4);
+                if (bitmap == IntPtr.Zero) return null;
+                try
+                {
+                    FPDFBitmap_FillRect(bitmap, 0, 0, rw, rh, White);
+                    IntPtr page = FPDF_LoadPage(doc, index);
+                    if (page == IntPtr.Zero) return null;
+                    try
+                    {
+                        FPDF_RenderPageBitmap(bitmap, page, -rx, -ry, fullW, fullH, 0, (int)FPDF_ANNOT);
+                    }
+                    finally { FPDF_ClosePage(page); }
+                }
+                finally { FPDFBitmap_Destroy(bitmap); }
+            }
+        }
+        return buf;
+    }
 }
 
 /// <summary>
@@ -302,6 +350,15 @@ internal sealed class PdfiumDoc : IDisposable
 
     public byte[] RenderPage(int index, int outW, int outH)
         => _doc == IntPtr.Zero ? null : Pdfium.Render(_doc, index, outW, outH);
+
+    /// <summary>
+    /// 渲第 <paramref name="index"/> 页的一块区域（设备像素；见 <see cref="Pdfium.RenderRegion"/>）。
+    /// 高清补丁只走这一条——整页 200% 重渲是 143MB，而这里通常只有一块屏。
+    /// </summary>
+    public byte[] RenderRegion(int index, int fullW, int fullH, int rx, int ry, int rw, int rh)
+        => _doc == IntPtr.Zero
+            ? null
+            : Pdfium.RenderRegion(_doc, index, fullW, fullH, rx, ry, rw, rh);
 
     public void Dispose()
     {

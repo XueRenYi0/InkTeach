@@ -4,6 +4,7 @@
 // 判据和 Zoom.cs 一致：能数出来的东西说话（像素、块字节、应用次数）。
 // 这里只放"真正上屏 / 出图 / 分块纹理"这一组，避免 E2E 入口文件超过 800 行。
 
+using System.Diagnostics;
 using System.Numerics;
 using Vortice.Mathematics;
 using InkEngine;
@@ -48,14 +49,19 @@ internal sealed partial class App
         // ——相机围绕视口中心放大，按 100% 的屏幕位置落墨会放大到屏幕外（第一版就这么错了）。
         AddZoomShotInk();
         SettleFrames(420);
-        Save("zoom-ink-200");
+        ZoomTestWaitPatch(0, 4000);
+        Save("zoom-patch-200");         // 200% + 黑墨 + 高清补丁（对齐/接缝看这张）
         int inkDark200 = ScreenProbe.CountDark(_virtualX, (int)(_virtualY + _virtualH * 0.20f),
                                                (int)_virtualW, (int)(_virtualH * 0.22f));
         check("200%：墨迹真的画在页上（分块变换 = (画布−原点)×倍率）", inkDark200 > 2000,
               $"{inkDark200} 个暗像素");
+        check("200%：屏幕上这块由高清补丁提供",
+              DocPatch != null && DocPatch.HasPatch(0),
+              $"补丁={DocPatch?.PatchCount ?? 0} / {DocPatch?.PatchBytes / 1048576.0 ?? 0:F1}MB");
         SetDocZoomFromUi(1f);
         SettleFrames(520);
         Save("zoom-ink-100");           // 同一条墨在 100% 下的样子（对照）
+        Save("zoom-patch-100");         // 100% 基线（同一张墨、没有补丁）
         SetDocZoomFromUi(2f);
         SettleFrames(520);
 
@@ -76,6 +82,9 @@ internal sealed partial class App
         SettleFrames(300);
         check("出图后回 100%：已生成页的位图宽 = 基准",
               DocView.At(0).Spec.BitmapW == baseW, $"{DocView.At(0).Spec.BitmapW}");
+        check("100%：补丁已全部撤掉（绘制路径回到原样）",
+              DocPatch != null && DocPatch.PatchCount == 0,
+              $"补丁={DocPatch?.PatchCount ?? -1}");
     }
 
     /// <summary>
@@ -209,4 +218,172 @@ internal sealed partial class App
         }
         return total;
     }
+
+    // ======================================================================
+    //  J 组：高清补丁（PDF >100% 的可见区设备分辨率小图）
+    // ======================================================================
+
+    /// <summary>
+    /// J 组：**区域渲染对不对 / 补丁是不是一块屏 / 100% 有没有补丁 / 平移会不会灰闪 / 翻页回收**。
+    ///
+    /// 判据全走产品路径（SetDocZoomFromUi + 真实渲染循环）；只有"区域渲染 vs 整页渲染"
+    /// 这一条直接调 PDFium 包装——它是补丁方案成立的前提（负起点裁剪 + 无接缝），
+    /// 必须逐像素证明，不能只看观感。
+    /// </summary>
+    private void ZoomTestPatches(Action<string, bool, string> check)
+    {
+        Console.WriteLine("  -- J 高清补丁：区域渲染逐像素一致 / 一块屏 / 100% 无补丁 / 平移不灰闪 / 翻页回收 --");
+
+        ZoomTestPatchRegionRender(check);
+
+        // 100%：不建补丁。
+        SetDocZoomFromUi(1f);
+        SettleFrames(360);
+        check("100%：没有任何补丁（绘制路径与以前逐字节一致）",
+              DocPatch != null && DocPatch.PatchCount == 0 && !DocPatch.HasPatch(0),
+              $"补丁={DocPatch?.PatchCount ?? -1}");
+
+        // 200%：一块屏（不是 143MB 的整页 2×）。
+        ZoomTestResetCamera();
+        SetDocZoomFromUi(2f);
+        SettleFrames(240);
+        bool ok = ZoomTestWaitPatch(0, 4000);
+        var p0 = DocView.At(0).Rect;
+        float pageW = p0.MaxX - p0.MinX;
+        float pageH = p0.MaxY - p0.MinY;
+        long pagePx2 = (long)MathF.Round(pageW * 2f) * (long)MathF.Round(pageH * 2f);
+        long patchPx = 0;
+        if (DocPatch != null && DocPatch.TryGetPatch(0, out var pi, out _))
+            patchPx = (long)pi.Width * pi.Height;
+        check("200%：补丁就绪（后台线程），面积只是「一块屏」",
+              ok && patchPx > 0 && patchPx * 4 <= 48L * 1024 * 1024 && patchPx < pagePx2 / 2,
+              $"{patchPx / 1e6:F1}MP / 整页 2× {pagePx2 / 1e6:F1}MP"
+              + $"（{DocPatch?.PatchBytes / 1048576.0 ?? 0:F1}MB vs {pagePx2 * 4 / 1048576.0:F0}MB）");
+
+        // 平移 300 画布像素（= 600 设备像素，超出 256 余量）：排新补丁期间旧补丁必须一直在。
+        int ver0 = DocPatch?.Version ?? 0;
+        ViewOffsetY -= 300f;
+        bool neverEmpty = true;
+        var swp = Stopwatch.StartNew();
+        while (swp.ElapsedMilliseconds < 4000)
+        {
+            SettleFrames(16);
+            bool has = DocPatch != null && DocPatch.HasPatch(0);
+            if (!has) neverEmpty = false;
+            if (has && DocPatch.Version > ver0) break;
+        }
+        check("200% 平移：新补丁就绪前旧补丁一直在（没有「两样都没有」的帧）",
+              neverEmpty && DocPatch != null && DocPatch.HasPatch(0),
+              $"补丁={DocPatch?.PatchCount ?? 0} 版本 {ver0}→{DocPatch?.Version ?? 0}");
+
+        // 翻页：离开视口的页，补丁被回收；新页的补丁随后就绪。
+        float page1Top = DocView.At(1).Rect.MinY;
+        ViewOffsetY = _virtualY - page1Top * ViewScale;
+        SettleFrames(220);
+        check("翻页：离开视口的页补丁被放掉",
+              DocPatch != null && !DocPatch.HasPatch(0),
+              $"第 1 页补丁={(DocPatch?.HasPatch(0) ?? false ? "还在" : "已放")}");
+        bool ok1 = ZoomTestWaitPatch(1, 4000);
+        check("翻页：新页补丁就绪（不是整本重渲）", ok1,
+              $"补丁={DocPatch?.PatchCount ?? 0} / {DocPatch?.PatchBytes / 1048576.0 ?? 0:F1}MB");
+
+        // 收尾：回 100%，后续组不受影响。
+        SetDocZoomFromUi(1f);
+        ZoomTestResetCamera();
+        SettleFrames(120);
+    }
+
+    /// <summary>
+    /// 区域渲染 vs 整页渲染：重叠区必须逐像素一致（允许抗锯齿的极小差异）。
+    /// 这一条直接证明 `FPDF_RenderPageBitmap(startX = -rx, startY = -ry)` 在本仓的
+    /// PDFium 版本上**确实按负起点裁剪**，也证明补丁和底图不会错位/出接缝。
+    /// 用带文字和细线的合成 PDF（纯色块看不出接缝）。
+    /// </summary>
+    private void ZoomTestPatchRegionRender(Action<string, bool, string> check)
+    {
+        string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inkteach-zoomtest");
+        Directory.CreateDirectory(dir);
+        string path = System.IO.Path.Combine(dir, "区域文字.pdf");
+        WriteTestTextPdf(path);
+
+        if (!Pdfium.Open(path, out var doc, out string err))
+        {
+            check("区域渲染：打开文字 PDF", false, err);
+            return;
+        }
+        try
+        {
+            var (pw, ph) = doc.Size(0);
+            int fullW = Math.Max(1, Native.GetSystemMetrics(0));
+            int fullH = Math.Max(1, (int)MathF.Round(ph * (fullW / pw)));
+            byte[] full = doc.RenderPage(0, fullW, fullH);
+            int rx = fullW / 8, ry = fullH / 20;
+            int rw = Math.Max(1, fullW / 2), rh = Math.Max(1, fullH / 2);
+            byte[] part = doc.RenderRegion(0, fullW, fullH, rx, ry, rw, rh);
+
+            long bad = 0, dark = 0, compared = 0;
+            if (full != null && part != null
+                && full.Length >= (long)fullW * fullH * 4
+                && part.Length >= (long)rw * rh * 4)
+            {
+                for (int y = 2; y < rh - 2; y++)
+                {
+                    int fo = ((y + ry) * fullW + rx) * 4;
+                    int po = y * rw * 4;
+                    for (int x = 2; x < rw - 2; x++, fo += 4, po += 4)
+                    {
+                        compared++;
+                        int d = Math.Abs(full[fo] - part[po])
+                              + Math.Abs(full[fo + 1] - part[po + 1])
+                              + Math.Abs(full[fo + 2] - part[po + 2]);
+                        if (d > 6) bad++;
+                        if (part[po] < 60 && part[po + 1] < 60 && part[po + 2] < 60) dark++;
+                    }
+                }
+            }
+            check("区域渲染：与整页渲染在重叠区逐像素一致（负起点裁剪正确、无接缝）",
+                  compared > 0 && bad * 10000 < compared,
+                  $"{bad}/{compared} 像素有差异（{rw}×{rh} @ {rx},{ry}）");
+            check("区域渲染：这块里确实有文字/线条（不是空白）", dark > 200,
+                  $"{dark} 个暗像素");
+        }
+        finally
+        {
+            doc.Dispose();
+            try { System.IO.File.Delete(path); } catch { /* 有意忽略：临时文件删不掉不影响判据 */ }
+        }
+    }
+
+    /// <summary>等这一页的补丁就绪（最多 <paramref name="maxMs"/> 毫秒；期间照常出帧）。</summary>
+    private bool ZoomTestWaitPatch(int page, int maxMs)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < maxMs)
+        {
+            if (DocPatch != null && DocPatch.HasPatch(page)) return true;
+            SettleFrames(16);
+        }
+        return DocPatch != null && DocPatch.HasPatch(page);
+    }
+
+    private static RectF Intersect(in RectF a, in RectF b) => new()
+    {
+        MinX = MathF.Max(a.MinX, b.MinX),
+        MinY = MathF.Max(a.MinY, b.MinY),
+        MaxX = MathF.Min(a.MaxX, b.MaxX),
+        MaxY = MathF.Min(a.MaxY, b.MaxY),
+    };
+
+    private static RectF Expand(in RectF a, float d) => new()
+    {
+        MinX = a.MinX - d,
+        MinY = a.MinY - d,
+        MaxX = a.MaxX + d,
+        MaxY = a.MaxY + d,
+    };
+
+    /// <summary>outer 是否完整盖住 inner（半像素容差：相机渲染偏移取整会差 &lt;1px）。</summary>
+    private static bool CoversRect(in RectF outer, in RectF inner)
+        => outer.MinX <= inner.MinX + 0.5f && outer.MinY <= inner.MinY + 0.5f
+        && outer.MaxX >= inner.MaxX - 0.5f && outer.MaxY >= inner.MaxY - 0.5f;
 }

@@ -20,6 +20,13 @@ public partial class InkEngine
     private PdfiumDoc _pdfDoc;
 
     /// <summary>
+    /// PDF 页的**视口高清补丁**（2026-11-16）：1× 整页底图之上的设备分辨率小图。
+    /// 只有 PDF 文档才建（`_pdfDoc != null`）；关文档 / 换文档时必须先 Dispose 它，
+    /// 再 Dispose `_pdfDoc`——它的后台线程正拿着 PDFium 文档渲。
+    /// </summary>
+    internal DocPatchCache DocPatch;
+
+    /// <summary>
     /// 当前文档的落盘键（<see cref="DocStore.KeyOf"/>；空 = 没文档）。
     /// 文档批注的"自动保存/读回"都认它。
     /// </summary>
@@ -481,6 +488,7 @@ public partial class InkEngine
         }
         if (specs.Count == 0 || ok == 0) return "这些图片都读不了（格式不支持或文件损坏）";
 
+        DisposeDocPatch();        // 补丁线程先停：它正拿着上一份 PdfiumDoc 渲
         _pdfDoc?.Dispose();       // 换文档：上一份 PDF 放掉（图片文档不用它）
         _pdfDoc = null;
         DiagLog.PdfNote = $"image/{layoutW}px/cache1";
@@ -543,6 +551,7 @@ public partial class InkEngine
             return "读取 PDF 页面尺寸失败：" + ex.Message;
         }
 
+        DisposeDocPatch();           // 补丁线程先停：它正拿着上一份 PdfiumDoc 渲
         _pdfDoc?.Dispose();
         _pdfDoc = doc;
 
@@ -588,6 +597,19 @@ public partial class InkEngine
         float gap = 24f * DpiScale;                       // 页缝 = 24 逻辑像素（和白板页界线同语言）
         DocView.Open(specs, title, PrimaryScreenCenterX(), 0f, gap);
         DocView.SetViewScale(1f);
+
+        // 高清补丁：**只有 PDF**（图片页源像素就那么多，放大重渲只是白花内存）。
+        // 它在后台按"可见区 + 256 设备像素"渲一块设备分辨率小图，底图永远 1×。
+        DisposeDocPatch();
+        if (_pdfDoc != null)
+        {
+            DocPatch = new DocPatchCache(_pdfDoc,
+                i => DocView.At(i)?.Rect,
+                () => DocView.Count,
+                WakeForDocPage);
+            DocPatch.SetScale(ViewScale);
+        }
+
         LoadDocInk(storeKey);
         ClampViewOffset();
         LoadDocResumePrompt(storeKey);   // 只在跨会话、且位置不是"第 1 页页顶"时弹卡（不自动跳）
@@ -611,6 +633,16 @@ public partial class InkEngine
             1 => _pdfDoc?.RenderPage(spec.SourceIndex, spec.BitmapW, spec.BitmapH),
             _ => null,
         };
+
+    /// <summary>
+    /// 停掉高清补丁线程（并放掉补丁位图）。**必须在 `_pdfDoc.Dispose()` 之前调**：
+    /// 补丁 worker 正拿着 <see cref="PdfiumDoc"/> 在 PDFium 里渲，反过来的话原生代码会踩到已释放的文档。
+    /// </summary>
+    private void DisposeDocPatch()
+    {
+        DocPatch?.Dispose();
+        DocPatch = null;
+    }
 
     /// <summary>
     /// 关掉文档：**先存批注**（自动保存开着才写）→ 释放页位图 / 解码缓存 / PDF 文档
@@ -638,6 +670,7 @@ public partial class InkEngine
 
         DocView.Close();
         DocImageSource.TrimCache();
+        DisposeDocPatch();                  // 补丁线程先停，PDF 文档随后才安全释放
         _pdfDoc?.Dispose();
         _pdfDoc = null;
         DiagLog.PdfNote = "";

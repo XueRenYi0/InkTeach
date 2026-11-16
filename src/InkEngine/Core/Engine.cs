@@ -1783,7 +1783,8 @@ public partial class InkEngine
         ClampViewOffset();
 
         DocZoom = zoom;
-        DocView.SetViewScale(ViewScale);       // 页位图按新倍率重渲（≤100% 不重渲）
+        DocView.SetViewScale(ViewScale);       // 只记倍率（页位图恒 1×）
+        DocPatch?.SetScale(ViewScale);         // 可见区高清补丁按新倍率重做（旧补丁先留着，不灰闪）
         _dirty = true;
         Console.WriteLine($"[文档] 缩放 {MathF.Round(zoom * 100f):F0}%"
             + $"（页位图 {DocView.PageRenderScale:F2}x / 相机 {ViewScale:F2}x）");

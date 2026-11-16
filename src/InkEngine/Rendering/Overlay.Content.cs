@@ -92,6 +92,28 @@ internal sealed partial class OverlayWindow
                                    placeholder);
             }
 
+            // 高清补丁（PDF / >100%）：**底图之后**盖上去，位置 = 它自己那块画布矩形。
+            // 补丁矩形来自"取整后的设备矩形 → 画布"，所以和底图、墨迹严格对齐；
+            // 尺寸按设备分辨率，缩放到 200% 时这里才是清楚的（底图只是 1× 拉伸兜底）。
+            // ⚠ 白板冻结页不画补丁：它按"冻结相机 − 当前相机"平移过，补丁是按当前视口算的，
+            //    硬贴会在页中间留一条"清楚/糊"的接缝；那一页用 1× 底图（和以前一致）。
+            if (!frozen && app.DocPatch != null
+                && app.DocPatch.TryGetPatch(i, out var patchImg, out var patchRect))
+            {
+                if (patchRect.Intersects(canvas))
+                {
+                    var pbmp = patchImg.GetBitmap(_ctx);
+                    if (pbmp != null)
+                    {
+                        _ctx.DrawBitmap(pbmp,
+                            new Vortice.RawRectF(patchRect.MinX, patchRect.MinY,
+                                                 patchRect.MaxX, patchRect.MaxY),
+                            1f, Vortice.Direct2D1.InterpolationMode.Linear, null, null);
+                        patchImg.DropCpuBytes();
+                    }
+                }
+            }
+
             border ??= Brush(new Color4(0f, 0f, 0f, 0.22f));
             _ctx.DrawRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY),
                                border, 1f);
@@ -131,8 +153,8 @@ internal sealed partial class OverlayWindow
             // 白板打开后冻结页要一直留着（即使用户先把透明度拉满、或临时进穿透）：
             // 否则再回来时页图已被 ReleaseAll 放掉，只剩占位。
             bool keepFrozen = app.BoardFrozenDocPage >= 0;
-            if (hidden && keepFrozen) pages.ReleaseAllExceptPinned();
-            else if (hidden) { pages.ReleaseAll(); pages.StopWanting(); }
+            if (hidden && keepFrozen) { pages.ReleaseAllExceptPinned(); app.DocPatch?.ReleaseAll(); }
+            else if (hidden) { pages.ReleaseAll(); pages.StopWanting(); app.DocPatch?.ReleaseAll(); }
             else
             {
                 int adopted = pages.SyncWindow(VisibleCanvasRect.MinY, VisibleCanvasRect.MaxY,
@@ -140,6 +162,13 @@ internal sealed partial class OverlayWindow
                 if (adopted > 0)
                     Console.WriteLine($"[文档] 页缓存 {pages.ResidentPages} 页 / "
                         + $"{pages.ResidentBytes / 1048576.0:F1} MB");
+
+                // 高清补丁（PDF >100%）：只由**第一个覆盖窗口**驱动——各窗口共用同一套
+                // 相机/画布坐标，每个窗口各排一份请求会互相踩掉对方那一块（内存还翻倍）。
+                // 其他窗口照旧在 DrawDocPages 里把同一块补丁画到同一个画布矩形上。
+                if (app.DocPatch != null
+                    && (app._windows.Count == 0 || ReferenceEquals(app._windows[0], this)))
+                    app.DocPatch.Sync(VisibleCanvasRect, app.NowMs);
             }
         }
 
@@ -157,6 +186,18 @@ internal sealed partial class OverlayWindow
                 _pageDirtyNow.Add(CanvasRectToWindow(r));
             }
             pages.DirtyRects.Clear();
+        }
+
+        // 补丁的脏区并进同一条路（装上新补丁 / 放掉旧补丁 / 换倍率都走这里）：
+        // 分块里烘着补丁像素，不重铺的话 100% 会留着上一张高清图、200% 会缺边。
+        if (app.DocPatch != null && app.DocPatch.DirtyRects.Count > 0)
+        {
+            foreach (var r in app.DocPatch.DirtyRects)
+            {
+                _tiles.MarkDirty(r);
+                _pageDirtyNow.Add(CanvasRectToWindow(r));
+            }
+            app.DocPatch.DirtyRects.Clear();
         }
     }
 

@@ -34,6 +34,9 @@ internal sealed partial class App
         public double CpuPageMb;
         public float RenderScale = 1f;
         public int BmpW, BmpH;
+        public int PatchCount;
+        public double PatchMb;
+        public float PatchScale = 1f;
         public string Spec = "n/a";
         public int TileCount, TileVisible, TileBudget, TileTexture;
         public double TileMb;
@@ -221,15 +224,19 @@ internal sealed partial class App
         foreach (var w in _windows) w.ViewOffsetY = MathF.Round(ViewOffsetY);
         SettleFrames(60);
         DocMemAdd(rows, sampler, "seam 200% +60ms");
-        DocMemSettle(2);
+        DocMemSettle(2, 8000, 2);                   // 跨页缝：两页各一块补丁
         DocMemAdd(rows, sampler, "seam 200% settle");
         DocMemTrim();
         DocMemAdd(rows, sampler, "seam 200% trim");
     }
 
-    /// <summary>落稳：每 150ms 出一帧，驻留页数连续 2 拍不变且达到下限就算稳。</summary>
-    private int DocMemSettle(int expectedMin, int maxMs = 8000)
+    /// <summary>
+    /// 落稳：每 150ms 出一帧，驻留页数连续 2 拍不变且达到下限就算稳。
+    /// <paramref name="expectedPatches"/> = 期望的高清补丁块数（&gt;100% 时才等；补丁是本次的内存主角）。
+    /// </summary>
+    private int DocMemSettle(int expectedMin, int maxMs = 8000, int expectedPatches = 1)
     {
+        int wantPatches = ViewScale > 1.0001f ? Math.Max(1, expectedPatches) : 0;
         var sw = Stopwatch.StartNew();
         int last = -1, stable = 0;
         while (sw.ElapsedMilliseconds < maxMs)
@@ -238,7 +245,8 @@ internal sealed partial class App
             int now = DocView.ResidentPages;
             stable = now == last ? stable + 1 : 0;
             last = now;
-            if (now >= expectedMin && stable >= 2) break;
+            bool patchesOk = wantPatches <= 0 || (DocPatch != null && DocPatch.PatchCount >= wantPatches);
+            if (now >= expectedMin && stable >= 2 && patchesOk) break;
         }
         return DocView.ResidentPages;
     }
@@ -274,6 +282,7 @@ internal sealed partial class App
             + $"  托管={DocMemMb(s.ManagedMb),7}  堆={DocMemMb(s.HeapMb),7}  碎片={DocMemMb(s.FragMb),5}  LOH={DocMemMb(s.LohMb),7}"
             + $"  GPU={DocMemMb(s.GpuLocalMb),7}+{DocMemMb(s.GpuNonLocalMb),6}"
             + $"  Image={DocMemMb(s.ImageMb),7}  页={s.Pages}/{DocMemMb(s.PageMb)}MB(CPU{DocMemMb(s.CpuPageMb)})"
+            + $"  补丁={s.PatchCount}块/{DocMemMb(s.PatchMb)}MB@{s.PatchScale:F2}"
             + $"  位图={s.BmpW}×{s.BmpH}"
             + $"  分块={s.TileCount}(可见{s.TileVisible})×{s.TileTexture}²@{s.TileScale:F2}={DocMemMb(s.TileMb)}MB"
             + $"  峰值 WS={DocMemMb(s.PeakWsMb)}/私有={DocMemMb(s.PeakPrivMb)}");
@@ -310,9 +319,12 @@ internal sealed partial class App
 
         s.ImageMb = ImageData.LiveBytes / 1048576.0;
         s.Pages = DocView.ResidentPages;
-        s.PageMb = DocView.ResidentBytes / 1048576.0;
+        s.PageMb = DocView.ResidentBytes / 1048576.0;    // 底图（1× 整页）单独报
         s.CpuPageMb = DocMemCpuPageBytes() / 1048576.0;
         s.RenderScale = DocView.PageRenderScale;
+        s.PatchCount = DocPatch?.PatchCount ?? 0;
+        s.PatchMb = (DocPatch?.ResidentBytes ?? 0) / 1048576.0;   // 高清补丁单独报
+        s.PatchScale = DocPatch?.Scale ?? 1f;
 
         int idx = Math.Clamp(BarPageNow - 1, 0, Math.Max(0, DocView.Count - 1));
         var page = DocView.At(idx);
@@ -388,7 +400,7 @@ internal sealed partial class App
         sb.AppendLine($"- 屏幕：{_virtualW}×{_virtualH}（DPI 缩放 {DpiScale:F2}） · 覆盖窗口 {_windows.Count} 个");
         sb.AppendLine($"- 显卡：{Gfx.AdapterInfo}");
         sb.AppendLine($"- PDF 档位：{DocMemory.Name}（{DocMemory.Note}） · MaxPagePixels {DocMemory.MaxPagePixels / 1e6:F0}MP"
-            + $" · PageRenderScaleCap {DocMemory.PageRenderScaleCap:F2}");
+            + $" · 页位图恒 1×（不再按缩放整页重渲）· 高清补丁 = 可见区 + {DocPatchCache.MarginDevicePx:F0} 设备像素");
         sb.AppendLine($"- 样本：合成 3 页 PDF（{System.IO.Path.GetFileName(pdf)}） · 后台采样间隔 100ms"
             + $" · 全程峰值 WS {DocMemMb(sampler.TotalWsMb)} / 私有 {DocMemMb(sampler.TotalPrivMb)}"
             + $" / GPU(L) {DocMemMb(sampler.TotalGpuLocalMb)} MB");
@@ -400,8 +412,8 @@ internal sealed partial class App
 
         sb.AppendLine("## 逐步读数");
         sb.AppendLine();
-        sb.AppendLine("| 步骤 | 缩放 | 相机 | WS | 私有 | GPU L | GPU NL | 托管 | Heap | 碎片 | LOH | ImageData | 驻留页 | 页字节 | 页CPU | 页倍率 | 页位图 | Spec | 分块 | 可见 | 每块 | 分块字节 | 峰值WS | 峰值私有 | 峰值GPU L |");
-        sb.AppendLine("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+        sb.AppendLine("| 步骤 | 缩放 | 相机 | WS | 私有 | GPU L | GPU NL | 托管 | Heap | 碎片 | LOH | ImageData | 驻留页 | 页字节 | 页CPU | 页倍率 | 页位图 | 补丁 | 补丁字节 | 补丁倍率 | Spec | 分块 | 可见 | 每块 | 分块字节 | 峰值WS | 峰值私有 | 峰值GPU L |");
+        sb.AppendLine("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |");
         foreach (var s in rows) DocMemAppendRow(sb, s);
         sb.AppendLine();
 
@@ -446,6 +458,9 @@ internal sealed partial class App
           .Append(" | ").Append(DocMemMb(s.CpuPageMb))
           .Append(" | ").Append(s.RenderScale.ToString("F2", CultureInfo.InvariantCulture))
           .Append(" | ").Append(s.BmpW > 0 ? $"{s.BmpW}×{s.BmpH}" : "n/a")
+          .Append(" | ").Append(s.PatchCount)
+          .Append(" | ").Append(DocMemMb(s.PatchMb))
+          .Append(" | ").Append(s.PatchScale.ToString("F2", CultureInfo.InvariantCulture))
           .Append(" | ").Append(s.Spec)
           .Append(" | ").Append(s.TileCount)
           .Append(" | ").Append(s.TileVisible)
@@ -474,8 +489,8 @@ internal sealed partial class App
 
         sb.AppendLine("## 关键对比");
         sb.AppendLine();
-        sb.AppendLine("| 场景 | WS | 私有 | GPU L | LOH | 托管 | ImageData | 驻留页 | 页字节 | 分块字节 |");
-        sb.AppendLine("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+        sb.AppendLine("| 场景 | WS | 私有 | GPU L | LOH | 托管 | ImageData | 驻留页 | 页字节（底图 1×） | 补丁字节 | 分块字节 |");
+        sb.AppendLine("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
         DocMemAppendSummaryRow(sb, "100% 基线（打开后）", baseline);
         DocMemAppendSummaryRow(sb, "200% 稳态", steady200);
         DocMemAppendSummaryRow(sb, "200% 跨页缝（2 页驻留）", seam200);
@@ -483,7 +498,7 @@ internal sealed partial class App
         sb.Append("| 全程峰值（100ms 采样） | ").Append(DocMemMb(peakWs))
           .Append(" | ").Append(DocMemMb(peakPriv))
           .Append(" | ").Append(DocMemMb(peakGpu))
-          .AppendLine(" | n/a | n/a | n/a | n/a | n/a | n/a |");
+          .AppendLine(" | n/a | n/a | n/a | n/a | n/a | n/a | n/a |");
         DocMemAppendSummaryRow(sb, "200% 回收后（GC+Trim）", trim200);
         sb.AppendLine();
     }
@@ -493,7 +508,7 @@ internal sealed partial class App
         sb.Append("| ").Append(name);
         if (s == null)
         {
-            sb.AppendLine(" | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |");
+            sb.AppendLine(" | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |");
             return;
         }
         sb.Append(" | ").Append(DocMemMb(s.WsMb))
@@ -504,6 +519,7 @@ internal sealed partial class App
           .Append(" | ").Append(DocMemMb(s.ImageMb))
           .Append(" | ").Append(s.Pages)
           .Append(" | ").Append(DocMemMb(s.PageMb))
+          .Append(" | ").Append(s.PatchCount + "块/" + DocMemMb(s.PatchMb) + "MB")
           .Append(" | ").Append(DocMemMb(s.TileMb))
           .AppendLine(" |");
     }
@@ -517,6 +533,11 @@ internal sealed partial class App
             + "`ImageData.LiveBytes` 还包含文档里的图片对象。两者接近时，页位图就是 CPU 侧大头。");
         sb.AppendLine("- **GPU L**：DXGI 的专用显存当前用量。页位图会被 D2D 复制成纹理；"
             + "GPU 与 ImageData 同时按面积涨，说明 4 字节/像素在 CPU 和显存各有一份。");
+        sb.AppendLine("- **补丁 / 补丁字节**：2026-11-16 起 PDF 放大后的清晰度由「可见区补丁」提供："
+            + "底图恒 1×（`页字节`），补丁是一块设备分辨率小图（≈ 一屏，与倍率无关）。"
+            + "200% 时应该是「底图不变 + 补丁 ≈ 30MB 级」，不再是整页 2×（本机约 143MB）。"
+            + "100% 时补丁为 0——绘制路径与以前一致。");
+        sb.AppendLine("- **页倍率**：现在恒为 1.00（只作诊断口径）。看到 2.00 说明有别的路径又去整页重渲了。");
         sb.AppendLine("- **LOH**：页位图是 `byte[]`（大对象）。LOH 跟着页面积走 = 活对象；"
             + "回收后 LOH 明显下降 = 之前是垃圾/待回收；不降 = 仍被引用（缓存 / 双缓冲）。");
         sb.AppendLine("- ⚠ `Heap` / `碎片` / `LOH` 来自 `GC.GetGCMemoryInfo()`，反映的是**最近一次 GC** 的快照；"
@@ -551,9 +572,9 @@ internal sealed partial class App
         {
             sb.AppendLine($"- ⚠ **本次读数**：200% 回收后 LOH 仍有 {DocMemMb(trim200.LohMb)}MB，"
                 + "但所有驻留页的 CPU 像素都已放掉（`页CPU` = 0）。说明这块字节数组由别处持有——"
-                + "最可能是页渲染 worker 线程最后一次 `Pdfium.RenderPage` 的缓冲区（线程停在循环里，"
-                + "栈引用让一整页活过一次 GC），也可能是 D2D 上传暂存。它随当前页面积走、有界（一页），"
-                + "但会给 200% 稳定多算一页 CPU 字节（本机 137MB）；要坐实需在 worker 退出后再 trim 一次比对。");
+                + "最可能是页渲染 worker 线程最后一次 PDFium 渲染的缓冲区（线程停在循环里，"
+                + "栈引用让一整页活过一次 GC），也可能是 D2D 上传暂存。它随当前页面积走、有界（一页 1×，"
+                + "本机约 36MB；补丁阴影下不再有 137MB 那份）；要坐实需在 worker 退出后再 trim 一次比对。");
         }
         sb.AppendLine();
     }
@@ -571,18 +592,21 @@ internal sealed partial class App
         if (baseline != null)
             Console.WriteLine($"    100% 基线 : WS {DocMemMb(baseline.WsMb)} / 私有 {DocMemMb(baseline.PrivMb)}"
                 + $" / GPU {DocMemMb(baseline.GpuLocalMb)} / LOH {DocMemMb(baseline.LohMb)}"
-                + $" / ImageData {DocMemMb(baseline.ImageMb)} / 页 {baseline.Pages}×{DocMemMb(baseline.PageMb)}MB");
+                + $" / ImageData {DocMemMb(baseline.ImageMb)} / 底图 {baseline.Pages}页/{DocMemMb(baseline.PageMb)}MB"
+                + $" / 补丁 {baseline.PatchCount}块/{DocMemMb(baseline.PatchMb)}MB");
         if (steady200 != null)
             Console.WriteLine($"    200% 稳态 : WS {DocMemMb(steady200.WsMb)} / 私有 {DocMemMb(steady200.PrivMb)}"
                 + $" / GPU {DocMemMb(steady200.GpuLocalMb)} / LOH {DocMemMb(steady200.LohMb)}"
-                + $" / ImageData {DocMemMb(steady200.ImageMb)} / 页 {steady200.Pages}×{DocMemMb(steady200.PageMb)}MB"
+                + $" / ImageData {DocMemMb(steady200.ImageMb)} / 底图 {steady200.Pages}页/{DocMemMb(steady200.PageMb)}MB"
+                + $" / 补丁 {steady200.PatchCount}块/{DocMemMb(steady200.PatchMb)}MB"
                 + $" / 分块 {steady200.TileCount}×{steady200.TileTexture}²={DocMemMb(steady200.TileMb)}MB");
         Console.WriteLine($"    全程峰值 : WS {DocMemMb(sampler.TotalWsMb)} / 私有 {DocMemMb(sampler.TotalPrivMb)}"
             + $" / GPU {DocMemMb(sampler.TotalGpuLocalMb)}");
         if (seam200 != null)
             Console.WriteLine($"    跨页缝200%: WS {DocMemMb(seam200.WsMb)} / 私有 {DocMemMb(seam200.PrivMb)}"
                 + $" / GPU {DocMemMb(seam200.GpuLocalMb)} / ImageData {DocMemMb(seam200.ImageMb)}"
-                + $" / 页 {seam200.Pages}×{DocMemMb(seam200.PageMb)}MB");
+                + $" / 底图 {seam200.Pages}页/{DocMemMb(seam200.PageMb)}MB"
+                + $" / 补丁 {seam200.PatchCount}块/{DocMemMb(seam200.PatchMb)}MB");
         if (trim200 != null)
             Console.WriteLine($"    200% 回收后: WS {DocMemMb(trim200.WsMb)} / 私有 {DocMemMb(trim200.PrivMb)}"
                 + $" / GPU {DocMemMb(trim200.GpuLocalMb)} / LOH {DocMemMb(trim200.LohMb)}"

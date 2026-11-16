@@ -26,12 +26,13 @@ internal sealed partial class App
     ///
     /// 验五件事：
     ///   ① **100% 的原行为不变**（页位图 = 档位宽、倍率 1、页矩形不动）；
-    ///   ② **放大 200%**：视口中心压着的画布点不动、页矩形不变、页位图按倍率重渲；
+    ///   ② **放大 200%**：视口中心压着的画布点不动、页矩形不变、页位图仍 1×（高清靠补丁）；
     ///   ③ **页和墨一起缩**：页角 → 墨点的屏幕距离 = 画布距离 × ViewScale；
     ///   ④ 六个档位都能来回切、不崩、不越界（含 X/Y 夹取）；
     ///   ⑤ **回到 100%** 一切复位（横向偏移 0、页位图倍率 1）。
     ///
-    /// 另外验 worker 的**代次**：倍率变化时 1x 的在途结果必须被丢掉。
+    /// 另外验两件事：**高清补丁**（区域渲染逐像素一致 / 一块屏 / 平移不灰闪 / 翻页回收），
+    /// 以及 worker 在 200% 下**不再重渲整页**（底图恒 1×、补丁由后台线程渲）。
     /// </summary>
     private void ZoomTest()
     {
@@ -75,9 +76,14 @@ internal sealed partial class App
             ZoomTestScale(Check);           // A–D：倍率 / 页矩形 / 坐标 / 六档 / 复位
             ZoomTestShots(Check);           // E：上屏 + 50/100/200 三张图
             ZoomTestTiles(Check);           // I：分块倍率 / 防抖 / 预取环字节上限
+            ZoomTestPatches(Check);         // J：高清补丁（区域渲染一致 / 一块屏 / 平移不灰闪 / 翻页回收）
             ZoomTestBarAndPan(Check);       // G：文档条缩放组 / 档位浮层 / 横向拖页 / Ctrl+滚轮
             ZoomTestSelectionFurniture(Check, pdf);   // H：选中家具在 200% 下保持屏幕尺寸
             ZoomTestWorker(Check, pdf);     // F：worker 代次
+
+            CloseDocument();
+            Check("关文档：高清补丁全部释放（DocPatch 置空）", DocPatch == null,
+                  DocPatch == null ? "已释放" : $"还挂着 {DocPatch.PatchCount} 块");
         }
 
         // 收尾：关文档、回基线
@@ -134,13 +140,20 @@ internal sealed partial class App
         Doc.AddStroke(ink);
         Doc.InvalidateAll();
 
+        // 100% 底图先落地：后面拿它的字节数证明"放大后底图没重渲"（2026-11-16 补丁方案）。
+        SettleFrames(400);
+        check("100%：底图已生成并驻留", DocView.ResidentPages >= 1,
+              $"驻留={DocView.ResidentPages} 生成={DocView.GenerateCount}");
+        long bytes100 = DocView.ResidentBytes;
+        int imgW100 = DocView.At(0).Image != null ? DocView.At(0).Image.Width : 0;
+
         float centerScreenX = _virtualX + _virtualW * 0.5f;
         float centerScreenY = _virtualY + _virtualH * 0.5f;
         float anchorCx = ScreenToCanvasX(centerScreenX);
         float anchorCy = ScreenToCanvasY(centerScreenY);
 
         // ------------------------------------------------------------------
-        Console.WriteLine("  -- B 200%：中心不动 / 页矩形不变 / 页位图翻倍 / 页+墨一起缩 --");
+        Console.WriteLine("  -- B 200%：中心不动 / 页矩形不变 / 底图仍 1× / 补丁盖可见区 / 页+墨一起缩 --");
         // ------------------------------------------------------------------
         SetDocZoomFromUi(2f);
         check("2.0：ViewScale = DocZoom = 2",
@@ -163,25 +176,7 @@ internal sealed partial class App
               && MathF.Abs(DocView.At(0).Rect.MaxY - rect100.MaxY) < 1e-3f,
               $"[{rect100.MinX:F0},{rect100.MinY:F0}..{rect100.MaxX:F0},{rect100.MaxY:F0}]");
 
-        var spec200 = DocView.At(0).Spec;
-        float capNow = DocMemory.PageRenderScaleCap;
-        long px200 = (long)spec200.BitmapW * spec200.BitmapH;
-        check("2.0：页位图倍率 = min(2, 档位上限)",
-              MathF.Abs(spec200.RenderScale - MathF.Min(2f, capNow)) < 1e-3f,
-              $"倍率={spec200.RenderScale:F2}（上限 {capNow:F2}）");
-        check("2.0：BitmapW = round(基准 × 倍率)",
-              spec200.BitmapW == (int)MathF.Round(baseW * spec200.RenderScale)
-              && spec200.BitmapH == (int)MathF.Round(baseH * spec200.RenderScale),
-              $"{spec200.BitmapW}x{spec200.BitmapH}（基准 {baseW}x{baseH}）");
-        check("2.0：位图真的变大了（重渲，不是拉伸）",
-              spec200.BitmapW > baseW && spec200.BitmapH > baseH,
-              $"{baseW}→{spec200.BitmapW}");
-        check("2.0：单页像素不超预算",
-              px200 <= DocMemory.MaxPagePixels * 1.001 + 10000,
-              $"{px200 / 1e6:F1}MP（预算 {DocMemory.MaxPagePixels / 1e6:F0}MP）");
-        check("2.0：页位图生成代次 +1（旧图作废）",
-              DocView.RenderGeneration > 0 && page0.Image == null,
-              $"代次={DocView.RenderGeneration} Image={(page0.Image == null ? "已放" : "还在")}");
+        ZoomTestBaseAndPatch(check, page0, baseW, baseH, bytes100, imgW100);
 
         // 页 + 墨一起缩：屏幕上"页角 → 墨点"的距离 = 画布距离 × 倍率。
         float inkX = ink.Points[1].X;
@@ -201,14 +196,65 @@ internal sealed partial class App
               $"页角 {pageCornerX:F1} → {ScreenToCanvasX(cornerScreenX):F1}；"
               + $"墨点 y {ink.Points[1].Y:F1} → {ScreenToCanvasY(inkScreenY):F1}");
 
-        ZoomTestSteps(check, baseW, capNow);
+        ZoomTestSteps(check, baseW, baseH);
+    }
+
+    /// <summary>
+    /// 200% 的两条硬判据：**底图仍是 1× 整页**（字节数不变、不重渲）+ **高清补丁就绪**
+    /// （盖住「可见区 ∩ 页」、面积只是一块屏）。拆出来只为让 <see cref="ZoomTestScale"/>
+    /// 不超 120 行（结构基线要求方法 ≤120 行）。
+    /// </summary>
+    private void ZoomTestBaseAndPatch(Action<string, bool, string> check, DocPages.Page page0,
+                                      int baseW, int baseH, long bytes100, int imgW100)
+    {
+        var spec200 = DocView.At(0).Spec;
+        long px200 = (long)spec200.BitmapW * spec200.BitmapH;
+        check("2.0：页位图仍是 1× 基准（不再整页重渲）",
+              MathF.Abs(spec200.RenderScale - 1f) < 1e-4f && spec200.BitmapW == baseW
+              && spec200.BitmapH == baseH,
+              $"倍率={spec200.RenderScale:F2} {spec200.BitmapW}x{spec200.BitmapH}（基准 {baseW}x{baseH}）");
+        check("2.0：位图没有变大（原来的 143MB 整页重渲已去掉）",
+              spec200.BitmapW == baseW && px200 == (long)baseW * baseH,
+              $"{baseW}×{baseH} = {px200 / 1e6:F1}MP");
+        check("2.0：DocView 常驻字节和 100% 完全一样",
+              DocView.ResidentBytes == bytes100
+              && DocView.At(0).Image != null && DocView.At(0).Image.Width == imgW100,
+              $"{bytes100 / 1048576.0:F1}MB → {DocView.ResidentBytes / 1048576.0:F1}MB"
+              + $"（图宽 {(DocView.At(0).Image != null ? DocView.At(0).Image.Width : 0)}）");
+
+        ZoomTestWaitPatch(0, 4000);
+        bool hasPatch = false;
+        ImageData patchImg = null;
+        RectF patchRect = default;
+        if (DocPatch != null) hasPatch = DocPatch.TryGetPatch(0, out patchImg, out patchRect);
+        var visPage = DocView.At(0).Rect;
+        check("2.0：高清补丁已就绪（DocPatch.PatchCount ≥ 1）",
+              DocPatch != null && DocPatch.PatchCount >= 1 && hasPatch,
+              $"补丁={DocPatch?.PatchCount ?? 0} / 字节 {DocPatch?.PatchBytes / 1048576.0 ?? 0:F1}MB");
+        check("2.0：补丁倍率 = 相机倍率",
+              DocPatch != null && MathF.Abs(DocPatch.Scale - 2f) < 1e-3f,
+              $"scale={DocPatch?.Scale ?? 0:F2}");
+        check("2.0：补丁矩形盖住「可见区 ∩ 页」",
+              hasPatch && CoversRect(patchRect, Intersect(visPage, Expand(ViewportCanvas, 2f))),
+              hasPatch
+                  ? $"[{patchRect.MinX:F0},{patchRect.MinY:F0}..{patchRect.MaxX:F0},{patchRect.MaxY:F0}]"
+                  : "没有补丁");
+        float pagePx2 = (visPage.MaxX - visPage.MinX) * (visPage.MaxY - visPage.MinY) * 4f;
+        check("2.0：补丁只是「一块屏」（远小于整页 2× 的面积）",
+              hasPatch && patchImg.Width * (long)patchImg.Height < pagePx2 * 0.5,
+              hasPatch
+                  ? $"{patchImg.Width}×{patchImg.Height} = {patchImg.Width * (long)patchImg.Height / 1e6:F1}MP"
+                    + $" / 整页 2× {pagePx2 / 1e6:F1}MP"
+                  : "n/a");
+        check("2.0：底图没因为缩放被放掉（旧逻辑会整页作废）",
+              page0.Image != null, page0.Image == null ? "旧图被放了" : "原图还在");
     }
 
     /// <summary>C–D 组：六个档位来回切 + 回到 100% 的复位。</summary>
-    private void ZoomTestSteps(Action<string, bool, string> check, int baseW, float capNow)
+    private void ZoomTestSteps(Action<string, bool, string> check, int baseW, int baseH)
     {
         // ------------------------------------------------------------------
-        Console.WriteLine("  -- C 六档来回切：不崩、不越界、倍率跟着走 --");
+        Console.WriteLine("  -- C 六档来回切：不崩、不越界、底图恒 1×（缩放只换相机）--");
         // ------------------------------------------------------------------
         float[] steps = { 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f };
         bool stepsOk = true;
@@ -219,18 +265,19 @@ internal sealed partial class App
             bool ok = MathF.Abs(ViewScale - z) < 1e-4f && MathF.Abs(DocZoom - z) < 1e-4f;
             ok &= DocZoom >= 0.5f - 1e-4f && DocZoom <= 2f + 1e-4f;
             ok &= ViewportCanvas.MaxY > ViewportCanvas.MinY;   // 没被夹成空视口
-            float want = z <= 1.0001f ? 1f : MathF.Min(z, capNow);
-            ok &= MathF.Abs(DocView.PageRenderScale - want) < 1e-3f;
-            ok &= DocView.At(0).Spec.BitmapW == (int)MathF.Round(baseW * DocView.At(0).Spec.RenderScale);
+            ok &= MathF.Abs(DocView.PageRenderScale - 1f) < 1e-3f;   // 页位图恒 1×（补丁负责高清）
+            ok &= DocView.At(0).Spec.BitmapW == baseW && DocView.At(0).Spec.BitmapH == baseH;
+            ok &= MathF.Abs(DocView.At(0).Spec.RenderScale - 1f) < 1e-4f;
             stepsOk &= ok;
             stepDetail.Append($"{z * 100:F0}%:{(ok ? "ok" : "BAD")} ");
         }
         check("六档全部通过（50/75/100/125/150/200）", stepsOk, stepDetail.ToString().Trim());
 
         SetDocZoomFromUi(0.5f);
-        check("50%：页位图倍率回 1（只缩不合，不重渲更大的图）",
-              MathF.Abs(DocView.At(0).Spec.RenderScale - 1f) < 1e-4f,
-              $"倍率={DocView.At(0).Spec.RenderScale:F2}");
+        check("50%：页位图仍是 1× 基准（只缩不合，不重渲）",
+              MathF.Abs(DocView.At(0).Spec.RenderScale - 1f) < 1e-4f
+              && DocView.At(0).Spec.BitmapW == baseW,
+              $"倍率={DocView.At(0).Spec.RenderScale:F2} 宽={DocView.At(0).Spec.BitmapW}");
 
         // 越界：传 5 和 0.1 都要被夹进 [0.5, 2]。
         SetDocZoomFromUi(5f);
@@ -252,7 +299,7 @@ internal sealed partial class App
               MathF.Abs(ViewScale - 1f) < 1e-4f && MathF.Abs(DocZoom - 1f) < 1e-4f
               && MathF.Abs(ViewOffsetX) < 0.5f,
               $"ViewScale={ViewScale:F2} offX={ViewOffsetX:F2}");
-        check("100%：页位图倍率 = 1、宽回基准",
+        check("100%：页位图恒 1×、宽 = 基准（可见路径不变）",
               MathF.Abs(DocView.At(0).Spec.RenderScale - 1f) < 1e-4f
               && DocView.At(0).Spec.BitmapW == baseW,
               $"倍率={DocView.At(0).Spec.RenderScale:F2} 宽={DocView.At(0).Spec.BitmapW}");
@@ -679,10 +726,10 @@ internal sealed partial class App
               $"DocZoom={DocZoom:F2} 浮层={PptZoomMenuOpen}");
     }
 
-    /// <summary>F 组：worker 的代次——倍率换了，1x 在途结果必须丢掉。</summary>
+    /// <summary>F 组：worker——底图恒 1×，放大后的高清由**补丁线程**补上。</summary>
     private void ZoomTestWorker(Action<string, bool, string> check, string pdf)
     {
-        Console.WriteLine("  -- F worker 代次：倍率换了，1x 在途结果必须丢掉 --");
+        Console.WriteLine("  -- F worker：底图不因缩放重渲 / 200% 的补丁由后台线程渲好 --");
         CloseDocument();
         Doc.Clear();
         Doc.ClearHistory();
@@ -699,23 +746,25 @@ internal sealed partial class App
 
         int baseW = DocView.At(0).Spec.RenderW > 0 ? DocView.At(0).Spec.RenderW
                                                    : DocView.At(0).Spec.OutW;
-        // 先按 1x 排一页（此时后台刚开始渲），立刻放大到 200%：
-        // 在途的 1x 结果代次对不上，必须被丢掉，最终采纳的是 200% 那张。
+        // 先排一页 1×（后台开始渲），立刻放大到 200%：
+        // 新逻辑下底图**不换倍率**（配方没变、代次没变），在途的 1× 结果照样能采纳；
+        // 高清由补丁线程另外渲一块。
         DocView.SyncWindow(ViewportCanvas.MinY, ViewportCanvas.MaxY, 1, 0f);
         SetDocZoomFromUi(2f);
 
         var swW = Stopwatch.StartNew();
-        while (swW.ElapsedMilliseconds < 4000 && DocView.ResidentPages < 1)
+        while (swW.ElapsedMilliseconds < 4000
+               && (DocView.ResidentPages < 1 || DocPatch == null || DocPatch.PatchCount < 1))
             SettleFrames(120);
 
         var pgW = DocView.At(0);
-        check("worker：换倍率后在途 1x 结果被丢掉",
-              pgW.Image != null && pgW.Image.Width == pgW.Spec.BitmapW
-              && pgW.Image.Height == pgW.Spec.BitmapH,
+        check("worker：底图仍是 1×（缩放不重渲整页）",
+              pgW.Image != null && pgW.Image.Width == baseW && pgW.Spec.BitmapW == baseW,
               $"Image={pgW.Image?.Width}x{pgW.Image?.Height} Spec={pgW.Spec.BitmapW}x{pgW.Spec.BitmapH}"
               + $"（等了 {swW.ElapsedMilliseconds:F0}ms）");
-        check("worker：采纳的确实是放大后的位图", pgW.Image != null && pgW.Spec.BitmapW > baseW,
-              $"{baseW} → {pgW.Spec.BitmapW}");
+        check("worker：200% 的高清补丁已由后台线程渲好",
+              DocPatch != null && DocPatch.HasPatch(0),
+              $"补丁={DocPatch?.PatchCount ?? 0} / {DocPatch?.PatchBytes / 1048576.0 ?? 0:F1}MB");
     }
 }
 

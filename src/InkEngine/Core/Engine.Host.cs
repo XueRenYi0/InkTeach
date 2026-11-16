@@ -2170,6 +2170,9 @@ public partial class InkEngine
         // 缩放停手后的"换分块倍率"是一个**定时待办**（防抖 120ms）：不算进这里，
         // 界面不再置脏时主循环会睡在 WaitMessage 上，倍率永远换不了（拉伸糊图常驻）。
         if (_windows.Exists(w => w.TileScalePending)) d |= FrameDrive.Dirty;
+        // 文档高清补丁：>100% 且"还缺补丁 / 等落稳 120ms / 有请求在飞"→ 定时待办。
+        // 和分块倍率同一个理由：界面不再置脏时主循环会睡在 WaitMessage 上，补丁排不出来。
+        if (DocPatch is { WantsFrame: true }) d |= FrameDrive.Dirty;
         if (AlignSnapPulseActive) d |= FrameDrive.Align;
         if (_g2FlingActive) d |= FrameDrive.TouchFling;
 

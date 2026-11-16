@@ -1364,13 +1364,46 @@ internal sealed partial class App
             StreamObj("0 1 0 rg 0 0 595 842 re f"),
             StreamObj("0 0 1 rg 0 0 595 842 re f"),
         };
+        WritePdfObjects(path, objs);
+        return path;
+    }
 
+    /// <summary>
+    /// 合成一份**带文字和细线**的单页 PDF（标准 Type1 Helvetica，不嵌字体）。
+    ///
+    /// 用途：`--zoomtest` 的"区域渲染 vs 整页渲染"对照。纯色块页分不出接缝/错位，
+    /// 文字字形和 1pt 细线才看得出一像素的偏移。
+    /// </summary>
+    private static string WriteTestTextPdf(string path)
+    {
+        static string StreamObj(string content) => $"<< /Length {content.Length} >>\nstream\n{content}\nendstream";
+        const string body =
+            "BT /F1 64 Tf 40 760 Td (PDFium patch 0123456789) Tj ET\n"
+            + "BT /F1 36 Tf 40 690 Td (Region must match full render) Tj ET\n"
+            + "0 0 0 RG 3 w 40 640 m 555 640 l S\n"
+            + "0 0 0 RG 1 w 40 600 m 555 600 l S\n";
+        var objs = new List<string>
+        {
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+                + "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+            StreamObj(body),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        };
+        WritePdfObjects(path, objs);
+        return path;
+    }
+
+    /// <summary>把对象表写成一份最小 PDF（xref 偏移现算；内容全是 ASCII，字符数 = 字节数）。</summary>
+    private static void WritePdfObjects(string path, List<string> objs)
+    {
         var sb = new System.Text.StringBuilder();
         sb.Append("%PDF-1.4\n");
         var offsets = new int[objs.Count];
         for (int i = 0; i < objs.Count; i++)
         {
-            offsets[i] = sb.Length;                 // ASCII ⇒ 字符数就是字节数
+            offsets[i] = sb.Length;
             sb.Append($"{i + 1} 0 obj\n{objs[i]}\nendobj\n");
         }
         int xref = sb.Length;
@@ -1378,7 +1411,6 @@ internal sealed partial class App
         foreach (var o in offsets) sb.Append($"{o:D10} 00000 n \n");
         sb.Append($"trailer\n<< /Size {objs.Count + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n");
         System.IO.File.WriteAllText(path, sb.ToString(), System.Text.Encoding.ASCII);
-        return path;
     }
 
     /// <summary>

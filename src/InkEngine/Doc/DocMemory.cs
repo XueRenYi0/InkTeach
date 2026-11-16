@@ -49,8 +49,9 @@ internal static class DocMemory
     public static int MaxPagePixels => Low ? 9_000_000 : High ? 36_000_000 : 24_000_000;
 
     /// <summary>
-    /// 文档缩放时页位图的**重渲染倍率上限**（相机缩放 ≤1 时一律 1：只缩不合，不重渲）。
-    /// 省内存档 1.5（一页 150% 就够看清）；标准/高清 2.0（200%）。
+    /// 文档缩放时页位图的**重渲染倍率上限**（历史口径：≤100% 时一律 1，只缩不合，不重渲）。
+    /// 2026-11-16 起页位图不再按缩放重渲（见 <see cref="DocPatchCache"/>），
+    /// 这一位只留给 `--docmem` 报告和旧自检读数，不再参与任何渲染决定。
     /// </summary>
     public static float PageRenderScaleCap => Low ? 1.5f : 2.0f;
 
