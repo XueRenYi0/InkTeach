@@ -14,7 +14,7 @@ internal sealed partial class App
         Doc.Clear();
         Doc.ClearHistory();
         var box = new RectF { MinX = 40, MinY = 40, MaxX = 1040, MaxY = 132 };
-        var g = GlyphText.BuildLine(GlyphText.CjkFontPath, "手写优化测试", box,
+        var g = GlyphText.BuildLine(GlyphText.HandwritingFontPath, "手写优化测试", box,
                                     new Color4(0.86f, 0.16f, 0.12f, 1f));
         if (g == null) { Console.WriteLine("没有生成 Glyph"); ExitCode = 1; return; }
         Doc.AppendStroke(g);

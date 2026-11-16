@@ -96,7 +96,7 @@ internal sealed class TextBoxData
     /// <summary>正文字号（逻辑像素，乘 <see cref="Unit"/> 后是画布像素）。</summary>
     public float FontSize = 14.5f;
 
-    /// <summary>普通文本框的字体档（雅黑 / 楷体 / 宋体 / 黑体 / 手写）。</summary>
+    /// <summary>普通文本框的字体档（雅黑 / 楷体 / 宋体 / 黑体；旧 ZhiMang 只读兼容）。</summary>
     public TextBoxFace Face = TextBoxFace.YaHei;
 
     /// <summary>

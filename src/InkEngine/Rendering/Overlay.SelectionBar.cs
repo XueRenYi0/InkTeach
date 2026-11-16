@@ -843,7 +843,6 @@ internal sealed partial class OverlayWindow
         for (int i = 0; i < TextBoxFaces.Visible.Length; i++)
         {
             var info = TextBoxFaces.Visible[i];
-            TextBoxFaces.EnsureBundled(info.Face);      // 格子用字体本身预览，先注册
             var cell = SelectionHandles.FontPanelFaceRect(i, sel, dpi, app.FurnitureViewport);
             Chip(cell, info.Name, TextBoxFaces.IsVisibleFace(box, info),
                  AiTextFormat(faceChipSize * dpi, true, true, false, info.DirectWrite));

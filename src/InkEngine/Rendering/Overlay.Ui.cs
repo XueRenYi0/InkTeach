@@ -1008,7 +1008,6 @@ internal sealed partial class OverlayWindow
         try
         {
             float pad = 18f * u;
-            TextBoxFaces.EnsureBundled(card.Face);      // 包内字体首次使用才注册
             string family = TextBoxFaces.FamilyOf(card);
             // ??????????????????????????? ScrollY?
             float scrolledY = o.Y - card.ScrollY;

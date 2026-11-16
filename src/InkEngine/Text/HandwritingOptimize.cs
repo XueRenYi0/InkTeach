@@ -208,10 +208,10 @@ public partial class InkEngine
             return;
         }
 
-        string font = GlyphText.BundledFontPath;
+        string font = GlyphText.HandwritingFontPath;
         if (mode != HandOcrMode.Plot && string.IsNullOrEmpty(font))
         {
-            SetHandOcrStatus("缺少手写字体文件");
+            SetHandOcrStatus("系统缺少可用字体");
             return;
         }
 
@@ -362,10 +362,10 @@ public partial class InkEngine
             return;
         }
 
-        string font = GlyphText.BundledFontPath;
+        string font = GlyphText.HandwritingFontPath;
         if (string.IsNullOrEmpty(font))
         {
-            SetHandOcrStatus("缺少手写字体文件");
+            SetHandOcrStatus("系统缺少可用字体");
             return;
         }
 

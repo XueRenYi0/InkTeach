@@ -321,7 +321,7 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
-    /// <summary>文字操作条「字体」：换整个文本框的字体档（雅黑/楷体/宋体/黑体/手写）。</summary>
+    /// <summary>文字操作条「字体」：换整个文本框的字体档（雅黑/楷体/宋体/黑体）。</summary>
     internal void SetSelectedTextFaceFromUi(int index)
     {
         if (index < 0 || index >= TextBoxFaces.Visible.Length) return;
@@ -332,7 +332,6 @@ public partial class InkEngine
             RememberFace(TextBoxFace.Custom, info.DirectWrite);
             return;
         }
-        TextBoxFaces.EnsureBundled(info.Face);
         ApplySelectedTextStyle(info.Face, null);
         RememberFace(info.Face, "");
     }
@@ -352,7 +351,6 @@ public partial class InkEngine
 
         if (builtin.HasValue)
         {
-            TextBoxFaces.EnsureBundled(builtin.Value);
             ApplySelectedTextStyle(builtin.Value, null);
             RememberFace(builtin.Value, "");
         }
@@ -2134,7 +2132,6 @@ public partial class InkEngine
         Native.SendMessage(_textBoxEditHwnd, Native.EM_SETBKGNDCOLOR,
                            IntPtr.Zero, new IntPtr(_textBoxEditBackColor));
 
-        TextBoxFaces.EnsureBundled(s.TextBox.Face);     // 编辑框走 GDI，也要能解析包内字体
         var cf = new Native.CHARFORMAT2W
         {
             cbSize = System.Runtime.InteropServices.Marshal.SizeOf<Native.CHARFORMAT2W>(),

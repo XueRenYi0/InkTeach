@@ -377,6 +377,45 @@ internal static class UpdateFeed
     }
 
     /// <summary>
+    /// 删除升级后残留的包内字体（2026-11-16 起不再随包分发 `assets/fonts`）。
+    ///
+    /// 只在**当前程序目录**下清：`assets/fonts/*.ttf` 和同目录的 OFL 文本。
+    /// 文件不存在、被占用或没权限都直接跳过（下次启动再试），绝不因此影响启动。
+    /// 目录删空后顺手删掉空目录；`assets` 里还有群二维码等文件，不动。
+    /// </summary>
+    public static int CleanupStaleFonts(string appDir = null)
+    {
+        try
+        {
+            appDir ??= Path.GetDirectoryName(Environment.ProcessPath ?? "");
+            if (string.IsNullOrWhiteSpace(appDir)) return 0;
+            string dir = Path.Combine(appDir, "assets", "fonts");
+            if (!Directory.Exists(dir)) return 0;
+
+            int removed = 0;
+            foreach (string f in Directory.GetFiles(dir, "*.ttf"))
+            {
+                try { File.Delete(f); removed++; }
+                catch { /* 有意忽略：被占用/没权限就下次再清 */ }
+            }
+            foreach (string f in Directory.GetFiles(dir, "*.txt"))
+            {
+                try { File.Delete(f); removed++; }
+                catch { /* 有意忽略：被占用/没权限就下次再清 */ }
+            }
+            try
+            {
+                if (Directory.GetFileSystemEntries(dir).Length == 0) Directory.Delete(dir);
+            }
+            catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
+            if (removed > 0)
+                Console.WriteLine($"升级清理：删除了 {removed} 个残留字体文件");
+            return removed;
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>
     /// 建一个取清单 / 下载用的 <see cref="HttpClient"/>。<paramref name="useProxy"/>=false
     /// 时**显式不走系统代理**。
     ///

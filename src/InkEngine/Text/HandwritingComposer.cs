@@ -9,7 +9,7 @@ namespace InkEngine;
 /// 一行 OCR 文字 → 文字 Glyph + 行内公式图片。
 ///
 /// 2026-11-06 用户要求：
-///   · 中文用楷体（漓雨手书），英文用正常拉丁字体（Segoe UI），符号用符号字体；
+///   · 中文用系统楷体，英文用正常拉丁字体（Segoe UI），符号用符号字体；
 ///   · 公式按正规数学排版（CSharpMath / LaTeX），不把 `\in` 当普通字符画。
 ///
 /// 文字段仍走 <see cref="GlyphText"/> 的矢量轮廓；公式段走
@@ -103,7 +103,7 @@ internal static class HandwritingComposer
     private static List<Stroke> Fallback(string raw, RectF box, Color4 color,
                                          float sizeOverride = 0f, bool allowShrink = true)
     {
-        var g = GlyphText.BuildLine(GlyphText.CjkFontPath, OcrText.Normalize(raw), box, color,
+        var g = GlyphText.BuildLine(GlyphText.HandwritingFontPath, OcrText.Normalize(raw), box, color,
                                     sizeOverride, allowShrink);
         return g == null ? null : new List<Stroke> { g };
     }

@@ -245,7 +245,7 @@ public partial class InkEngine
         if (part >= SelectionHandles.PanelPart.FaceBase)
         {
             int i = part - SelectionHandles.PanelPart.FaceBase;
-            if (i >= 0 && i < TextBoxFaces.All.Length)
+            if (i >= 0 && i < TextBoxFaces.Visible.Length)
                 SetSelectedTextFaceFromUi(i);
             return true;
         }

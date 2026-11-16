@@ -1304,6 +1304,7 @@ public partial class InkEngine
             {
                 Thread.Sleep(5000);
                 UpdateFeed.CleanupOldBackups();
+                UpdateFeed.CleanupStaleFonts();      // 旧版本留下的包内字体，升级后删掉
             });
         }
 

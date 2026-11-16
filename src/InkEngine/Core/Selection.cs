@@ -3113,7 +3113,7 @@ internal static class SelectionHandles
         LayerBack,
         /// <summary>字号下拉的格子（+ i，0..5）。值刻意离 SwatchBase 远一点，避免区间重叠。</summary>
         FontBase = 20,
-        /// <summary>字体档（+ i，0..4：雅黑/楷体/宋体/黑体/手写）。</summary>
+        /// <summary>字体档（+ i，0..3：雅黑/楷体/宋体/黑体；快捷格由 TextBoxFaces.Visible 决定）。</summary>
         FaceBase = 40,
         /// <summary>字体面板第 6 格「更多…」：打开全部系统字体下拉。</summary>
         FaceMore = 50,

@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Runtime.InteropServices;
 using InkLocalization;
 
 namespace InkEngine;
@@ -9,12 +7,14 @@ namespace InkEngine;
 /// <summary>
 /// 文本框可选字体。
 ///
-/// **只内嵌一款**：手写 = 钟齐志莽行书（`assets/fonts/ZhiMangXing.ttf`，4MB，OFL，
-/// 和“AI 手写替换”共用同一份文件，首次用到才 `AddFontResourceEx(FR_PRIVATE)`
-/// 注册给本进程，不装系统、不改系统字体表）。
-/// 其余全部对接系统字体：雅黑 / 楷体 / 宋体 / 黑体 一定有；行书用系统
-/// “华文行楷”（Office 自带），这台机器没装就**不显示这一格**，不会出现
-/// 「行书」和「楷体」长得一样的情况。
+/// **不内嵌任何字体**（2026-11-16 删掉 4MB 的钟齐志莽行书）：全部对接系统字体，
+/// 雅黑 / 楷体 / 宋体 / 黑体 一定有；行书用系统“华文行楷”（Office 自带），
+/// 这台机器没装就**不显示这一格**。
+///
+/// `ZhiMang = 4` 只保留存档兼容（旧文档里有 4 这个编号）：不再显示「手写」格，
+/// 绘制按当前语言回退到系统字体——中文楷体、日文 Yu Gothic/Meiryo、韩文
+/// Malgun Gothic、其它语言 Segoe UI。旧自定义家族名 “Zhi Mang Xing” / 缺字体的
+/// 家族名走同一条回退，不会变成空白/豆腐块。
 ///
 /// 参考：Word 的字体下拉 / 华为笔记、小米笔记的字体档位（用户 2026-11-11 点名要
 /// 楷体、宋体、行书、手写）；不照搬完整字体列表，板书场景这几档够用。
@@ -25,7 +25,7 @@ internal enum TextBoxFace
     KaiTi = 1,
     SimSun = 2,
     SimHei = 3,
-    ZhiMang = 4,     // 手写（包内，唯一自带的字体：钟齐志莽行书）
+    ZhiMang = 4,     // 旧「手写」档：仅存档兼容，绘制走当前语言系统字体
     XingShu = 5,     // 行书（系统“华文行楷”，没装就不显示这一档）
     Custom = 6,      // 系统字体下拉里选的任意字体（家族名在 TextBoxData.FaceName）
 }
@@ -42,6 +42,7 @@ internal static class TextBoxFaces
         new(TextBoxFace.KaiTi, "楷体", "KaiTi", "楷体"),
         new(TextBoxFace.SimSun, "宋体", "SimSun", "宋体"),
         new(TextBoxFace.SimHei, "黑体", "SimHei", "黑体"),
+        // 旧「手写」档：不再显示、不再内嵌字体；仅保留编号兼容与旧家族名匹配。
         new(TextBoxFace.ZhiMang, "手写", "Zhi Mang Xing", "钟齐志莽行书"),
         new(TextBoxFace.XingShu, "行书", "华文行楷", "华文行楷"),
     };
@@ -50,8 +51,8 @@ internal static class TextBoxFaces
 
     /// <summary>
     /// 面板里**实际显示**的快捷格：4 个系统字体；其余全部进「更多…」下拉
-    /// （2026-11-11 用户定）。包内手写字体只在“AI 手写替换”里用——DirectWrite
-    /// 的系统集合看不到进程内注册的字体，放进题卡会静默退回默认字体，所以不摆。
+    /// （2026-11-11 用户定）。**2026-11-16 起不再有内嵌「手写」格**：旧文档的
+    /// `ZhiMang` 编号仍能读，绘制自动回退到当前语言的系统字体（中文=楷体）。
     /// </summary>
     public static bool IsChineseUi => Loc.CurrentCode == "zh-CN";
     public static bool IsCjkUi => Loc.CurrentCode is "zh-CN" or "ja" or "ko";
@@ -128,6 +129,89 @@ internal static class TextBoxFaces
         }
         catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
         return false;
+    }
+
+    // ---- 旧「手写」档 / 缺字体家族名的系统回退 ---------------------------
+
+    private static readonly object KnownFamiliesLock = new();
+    private static HashSet<string> _knownFamilies;
+    private static string _fallbackCode;
+    private static string _fallbackFamily;
+
+    /// <summary>旧内嵌字体名（存档里可能是中文别名或英文家族名）。</summary>
+    private static bool IsLegacyHandwriting(string family)
+        => string.Equals(family, "Zhi Mang Xing", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(family, "钟齐志莽行书", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(family, "LiyuShoushu", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(family, "漓雨手书", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 当前界面的系统回退字体（旧「手写」档 / 本机没有的家族名都落在这里）。
+    /// 中文楷体、日文 Yu Gothic（退 Meiryo）、韩文 Malgun Gothic、其它 Segoe UI；
+    /// 候选都不在时再用界面字体，保证永远能画出来。
+    /// </summary>
+    public static string FallbackFamily
+    {
+        get
+        {
+            string code = Loc.CurrentCode;
+            if (_fallbackFamily != null && _fallbackCode == code) return _fallbackFamily;
+            string[] candidates = code switch
+            {
+                "zh-CN" => new[] { "KaiTi", "楷体", "SimKai" },
+                "ja" => new[] { "Yu Gothic", "Meiryo", "MS Gothic" },
+                "ko" => new[] { "Malgun Gothic", "Gulim" },
+                _ => new[] { "Segoe UI" },
+            };
+            string picked = null;
+            foreach (string c in candidates)
+                if (HasFamily(c)) { picked = c; break; }
+            picked ??= Loc.FontFamily;
+            _fallbackCode = code;
+            _fallbackFamily = picked;
+            return picked;
+        }
+    }
+
+    /// <summary>家族名是否真的在本机（DirectWrite 显示名 / Skia 英文名都算）。</summary>
+    public static bool HasFamily(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        return KnownFamilies.Contains(name.Trim());
+    }
+
+    private static HashSet<string> KnownFamilies
+    {
+        get
+        {
+            if (_knownFamilies != null) return _knownFamilies;
+            lock (KnownFamiliesLock)
+            {
+                if (_knownFamilies != null) return _knownFamilies;
+                var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string f in SystemFamilies) set.Add(f);
+                try
+                {
+                    foreach (string f in SkiaSharp.SKFontManager.Default.FontFamilies)
+                        if (!string.IsNullOrWhiteSpace(f)) set.Add(f);
+                }
+                catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
+                _knownFamilies = set;
+                return set;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 存档里的字体家族名 → 真正能画的系统家族名。
+    /// 旧内嵌名、本机没装的家族名都回退到 <see cref="FallbackFamily"/>。
+    /// </summary>
+    public static string ResolveFamily(string family)
+    {
+        if (string.IsNullOrWhiteSpace(family)) return FallbackFamily;
+        family = family.Trim();
+        if (IsLegacyHandwriting(family)) return FallbackFamily;
+        return HasFamily(family) ? family : FallbackFamily;
     }
 
     // ---- 任意系统字体（字体面板的“更多…”下拉） --------------------------
@@ -327,7 +411,7 @@ internal static class TextBoxFaces
     /// <summary>文本框当前实际该用的字体家族名（自定义优先，其次枚举档）。</summary>
     public static string FamilyOf(TextBoxData box)
         => box != null && !string.IsNullOrWhiteSpace(box.FaceName)
-            ? box.FaceName
+            ? ResolveFamily(box.FaceName)
             : DirectWrite(box?.Face ?? TextBoxFace.YaHei);
 
     /// <summary>这个框现在是不是这一档（自定义字体时，枚举档一律不算选中）。</summary>
@@ -355,7 +439,8 @@ internal static class TextBoxFaces
         return All[0];
     }
 
-    public static string DirectWrite(TextBoxFace face) => Get(face).DirectWrite;
+    public static string DirectWrite(TextBoxFace face)
+        => face == TextBoxFace.ZhiMang ? FallbackFamily : Get(face).DirectWrite;
 
     public static string Name(TextBoxFace face) => Get(face).Name;
 
@@ -363,11 +448,14 @@ internal static class TextBoxFaces
     public static bool SameFace(Info info, string family)
         => string.Equals(info.DirectWrite, family, StringComparison.OrdinalIgnoreCase)
            || (!string.IsNullOrEmpty(info.Alias)
-               && string.Equals(info.Alias, family, StringComparison.OrdinalIgnoreCase));
+               && string.Equals(info.Alias, family, StringComparison.OrdinalIgnoreCase))
+           || (info.Face == TextBoxFace.ZhiMang && IsLegacyHandwriting(family));
 
     /// <summary>这一档在「更多…」列表里出现的名字（有本地化名就按它找）。</summary>
     public static string ListNameOf(TextBoxFace face)
     {
+        // 旧「手写」档在列表里已经没有对应行：按回退后的系统字体去找（找不到就从头开始）。
+        if (face == TextBoxFace.ZhiMang) return FallbackFamily;
         var info = Get(face);
         return string.IsNullOrEmpty(info.Alias) ? info.DirectWrite : info.Alias;
     }
@@ -377,37 +465,4 @@ internal static class TextBoxFaces
 
     public static float ClampSpacing(float value)
         => float.IsFinite(value) ? Math.Clamp(value, 0.9f, 2.5f) : DefaultLineSpacing;
-
-    // ---- 包内字体：按需注册给本进程 -------------------------------------
-
-    private const uint FR_PRIVATE = 0x10;
-
-    [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern int AddFontResourceEx(string fileName, uint flags, IntPtr reserved);
-
-    private static readonly HashSet<TextBoxFace> Registered = new();
-    private static readonly object RegisterLock = new();
-
-    /// <summary>包内字体第一次用到时才注册；系统字体是空操作。</summary>
-    public static void EnsureBundled(TextBoxFace face)
-    {
-        if (face != TextBoxFace.ZhiMang) return;
-        lock (RegisterLock)
-        {
-            if (!Registered.Add(face)) return;
-        }
-        try
-        {
-            string path = Path.Combine(AppContext.BaseDirectory,
-                                       "assets", "fonts", "ZhiMangXing.ttf");
-            if (File.Exists(path)) AddFontResourceEx(path, FR_PRIVATE, IntPtr.Zero);
-        }
-        catch
-        {
-            // 注册失败就当没有这一档：绘制会退回系统默认字体，不影响其它功能。
-        }
-    }
-
-    /// <summary>面板要预览所有档位，所以先把包内字体注册好。</summary>
-    public static void EnsureAllBundled() => EnsureBundled(TextBoxFace.ZhiMang);
 }

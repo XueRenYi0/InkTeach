@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using InkLocalization;
 using SkiaSharp;
 using Vortice.Mathematics;
 
@@ -10,7 +11,7 @@ namespace InkEngine;
 /// 一行文字 → 一组 <see cref="StrokeKind.Glyph"/> 轮廓。
 ///
 /// 这是「手写优化」真正落地时的排版层：
-///   · 字体由调用方给（上线用 OFL 的志莽行书 / 漓雨手书等，测试可换任意本地字体）；
+///   · 字体由调用方给（默认走**系统字体**，2026-11-16 不再内嵌手写字体）；
 ///   · 字号按原行框高度起算，太宽就**缩字号重排**，不横向拉伸；
 ///   · 中文、英文、符号逐字回退（主字体缺字时找系统字体），保证“每个学生都认识”；
 ///   · 整行压成**一个** Glyph 对象，保留原行的颜色、位置和撤销粒度。
@@ -23,27 +24,51 @@ public static class GlyphText
     /// <summary>行高 → 字号的经验系数（2026-11-06 楷体调到 1.05，避免压上下行）。</summary>
     public const float SizePerLineHeight = 1.05f;
 
+    private static string FontsDir
+        => Environment.GetFolderPath(Environment.SpecialFolder.Fonts) is { Length: > 0 } d
+            ? d : @"C:\Windows\Fonts";
+
+    private static string FirstFontFile(params string[] names)
+    {
+        string dir = FontsDir;
+        foreach (string name in names)
+        {
+            string p = Path.Combine(dir, name);
+            if (File.Exists(p)) return p;
+        }
+        return null;
+    }
+
+    private static string LatinFontPath
+        => FirstFontFile("segoeui.ttf", "arial.ttf");
+
+    private static string SymbolFontPath
+        => FirstFontFile("seguisym.ttf", "segoeui.ttf", "arial.ttf");
+
     /// <summary>
-    /// 安装包里的默认中文手写字体（OFL 钟齐志莽行书，4MB）。
-    /// 2026-11-11 用户拍板：不再内嵌 25MB 的漓雨手书，只留这一款；
-    /// 老安装目录里如果还有漓雨，就继续用（升级覆盖后自然消失）。
+    /// 当前语言的系统中文（CJK）字体文件。中文 = 楷体 `simkai.ttf`；
+    /// 日文 = Yu Gothic / Meiryo；韩文 = Malgun Gothic；其它语言 = Segoe UI。
+    /// 旧安装目录里残留的 `assets/fonts/*.ttf` 不再使用（升级时由清理步骤删除）。
     /// </summary>
     public static string CjkFontPath
     {
         get
         {
-            string p = Path.Combine(AppContext.BaseDirectory, "assets", "fonts", "ZhiMangXing.ttf");
-            if (File.Exists(p)) return p;
-            // 老安装包 / 调试目录只剩漓雨时，退回它。
-            p = Path.Combine(AppContext.BaseDirectory, "assets", "fonts", "LiyuShoushu.ttf");
-            return File.Exists(p) ? p : null;
+            string code = Loc.CurrentCode;
+            if (code == "zh-CN")
+                return FirstFontFile("simkai.ttf", "msyh.ttc", "simsun.ttc");
+            if (code == "ja")
+                return FirstFontFile("YuGothR.ttc", "meiryo.ttc", "msgothic.ttc", "msyh.ttc");
+            if (code == "ko")
+                return FirstFontFile("malgun.ttf", "gulim.ttc", "msyh.ttc");
+            return LatinFontPath;
         }
     }
 
-    /// <summary>兼容旧调用：默认中文手写字体。</summary>
-    public static string BundledFontPath => CjkFontPath;
+    /// <summary>AI 手写替换用的字体文件 = 系统 CJK 字体（不再有包内字体）。</summary>
+    public static string HandwritingFontPath => CjkFontPath;
 
-    /// <summary>英文用系统 Segoe UI（正常印刷体），中文用楷体，符号用 Segoe UI Symbol。</summary>
+    /// <summary>英文用系统 Segoe UI（正常印刷体），中文用系统楷体，符号用 Segoe UI Symbol。</summary>
     public sealed class Fonts
     {
         public string Cjk;
@@ -52,21 +77,18 @@ public static class GlyphText
 
         public static Fonts Default => new()
         {
-            Cjk = CjkFontPath ?? @"C:\Windows\Fonts\simkai.ttf",
-            Latin = File.Exists(@"C:\Windows\Fonts\segoeui.ttf")
-                ? @"C:\Windows\Fonts\segoeui.ttf" : @"C:\Windows\Fonts\arial.ttf",
-            Symbol = File.Exists(@"C:\Windows\Fonts\seguisym.ttf")
-                ? @"C:\Windows\Fonts\seguisym.ttf" : @"C:\Windows\Fonts\segoeui.ttf",
+            Cjk = CjkFontPath ?? LatinFontPath,
+            Latin = LatinFontPath,
+            Symbol = SymbolFontPath,
         };
     }
 
-    /// <summary>主字体缺字时的系统回退。顺序：雅黑（中文）→ 符号字体。</summary>
+    /// <summary>主字体缺字时的系统回退。顺序：雅黑（中文）→ 宋体 → 符号字体。</summary>
     private static readonly string[] FallbackFonts =
     {
-        @"C:\Windows\Fonts\msyh.ttc",
-        @"C:\Windows\Fonts\msyh.ttf",
-        @"C:\Windows\Fonts\simsun.ttc",
-        @"C:\Windows\Fonts\seguisym.ttf",
+        FirstFontFile("msyh.ttc", "msyh.ttf"),
+        FirstFontFile("simsun.ttc"),
+        FirstFontFile("seguisym.ttf"),
     };
 
     private static readonly Dictionary<string, SKTypeface> TypefaceCache = new();

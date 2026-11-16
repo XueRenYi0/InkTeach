@@ -1,5 +1,6 @@
 using System.IO;
 using InkEngine;
+using Vortice.Mathematics;
 
 namespace InkTeach;
 
@@ -182,5 +183,100 @@ internal sealed partial class App
             File.WriteAllBytes(Path.Combine(dir, "faces.png"), all);
             Console.WriteLine($"出图：{Path.Combine(dir, "faces.png")}（{totalW}×{totalH}）");
         }
+
+        // ---- 旧文档兼容：ZhiMang / 旧家族名 / 缺字体（2026-11-16）----------
+        Console.WriteLine();
+        Console.WriteLine("=== 旧文档字体兼容 ===");
+        string fallback = TextBoxFaces.FallbackFamily;
+        bool listHasNoBundled = true;
+        foreach (var info in TextBoxFaces.Visible)
+            if (info.Face == TextBoxFace.ZhiMang) listHasNoBundled = false;
+
+        var legacyFace = new TextBoxData { Face = TextBoxFace.ZhiMang, FaceName = "" };
+        var legacyName = new TextBoxData { Face = TextBoxFace.Custom, FaceName = "Zhi Mang Xing" };
+        var missingName = new TextBoxData { Face = TextBoxFace.Custom, FaceName = "InkTeach Missing Font 12345" };
+        bool faceOk = TextBoxFaces.FamilyOf(legacyFace) == fallback;
+        bool legacyOk = TextBoxFaces.FamilyOf(legacyName) == fallback;
+        bool missingOk = TextBoxFaces.FamilyOf(missingName) == fallback;
+
+        string handFont = GlyphText.HandwritingFontPath;
+        bool handOk = !string.IsNullOrEmpty(handFont) && File.Exists(handFont);
+        bool notBundled = !string.IsNullOrEmpty(handFont)
+                          && !handFont.Replace('/', '\\')
+                                      .Contains("\\assets\\fonts\\", StringComparison.OrdinalIgnoreCase);
+        Console.WriteLine($"回退家族={fallback}；ZhiMang={faceOk}；旧名={legacyOk}；缺字体={missingOk}；" +
+                          $"列表无内嵌格={listHasNoBundled}");
+        Console.WriteLine($"手写替换字体={handFont}（存在={handOk}，非包内={notBundled}）");
+
+        // 旧文档（Face=ZhiMang）存盘往返后仍能打开、仍走回退。
+        Doc.Clear();
+        Doc.ClearHistory();
+        InsertPlainTextBoxForTest("旧文档：字体档 ZhiMang（原「手写」）\n已回退到系统字体，ABC 123");
+        var oldBox = Doc.Selected.Count == 1 ? Doc.Selected[0] : null;
+        bool roundtrip = false;
+        if (oldBox?.TextBox != null)
+        {
+            oldBox.TextBox.Face = TextBoxFace.ZhiMang;
+            oldBox.TextBox.FaceName = "";
+            oldBox.TextBox.Paper = true;
+            oldBox.TextBox.InvalidateLayout();
+            oldBox.SyncTextBoxBounds();
+            SettleFrames(80);
+
+            try
+            {
+                var doc2 = new InkDocument();
+                InkSerializer.LoadInto(doc2, InkSerializer.Save(Doc));
+                foreach (var st in doc2.Strokes)
+                {
+                    if (st.Kind != StrokeKind.TextBox || st.TextBox == null) continue;
+                    roundtrip = st.TextBox.Face == TextBoxFace.ZhiMang
+                                && TextBoxFaces.FamilyOf(st.TextBox) == fallback;
+                    break;
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("存盘失败：" + ex.Message); }
+
+            // 同一张图里放：旧文档文本框（回退字体）+ AI 手写替换的 Glyph 输出。
+            var b = oldBox.WorldInkBounds;
+            if (!b.IsEmpty)
+            {
+                var gbox = new RectF
+                {
+                    MinX = b.MinX,
+                    MinY = b.MaxY + 24f,
+                    MaxX = b.MaxX,
+                    MaxY = b.MaxY + 24f + MathF.Max(40f, (b.MaxY - b.MinY) * 0.42f),
+                };
+                var g = GlyphText.BuildLine(handFont, "AI 手写替换：永和九年 ABC 123", gbox,
+                                            new Color4(0.12f, 0.30f, 0.80f, 1f));
+                if (g != null) Doc.AppendStroke(g);
+            }
+        }
+        Console.WriteLine($"旧文档往返={roundtrip}");
+
+        bool fallbackShot = false;
+        var region = EditRegion.Of(Doc.Strokes);
+        if (!region.IsEmpty)
+        {
+            region = region.Inflate(28f * DpiScale);
+            int fw = Math.Max(1, (int)MathF.Ceiling(region.MaxX - region.MinX));
+            int fh = Math.Max(1, (int)MathF.Ceiling(region.MaxY - region.MinY));
+            var bgra = _windows.Count > 0
+                ? _windows[0].RenderStrokesToBgra(Doc.Strokes, region, fw, fh)
+                : null;
+            if (bgra != null)
+            {
+                var png = ExportFormats.Encode("font-fallback.png", bgra, fw, fh, 1, out _);
+                File.WriteAllBytes("reports/font-fallback.png", png);
+                fallbackShot = true;
+                Console.WriteLine($"出图：reports/font-fallback.png（{fw}×{fh}）");
+            }
+        }
+
+        bool compatOk = listHasNoBundled && faceOk && legacyOk && missingOk
+                        && handOk && notBundled && roundtrip && fallbackShot;
+        Console.WriteLine(compatOk ? "旧文档兼容：OK" : "旧文档兼容：FAIL");
+        if (!compatOk) ExitCode = 1;
     }
 }
