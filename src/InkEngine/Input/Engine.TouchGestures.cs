@@ -112,10 +112,11 @@ public partial class InkEngine
     /// 返回 false = 按普通写字那条路走（单指小面积）。
     /// </summary>
     private bool TouchDownDispatch(IntPtr hWnd, uint id, float x, float y, float sizePx,
-                                   int contactW, int contactH, out bool stealPointer)
+                                   int contactW, int contactH,
+                                   float screenX, float screenY, out bool stealPointer)
     {
         stealPointer = false;
-        var v = _touch.Down(id, x, y, sizePx, NowMs, DpiScale);
+        var v = _touch.Down(id, x, y, sizePx, NowMs, DpiScale, screenX, screenY);
 
         // 面积只采样、不参与判定；明细见 TouchStats。
         TouchStats.NoteDown(_touch.Count, contactW, contactH, sizePx,
@@ -213,10 +214,10 @@ public partial class InkEngine
     }
 
     /// <summary>触摸触点移动（按当前模式路由）。返回 true = 已经处理完（调用方直接 return）。</summary>
-    private bool TouchMoveDispatch(uint id, float x, float y)
+    private bool TouchMoveDispatch(uint id, float x, float y, float screenX, float screenY)
     {
         if (_touchMode == TouchMode.None) return false;
-        _touch.Move(id, x, y, DpiScale);
+        _touch.Move(id, x, y, DpiScale, screenX, screenY);
 
         switch (_touchMode)
         {
@@ -513,9 +514,12 @@ public partial class InkEngine
 
         if (Doc.Selected.Count == 0)
         {
-            // 捏合判据的起点：两指刚落下的距离 / 当时的相机倍率（选中时不记，走对象缩放）。
-            _docTouch.PinchDist0 = MathF.Max(1f, Vector2.Distance(p.A, p.B));
+            // 捏合判据的起点：两指刚落下的**屏幕距离** / 当时的相机倍率（选中时不记，走对象缩放）。
+            // 屏幕坐标不随相机变，捏合过程里"两根手指的真实间距"只有手指本身在改，
+            // 不会因为相机缩放/平移反过来污染比例（画布坐标会：逐指事件分属不同相机时刻）。
+            _docTouch.PinchDist0 = MathF.Max(1f, Vector2.Distance(p.ScreenA, p.ScreenB));
             _docTouch.PinchZoom0 = ViewScale;
+            _docTouch.StartMidScreen = _docTouch.LastMidScreen = (p.ScreenA + p.ScreenB) * 0.5f;
             return;
         }
 
@@ -542,6 +546,7 @@ public partial class InkEngine
         // **只认钉住的那两根**（2026-10-09）：手掌、杂触点在表里也当没看见。
         if (!_touch.TryPair(_g2IdA, _g2IdB, out var p)) return;
         var mid = (p.A + p.B) * 0.5f;
+        var midScreen = (p.ScreenA + p.ScreenB) * 0.5f;
 
         if (_g2TextBoxScroll)
         {
@@ -582,7 +587,8 @@ public partial class InkEngine
         _g2LastMid = mid;
 
         // 文档：捏合缩放 / 放大后两轴平移（先观察再锁；锁住后这一轮不再换分支）。
-        if (DocTouchGestureMove(p, mid, dx, dy)) return;
+        // **传屏幕中点**：画布中点会随相机变化，捏合/平移必须用相机无关的屏幕量。
+        if (DocTouchGestureMove(p, midScreen)) return;
 
         if (_g2Axis == 0)
         {

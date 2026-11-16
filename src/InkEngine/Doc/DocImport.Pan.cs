@@ -201,6 +201,10 @@ public partial class InkEngine
         public float PinchDist0;
         /// <summary>锁定时的相机倍率。</summary>
         public float PinchZoom0 = 1f;
+        /// <summary>两指落下时的**屏幕**中点（平移方向锁的起点）。</summary>
+        public Vector2 StartMidScreen;
+        /// <summary>上一拍的**屏幕**中点（平移增量；绝不能拿画布中点，相机会反过来污染它）。</summary>
+        public Vector2 LastMidScreen;
         /// <summary>距离变化连续超过门槛的拍数（防"两个触点事件先后到达"的假捏合）。</summary>
         public int PinchHot;
         /// <summary>这一次按住空格开的手掌（松手才收；原本就是手掌的不动它）。</summary>
@@ -269,30 +273,48 @@ public partial class InkEngine
     /// 双指手势里的**文档分支**：捏合缩放 / 放大后两轴平移（2026-11-16）。
     ///
     /// 判据（参考 Acrobat / Edge + ScaleGestureDetector 的"先观察再锁"）：
-    ///   ① 两指距离变化 &gt; <see cref="TouchGestures.PinchRatio"/>（且至少 10 逻辑像素）→
-    ///      锁**捏合缩放**（以两指中点为锚；距离没变的横向滑动不会被认成缩放）；
-    ///   ② 距离没变、放大到 &gt;100% 且位移过了方向锁 → 锁**两轴平移**（不再翻页）；
+    ///   ① 两指**屏幕**距离变化 &gt; <see cref="TouchGestures.PinchRatio"/>（且至少 10 逻辑像素）→
+    ///      锁**捏合缩放**（以两指屏幕中点为锚；距离没变的横向滑动不会被认成缩放）；
+    ///   ② 距离没变、放大到 &gt;100% 且屏幕中点位移过了方向锁 → 锁**两轴平移**（不再翻页）；
     ///   ③ 距离没变、100% 下 → 交给原来的方向锁（横 = 翻页、纵 = 漫游）。
     /// 返回 true = 这一拍已经被文档分支消费（不再往下走翻页 / 漫游）。
+    ///
+    /// ⚠ **只用屏幕坐标**：触点表里每根手指的屏幕点由系统事件直接给，而画布点是
+    /// "屏幕点用当时的相机换算"来的——系统逐指发 WM_POINTERUPDATE 时，只有被更新的
+    /// 那根换成了新相机，另一根还是旧相机时刻的值；两指表观距离会随平移/缩放乱变，
+    /// 把平移误锁成捏合（2026-11-16 200% 实测：横拖 240 → 相机 ΔX +363、倍率 2.0→1.7）。
     ///
     /// ⚠ 这一轮手势的**状态**（<see cref="DocTouchState"/>）声明在本文件上面；手势文件的
     /// 路由只读它 —— 那个文件已经贴着 800 行上限（ADR-002），再塞进来就要拆文件了。
     /// </summary>
-    private bool DocTouchGestureMove(in TouchGestures.PairView p, in Vector2 mid, float dx, float dy)
+    private bool DocTouchGestureMove(in TouchGestures.PairView p, in Vector2 midScreen)
     {
         if (!DocPinchPanEligible) return false;
-        float d1 = Vector2.Distance(p.A, p.B);
+        float d1 = Vector2.Distance(p.ScreenA, p.ScreenB);
+        // 平移增量 = 两指**屏幕中点**的位移（1:1 对应手指移动，和相机倍率无关）。
+        float sdx = midScreen.X - _docTouch.LastMidScreen.X;
+        float sdy = midScreen.Y - _docTouch.LastMidScreen.Y;
+        _docTouch.LastMidScreen = midScreen;
 
         if (!_docTouch.Pinch && !_docTouch.Pan && _g2Axis == 0)
         {
             // 先看**距离**：变化超过门槛（12% 且至少 10 逻辑像素）→ 认捏合。
             // 门槛要**连续两拍**都过（两个触点的事件先后到达会把距离骗大一行，下一拍又回去）；
             // 变化特别大（> 2 倍门槛）则第一拍就锁，快捏合不拖泥带水。
+            //
+            // **中点位移必须明显小于距离变化**才算捏合：双指平移时系统逐指上报，
+            // 一根先动、一根后动会让"距离"暂涨 60px，中点同时也走了 60px；只看距离
+            // 会把平移误锁成捏合（200% 实测相机跳 474px、倍率 2.0→1.6）。
             float need = MathF.Max(TouchGestures.PinchRatio * _docTouch.PinchDist0,
                                    TouchGestures.PinchMinLogical * DpiScale);
             float change = _docTouch.PinchDist0 > 1f ? MathF.Abs(d1 - _docTouch.PinchDist0) : 0f;
-            _docTouch.PinchHot = change > need ? _docTouch.PinchHot + 1 : 0;
-            if (_docTouch.PinchDist0 > 1f && (_docTouch.PinchHot >= 2 || change > need * 2f))
+            float midMove = (midScreen - _docTouch.StartMidScreen).Length();
+            bool spanDominates = change > need
+                                 && midMove <= change * 0.35f;
+            _docTouch.PinchHot = spanDominates ? _docTouch.PinchHot + 1 : 0;
+            if (_docTouch.PinchDist0 > 1f
+                && spanDominates
+                && (_docTouch.PinchHot >= 2 || change > need * 2f))
             {
                 _docTouch.Pinch = true;                    // 从锁定这一刻起连续缩放（首帧不跳）
                 Console.WriteLine($"触摸：双指捏合 → 文档缩放（{DocZoomPercentText} 起，d={d1:F0}）");
@@ -300,21 +322,27 @@ public partial class InkEngine
                 _docTouch.PinchZoom0 = ViewScale;
             }
             else if (ViewScale > 1.0005f
-                     && (mid - _g2StartMid).Length() >= TouchGestures.DirLockLogical * DpiScale)
+                     && midMove >= TouchGestures.DirLockLogical * DpiScale)
             {
+                // 锁定前的起步位移要补上：方向锁 10 逻辑像素，只按"这一拍增量"走
+                // 会丢掉起步的几十像素，触摸拖页就比鼠标"死"。
                 _docTouch.Pan = true;                      // 放大后两指拖动 = 平移画布（两轴），不翻页
+                DocPanByTouch(midScreen.X - _docTouch.StartMidScreen.X,
+                              midScreen.Y - _docTouch.StartMidScreen.Y);
                 Console.WriteLine("触摸：放大后双指拖动 → 平移画布");
+                return true;
             }
         }
 
         if (_docTouch.Pinch)
         {
-            DocPinchZoomFromTouch(_docTouch.PinchZoom0, _docTouch.PinchDist0, d1, mid.X, mid.Y);
+            DocPinchZoomFromTouch(_docTouch.PinchZoom0, _docTouch.PinchDist0, d1,
+                                  midScreen.X, midScreen.Y);
             return true;
         }
         if (_docTouch.Pan)
         {
-            DocPanByTouch(dx, dy);
+            DocPanByTouch(sdx, sdy);
             return true;
         }
         return false;

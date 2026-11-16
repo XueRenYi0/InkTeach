@@ -855,6 +855,117 @@ internal sealed partial class App
                   $"页 {page200} → {BarPageNow}，相机 X {offX0:F0} → {ViewOffsetX:F0}，"
                   + $"Y {offY0:F0} → {ViewOffsetY:F0}，平移分支 = {pan200}");
 
+            // ③b 50% → 100%：从 50% 往上捏合**不许闪 / 不许跳到 300%**（2026-11-16 用户反馈）。
+            // 两指对称张开，屏幕距离 240 → ~510px（≈2.1 倍）；判据落在"倍率曲线最高点 + 落点 + 锚点"。
+            TouchResetForTest();
+            ZoomTestResetCamera();
+            SetDocZoomFromUi(0.5f);
+            SettleFrames(180);
+            float z50 = ViewScale;
+            float a50x = ScreenToCanvasX(cx), a50y = ScreenToCanvasY(cy);
+            int page50 = BarPageNow;
+            float zPeak = z50;
+            Console.WriteLine($"      [探针] ③b 50% 起手：倍率 = {z50:F2}，锚点 = ({a50x:F1},{a50y:F1})，页 = {page50}");
+            Touch2Down(cx - 120, cy, cx + 120, cy);
+            SettleFrames(60);
+            int spread = 0;
+            string shot50 = "未保存";
+            for (int i = 1; i <= 30; i++)
+            {
+                spread = i;
+                Touch2Move(cx - 120 - i * 10, cy, cx + 120 + i * 10, cy);
+                SettleFrames(30);
+                zPeak = MathF.Max(zPeak, ViewScale);
+                if (i == 4)
+                {
+                    // 50% 往上捏合的**中途**：出图看页面有没有闪 / 百分比有没有乱跳。
+                    try
+                    {
+                        System.IO.Directory.CreateDirectory("reports");
+                        using var bmp50 = new System.Drawing.Bitmap((int)_virtualW, (int)_virtualH);
+                        using (var g50 = System.Drawing.Graphics.FromImage(bmp50))
+                            g50.CopyFromScreen((int)_virtualX, (int)_virtualY, 0, 0, bmp50.Size);
+                        bmp50.Save("reports/doc-pinch-50.png", System.Drawing.Imaging.ImageFormat.Png);
+                        shot50 = "已保存";
+                    }
+                    catch (Exception ex) { Console.WriteLine($"      截图失败（不影响判定）：{ex.Message}"); }
+                    Console.WriteLine($"      出图：reports/doc-pinch-50.png（{shot50}，捏合中 {ViewScale:F2}）");
+                }
+                if (ViewScale >= 0.99f) break;
+            }
+            Touch2Up(cx - 120 - spread * 10, cy, cx + 120 + spread * 10, cy);
+            SettleFrames(250);
+            float z100 = ViewScale;
+            float a100x = ScreenToCanvasX(cx), a100y = ScreenToCanvasY(cy);
+            Console.WriteLine($"      [探针] ③b 张开 {spread} 步：倍率 {z50:F2} → {z100:F2}"
+                              + $"（过程中最高 {zPeak:F2}），页 = {BarPageNow}");
+            Check("文档 50%→100%：捏合放大不闪不跳（≤1.25，落点 0.8~1.2，不翻页）",
+                  z100 >= 0.8f && z100 <= 1.2f && zPeak <= 1.25f && BarPageNow == page50,
+                  $"倍率 {z50:F2} → {z100:F2}（最高 {zPeak:F2}），页 {page50} → {BarPageNow}");
+            Check("文档 50%→100%：锚点（视口中心）画布点不动 ≤2px",
+                  MathF.Abs(a100x - a50x) <= 2f && MathF.Abs(a100y - a50y) <= 2f,
+                  $"锚点 ({a50x:F1},{a50y:F1}) → ({a100x:F1},{a100y:F1})");
+
+            // ③c 100% → 50%：往里捏合，倍率只许一路降到 50% 并**夹住**（不穿底、不回跳）。
+            TouchResetForTest();
+            ZoomTestResetCamera();
+            SettleFrames(150);
+            float zInMin = ViewScale;
+            Touch2Down(cx - 120, cy, cx + 120, cy);
+            SettleFrames(60);
+            int pinchIn = 0;
+            for (int i = 1; i <= 12; i++)
+            {
+                pinchIn = i;
+                Touch2Move(cx - 120 + i * 10, cy, cx + 120 - i * 10, cy);
+                SettleFrames(30);
+                zInMin = MathF.Min(zInMin, ViewScale);
+                if (ViewScale <= 0.5005f && i >= 9) break;
+            }
+            // 再往里挤两下：已经在 50%，倍率必须一动不动（不是"还能再小一点"）。
+            Touch2Move(cx - 15, cy, cx + 15, cy);
+            SettleFrames(40);
+            Touch2Move(cx - 10, cy, cx + 10, cy);
+            SettleFrames(40);
+            float zClamp = ViewScale;
+            Touch2Up(cx - 10, cy, cx + 10, cy);
+            SettleFrames(250);
+            Console.WriteLine($"      [探针] ③c 捏合 {pinchIn} 步：倍率 {zInMin:F3} → {zClamp:F3}，页 = {BarPageNow}");
+            // ⚠ 不断言 BarPageNow：它是"视口中心所在页"，缩到 50% 时 ClampOffset 会把内容
+            // 推到底部、页码自然换一页——那是相机夹取，不是翻页。
+            Check("文档 100%→50%：捏合缩小一路降到 50% 并夹住（不穿底、不回跳）",
+                  zClamp >= 0.4995f && zClamp <= 0.5005f && zInMin >= 0.4995f,
+                  $"倍率最低 {zInMin:F3}，夹住后 {zClamp:F3}");
+
+            // ③d 200%：两指平移的**屏幕位移必须 1:1 落到相机**（不是画布位移 = 一半）。
+            // 两指距离恒定、一起左移 240 屏幕像素；相机 X 的增量应该 ≈ −240（±15%）。
+            TouchResetForTest();
+            ZoomTestResetCamera();
+            SetDocZoomFromUi(2f);
+            SettleFrames(150);
+            int pagePan = BarPageNow;
+            float panX0 = ViewOffsetX, panY0 = ViewOffsetY;
+            float zoomPan0 = ViewScale;
+            Touch2Down(cx - 120, cy - 200, cx + 120, cy - 200);
+            SettleFrames(60);
+            for (int i = 1; i <= 4; i++)
+            {
+                Touch2Move(cx - 120 - i * 25, cy - 200, cx + 120 - i * 25, cy - 200);
+                SettleFrames(30);
+            }
+            bool pan200b = TouchDocPanForTest, pinch200b = TouchDocPinchForTest;
+            Touch2Up(cx - 120 - 100, cy - 200, cx + 120 - 100, cy - 200);
+            SettleFrames(250);
+            float panDX = ViewOffsetX - panX0, panDY = ViewOffsetY - panY0;
+            Console.WriteLine($"      [探针] ③d 200% 拖 −100：相机 ΔX = {panDX:F1}，ΔY = {panDY:F1}，"
+                              + $"平移 = {pan200b}，捏合 = {pinch200b}，倍率 = {ViewScale:F2}");
+            Check("文档 200%：双指平移 = 屏幕位移 1:1（ΔX ≈ −100，不是画布的一半）",
+                  pan200b && !pinch200b && BarPageNow == pagePan
+                  && MathF.Abs(panDX + 100f) <= 15f && MathF.Abs(panDY) <= 2f
+                  && MathF.Abs(ViewScale - zoomPan0) <= 0.001f,
+                  $"相机 ΔX {panDX:F1}（期望 −100 ±15），ΔY {panDY:F1}，"
+                  + $"倍率 {zoomPan0:F2} → {ViewScale:F2}，平移 = {pan200b}，捏合 = {pinch200b}");
+
             // ④ 有选中：捏合不接管文档（走原来的"缩放选中对象"）。
             TouchResetForTest();
             ZoomTestResetCamera();

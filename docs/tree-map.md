@@ -50,7 +50,7 @@
     **InkEngine/Doc/**
       - `DocImageSource.cs` 292 行
       - `DocImport.cs` 793 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
-      - `DocImport.Pan.cs` 478 行 — 文档「手掌」拖页 + 双指捏合缩放 / 放大后平移 / 触控板捏合缩放（文档相机）。
+      - `DocImport.Pan.cs` 506 行 — 文档「手掌」拖页 + 双指捏合缩放 / 放大后平移 / 触控板捏合缩放（文档相机）。
       - `DocMemory.cs` 86 行
       - `DocPages.cs` 602 行 — 文档页底层：页配方、惰性生成、视口窗口回收；缩放只记相机倍率（页位图恒 1×）。
       - `DocPatch.cs` 800 行 — PDF 页的**视口高清补丁**：1× 整页底图之上，只为可见区域渲一块设备分辨率小图（单 worker、单在飞、落稳 120ms）。
@@ -75,8 +75,8 @@
       - `DwellAssist.cs` 122 行
       - `Engine.Capture.cs` 374 行 — 截图状态、确认/取消、手柄与读数。
       - `Engine.Clipboard.cs` 506 行
-      - `Engine.Input.cs` 2,028 行 — 指针输入、停顿成型、动态橡皮。
-      - `Engine.TouchGestures.cs` 786 行 — 触摸手势：单指/双指/三指/长按/惯性。
+      - `Engine.Input.cs` 2,029 行 — 指针输入、停顿成型、动态橡皮。
+      - `Engine.TouchGestures.cs` 792 行 — 触摸手势：单指/双指/三指/长按/惯性。
       - `GoogleInkSlidingWindow.cs` 670 行 — Google Ink 滑动窗口输入。
       - `InkModel.cs` 285 行
       - `InkModelProbe.cs` 278 行
@@ -90,7 +90,7 @@
       - `SmoothProbe.cs` 313 行
       - `StrokeMotion.cs` 837 行 — 笔迹运动模型对照台（M0–M7）。
       - `StrokeSmoothing.cs` 523 行
-      - `Touch.cs` 343 行
+      - `Touch.cs` 362 行
       - `TouchStats.cs` 135 行
       - `WpfInkFit.cs` 599 行
 
@@ -298,7 +298,7 @@
         - `TextStyleShow.cs` 125 行
         - `TimerDocTest.cs` 263 行 — 计时器 / 点名 × 文档 E2E（PDF 不被穿透吞掉 / 关文档补穿透）。
         - `ToastTest.cs` 43 行
-        - `Touch.cs` 1,671 行 — 触摸手势 E2E。
+        - `Touch.cs` 1,782 行 — 触摸手势 E2E。
         - `Zoom.cs` 797 行 — 文档缩放 E2E（阶段 2：渲染核心 + 引擎缩放 API）。
         - `ZoomSelection.cs` 211 行 — 文档缩放 E2E（选中家具：手柄 / 操作条 / 面板 / 旋转柄在缩放下的屏幕恒定性）。
         - `ZoomShots.cs` 776 行 — 文档缩放 E2E：出图（50/100/200/300 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。

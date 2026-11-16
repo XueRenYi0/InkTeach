@@ -343,7 +343,8 @@ public partial class InkEngine
         int touchW = 0, touchH = 0;
         float touchSize = ptype == Native.PT_TOUCH ? ReadTouchSize(id, out touchW, out touchH) : 0f;
         if (ptype == Native.PT_TOUCH && (!_drawing || _activePointerType == Native.PT_TOUCH)
-            && TouchDownDispatch(hWnd, id, x, y, touchSize, touchW, touchH, out bool touchSteal))
+            && TouchDownDispatch(hWnd, id, x, y, touchSize, touchW, touchH,
+                                 screenX, screenY, out bool touchSteal))
         {
             if (touchSteal)
             {
@@ -1435,7 +1436,7 @@ public partial class InkEngine
 
         // 触摸手势的移动（8.4.0）：**排在"同一指针"那道判定之前**——
         // 双指手势里第二根手指的移动本来会被它挡掉（id != _activePointer）。
-        if (_touchMode != TouchMode.None && TouchMoveDispatch(id, x, y))
+        if (_touchMode != TouchMode.None && TouchMoveDispatch(id, x, y, screenX, screenY))
         {
             ApplyCursor();
             return;

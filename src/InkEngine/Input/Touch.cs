@@ -108,6 +108,9 @@ internal sealed class TouchGestures
     {
         public uint Id;
         public Vector2 Pos, Down;
+        // 屏幕坐标（和 Pos 同时记）：相机变化时**只有被系统更新到的那根**会被重算，
+        // 若捏合/平移拿画布坐标算，两根手指就分属不同相机时刻，表观距离会抖（见 DocTouchGestureMove）。
+        public Vector2 Screen, ScreenDown;
         public float Size;          // 接触面积（长边，物理像素；0 = 屏不报）——**只给诊断用**
         public double DownMs;
         public bool InWindow;       // 落下时在"一起落下"窗口里
@@ -131,8 +134,11 @@ internal sealed class TouchGestures
     public int LastContactCount { get; private set; }    // 诊断：这次按下后的触点数
 
     public readonly record struct ContactView(uint Id, Vector2 Pos, Vector2 Down,
-                                              float Size, float Path, bool Moved);
-    public readonly record struct PairView(uint IdA, Vector2 A, uint IdB, Vector2 B);
+                                              float Size, float Path, bool Moved,
+                                              Vector2 Screen, Vector2 ScreenDown);
+    /// <summary>两指数据。`A/B` = 画布坐标，`ScreenA/ScreenB` = 屏幕坐标（手势数学用后者）。</summary>
+    public readonly record struct PairView(uint IdA, Vector2 A, uint IdB, Vector2 B,
+                                          Vector2 ScreenA, Vector2 ScreenB);
 
     /// <summary>当前触点（只读；Engine 拿它算双指增量）。</summary>
     public IReadOnlyList<ContactView> Views
@@ -141,7 +147,8 @@ internal sealed class TouchGestures
         {
             var list = new List<ContactView>(_c.Count);
             foreach (var k in _c)
-                list.Add(new ContactView(k.Id, k.Pos, k.Down, k.Size, k.Path, k.Moved));
+                list.Add(new ContactView(k.Id, k.Pos, k.Down, k.Size, k.Path, k.Moved,
+                                         k.Screen, k.ScreenDown));
             return list;
         }
     }
@@ -174,7 +181,8 @@ internal sealed class TouchGestures
     {
         pair = default;
         if (_c.Count < 2) return false;
-        pair = new PairView(_c[0].Id, _c[0].Pos, _c[1].Id, _c[1].Pos);
+        pair = new PairView(_c[0].Id, _c[0].Pos, _c[1].Id, _c[1].Pos,
+                            _c[0].Screen, _c[1].Screen);
         return true;
     }
 
@@ -195,15 +203,20 @@ internal sealed class TouchGestures
             else if (k.Id == idB) b = k;
         }
         if (a == null || b == null) return false;
-        pair = new PairView(a.Id, a.Pos, b.Id, b.Pos);
+        pair = new PairView(a.Id, a.Pos, b.Id, b.Pos, a.Screen, b.Screen);
         return true;
     }
 
     /// <summary>
     /// 触点落下 → 定角色（"干净开始"规则）。`sizePx` 只用来给诊断记数，**不参与判定**。
+    /// `screenX/screenY` = 相机换算**之前**的屏幕点；双指手势的距离/中点必须用它
+    /// （不传时退回画布坐标，只给"直接问判定"的自检用）。
     /// </summary>
-    public TouchVerdict Down(uint id, float x, float y, float sizePx, double nowMs, float dpi)
+    public TouchVerdict Down(uint id, float x, float y, float sizePx, double nowMs, float dpi,
+                             float screenX = float.NaN, float screenY = float.NaN)
     {
+        if (float.IsNaN(screenX)) screenX = x;
+        if (float.IsNaN(screenY)) screenY = y;
         _c.RemoveAll(k => k.Id == id);          // 防"TouchUp 丢了 → 永远多一根手指"
         if (_c.Count == 0) _gestureStartMs = nowMs;
 
@@ -211,6 +224,7 @@ internal sealed class TouchGestures
         var c = new Contact
         {
             Id = id, Pos = new Vector2(x, y), Down = new Vector2(x, y),
+            Screen = new Vector2(screenX, screenY), ScreenDown = new Vector2(screenX, screenY),
             Size = sizePx, DownMs = nowMs, InWindow = inWindow,
         };
         _c.Add(c);
@@ -275,14 +289,19 @@ internal sealed class TouchGestures
     private TouchVerdict SingleVerdict()
         => (Enabled && SingleFingerRoam) ? TouchVerdict.Roam : TouchVerdict.Write;
 
-    /// <summary>触点移动：更新路径 / 位置。</summary>
-    public void Move(uint id, float x, float y, float dpi)
+    /// <summary>触点移动：更新路径 / 位置（画布 + 屏幕两套）。</summary>
+    public void Move(uint id, float x, float y, float dpi,
+                     float screenX = float.NaN, float screenY = float.NaN)
     {
         var c = _c.Find(k => k.Id == id);
         if (c == null) return;
         float d = Vector2.Distance(new Vector2(x, y), c.Pos);
         c.Path += d;
         c.Pos = new Vector2(x, y);
+        if (!float.IsNaN(screenX) && !float.IsNaN(screenY))
+            c.Screen = new Vector2(screenX, screenY);
+        else
+            c.Screen = new Vector2(x, y);       // 没有屏幕值时退回画布（只在 100% 等价）
         if (!c.Moved && c.Path > CleanMoveLogical * dpi) c.Moved = true;
     }
 
