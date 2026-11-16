@@ -300,9 +300,13 @@ internal static class Pdfium
     /// **不用 `FPDF_RenderPageBitmapWithMatrix`**：矩阵版对裁剪/旋转/表单的行为
     /// 和整页版不是一套（缩放过 1 倍以上时字重会变），这里要和底图逐像素同一套渲染路径。
     /// 区域渲染和整页渲染在重叠区必须逐像素一致（`--zoomtest` 有对照断言）。
+    ///
+    /// <paramref name="reuse"/>：调用方自带的缓冲（高清补丁的单槽复用，2026-11-16）。
+    /// 够长就**原地写**并原样返回同一个数组，不够长 / 为 null 才新分配——
+    /// 像素输出与"每次新分配"逐字节相同（白底铺满 rw×rh，再渲这一块）。
     /// </summary>
     internal static unsafe byte[] RenderRegion(PdfiumDoc owner, int index, int fullW, int fullH,
-                                               int rx, int ry, int rw, int rh)
+                                               int rx, int ry, int rw, int rh, byte[] reuse = null)
     {
         if (owner == null || fullW <= 0 || fullH <= 0 || rw <= 0 || rh <= 0) return null;
         if (rx < 0) rx = 0;
@@ -318,7 +322,9 @@ internal static class Pdfium
         {
             IntPtr doc = owner.Handle;      // 锁里再查（同上：补丁 worker 和关文档是两条线程）
             if (doc == IntPtr.Zero) return null;
-            var buf = new byte[(int)bytes];
+            // 复用的那块可能比这次需要的**大**（上一次是别的大小）：长度够就直接用，
+            // 只写前 rw×rh 那块，多出来的尾巴不读也不写。
+            var buf = reuse != null && reuse.LongLength >= bytes ? reuse : new byte[(int)bytes];
 
             fixed (byte* p = buf)
             {
@@ -389,9 +395,11 @@ internal sealed class PdfiumDoc : IDisposable
     /// <summary>
     /// 渲第 <paramref name="index"/> 页的一块区域（设备像素；见 <see cref="Pdfium.RenderRegion"/>）。
     /// 高清补丁只走这一条——整页 200% 重渲是 143MB，而这里通常只有一块屏。
+    /// <paramref name="reuse"/> = 调用方自带的缓冲（够长就原地写，见同一方法的说明）。
     /// </summary>
-    public byte[] RenderRegion(int index, int fullW, int fullH, int rx, int ry, int rw, int rh)
-        => Pdfium.RenderRegion(this, index, fullW, fullH, rx, ry, rw, rh);
+    public byte[] RenderRegion(int index, int fullW, int fullH, int rx, int ry, int rw, int rh,
+                               byte[] reuse = null)
+        => Pdfium.RenderRegion(this, index, fullW, fullH, rx, ry, rw, rh, reuse);
 
     /// <summary>
     /// 关文档。**锁里把句柄摘掉、再在同一把锁里关**：

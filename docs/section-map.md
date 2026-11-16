@@ -397,7 +397,7 @@
 | 334 | 视口窗口：生成与回收 |
 | 545 | 查询（翻页 / 相机范围 / 渲染） |
 
-## src/InkEngine/Doc/DocPatch.cs（660 行）
+## src/InkEngine/Doc/DocPatch.cs（730 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -407,11 +407,11 @@
 
 | 行 | 段落 |
 | --- | --- |
-| 130 | 查询 |
-| 196 | 倍率 / 让开 / 关闭 |
-| 317 | 每帧同步（UI 线程） |
-| 555 | 后台渲染线程 |
-| 631 | 几何小工具 |
+| 150 | 查询 |
+| 216 | 倍率 / 让开 / 关闭 |
+| 338 | 每帧同步（UI 线程） |
+| 576 | 后台渲染线程 |
+| 701 | 几何小工具 |
 
 ## src/InkEngine/Export/Export.cs（1,178 行）
 
@@ -1156,21 +1156,21 @@
 | 2691 | ⑥ 存档：v9 往返 + 真·v8 老文件 |
 | 3113 | ⑥ 运行日志（2026-10-16 用户定） |
 
-## src/InkTeach/SelfTests/E2E/DocMem.cs（634 行）
+## src/InkTeach/SelfTests/E2E/DocMem.cs（696 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 17 | `internal sealed partial class App` |
 | 24 | `private sealed class DocMemSample` |
-| 54 | `private sealed class DocMemPeakSampler : IDisposable` |
+| 55 | `private sealed class DocMemPeakSampler : IDisposable` |
 
 | 行 | 段落 |
 | --- | --- |
 | 19 | 数据结构 |
-| 115 | 主流程 |
-| 266 | 读数 |
-| 388 | 报告 |
-| 617 | 小工具 |
+| 116 | 主流程 |
+| 267 | 读数 |
+| 391 | 报告 |
+| 679 | 小工具 |
 
 ## src/InkTeach/SelfTests/E2E/Documents.cs（1,463 行）
 
@@ -1669,11 +1669,22 @@
 | 1226 | ④ 第二根手指按下：正在写的那一笔不许被换掉 |
 | 1251 | 收尾：两根一起抬，交进文档 |
 
-## src/InkTeach/SelfTests/E2E/Zoom.cs（771 行）
+## src/InkTeach/SelfTests/E2E/Zoom.cs（772 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 15 | `internal sealed partial class App` |
+
+## src/InkTeach/SelfTests/E2E/ZoomShots.cs（647 行）
+
+| 行 | 顶层类型 |
+| --- | --- |
+| 14 | `internal sealed partial class App` |
+
+| 行 | 段落 |
+| --- | --- |
+| 222 | J 组：高清补丁（PDF >100% 的可见区设备分辨率小图） |
+| 468 | J2 组：驱动窗口 / 换倍率不闪 / 渲到一半关文档（2026-11-16 评审 P0/P1） |
 
 ## src/InkUi/Ai/FullUi.ApiSettings.cs（757 行）
 
@@ -1809,4 +1820,4 @@
 
 ---
 
-共 84 个文件。重跑：`powershell -ExecutionPolicy Bypass -File tools/gen-section-map.ps1`
+共 85 个文件。重跑：`powershell -ExecutionPolicy Bypass -File tools/gen-section-map.ps1`

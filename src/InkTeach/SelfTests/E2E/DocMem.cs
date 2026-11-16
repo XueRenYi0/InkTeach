@@ -37,6 +37,7 @@ internal sealed partial class App
         public int PatchCount;
         public double PatchMb;
         public float PatchScale = 1f;
+        public int PatchReuse;
         public string Spec = "n/a";
         public int TileCount, TileVisible, TileBudget, TileTexture;
         public double TileMb;
@@ -283,6 +284,7 @@ internal sealed partial class App
             + $"  GPU={DocMemMb(s.GpuLocalMb),7}+{DocMemMb(s.GpuNonLocalMb),6}"
             + $"  Image={DocMemMb(s.ImageMb),7}  页={s.Pages}/{DocMemMb(s.PageMb)}MB(CPU{DocMemMb(s.CpuPageMb)})"
             + $"  补丁={s.PatchCount}块/{DocMemMb(s.PatchMb)}MB@{s.PatchScale:F2}"
+            + $"  缓冲复用={s.PatchReuse}"
             + $"  位图={s.BmpW}×{s.BmpH}"
             + $"  分块={s.TileCount}(可见{s.TileVisible})×{s.TileTexture}²@{s.TileScale:F2}={DocMemMb(s.TileMb)}MB"
             + $"  峰值 WS={DocMemMb(s.PeakWsMb)}/私有={DocMemMb(s.PeakPrivMb)}");
@@ -325,6 +327,7 @@ internal sealed partial class App
         s.PatchCount = DocPatch?.PatchCount ?? 0;
         s.PatchMb = (DocPatch?.ResidentBytes ?? 0) / 1048576.0;   // 高清补丁单独报
         s.PatchScale = DocPatch?.Scale ?? 1f;
+        s.PatchReuse = DocPatch?.PatchBufferReuseCount ?? 0;
 
         int idx = Math.Clamp(BarPageNow - 1, 0, Math.Max(0, DocView.Count - 1));
         var page = DocView.At(idx);
@@ -501,6 +504,55 @@ internal sealed partial class App
           .AppendLine(" | n/a | n/a | n/a | n/a | n/a | n/a | n/a |");
         DocMemAppendSummaryRow(sb, "200% 回收后（GC+Trim）", trim200);
         sb.AppendLine();
+        DocMemAppendCycleReturn(sb, rows);
+    }
+
+    /// <summary>
+    /// 回落判据（2026-11-16 内存抖动修复的验收口径）：第 1/2/3 轮回 100% 之后的**私有字节**
+    /// 不许单调上涨。以前每轮新分配一块补丁缓冲（~25MB 的 LOH 不回收），一轮私有字节 +40~50MB；
+    /// 现在单槽复用，末轮 100% 应该和首轮基本一样（允许 ≤20MB 的碎片 / 驱动缓存）。
+    /// </summary>
+    private static void DocMemAppendCycleReturn(StringBuilder sb, List<DocMemSample> rows)
+    {
+        var c1 = DocMemFind(rows, "c1 100% settle");
+        var c2 = DocMemFind(rows, "c2 100% settle");
+        var c3 = DocMemFind(rows, "c3 100% settle");
+        if (c1 == null || c3 == null) return;
+
+        double growth = c3.PrivMb - c1.PrivMb;
+        bool pass = !double.IsNaN(growth) && growth <= 20.0;
+
+        sb.AppendLine("### 每轮回 100% 的私有字节（不许单调上涨）");
+        sb.AppendLine();
+        sb.AppendLine("| 轮次 | 私有 | WS | LOH | ImageData | 补丁 | 补丁缓冲复用 |");
+        sb.AppendLine("| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
+        DocMemAppendCycleRow(sb, "c1", c1);
+        DocMemAppendCycleRow(sb, "c2", c2);
+        DocMemAppendCycleRow(sb, "c3", c3);
+        sb.AppendLine();
+        sb.AppendLine(pass
+            ? $"- **PASS**：末轮比首轮 {growth:+0.0;-0.0}MB（≤20MB），补丁缓冲复用 {c3.PatchReuse} 次"
+              + " —— 池子生效，没有每轮新增常驻。"
+            : $"- **FAIL**：末轮比首轮 {growth:+0.0;-0.0}MB（>20MB），仍有每轮新增常驻；"
+              + $"先看 `补丁缓冲复用`（{c3.PatchReuse}）是否在涨，再看 LOH / GPU 各自涨了多少。");
+        sb.AppendLine();
+    }
+
+    private static void DocMemAppendCycleRow(StringBuilder sb, string name, DocMemSample s)
+    {
+        if (s == null)
+        {
+            sb.AppendLine($"| {name} | n/a | n/a | n/a | n/a | n/a | n/a |");
+            return;
+        }
+        sb.Append("| ").Append(name)
+          .Append(" | ").Append(DocMemMb(s.PrivMb))
+          .Append(" | ").Append(DocMemMb(s.WsMb))
+          .Append(" | ").Append(DocMemMb(s.LohMb))
+          .Append(" | ").Append(DocMemMb(s.ImageMb))
+          .Append(" | ").Append(s.PatchCount + "块/" + DocMemMb(s.PatchMb) + "MB")
+          .Append(" | ").Append(s.PatchReuse)
+          .AppendLine(" |");
     }
 
     private static void DocMemAppendSummaryRow(StringBuilder sb, string name, DocMemSample s)
@@ -537,6 +589,10 @@ internal sealed partial class App
             + "底图恒 1×（`页字节`），补丁是一块设备分辨率小图（≈ 一屏，与倍率无关）。"
             + "200% 时应该是「底图不变 + 补丁 ≈ 30MB 级」，不再是整页 2×（本机约 143MB）。"
             + "100% 时补丁为 0——绘制路径与以前一致。");
+        sb.AppendLine("- **缓冲复用**：补丁的 `byte[]`（一块屏大小）在**上传 GPU 后**会还进 `DocPatchCache` 的"
+            + "**单槽**，下一次渲补丁原地复用（`缓冲复用` 计数涨 = 命中，没有新分配）。"
+            + "所以 100% 稳态的 LOH 里常驻**一块**是有意的：一块常驻换掉「每轮新分配一块 LOH」"
+            + "（2026-11-16 内存抖动修复；判据看下面「每轮回 100%」那张表）。");
         sb.AppendLine("- **页倍率**：现在恒为 1.00（只作诊断口径）。看到 2.00 说明有别的路径又去整页重渲了。");
         sb.AppendLine("- **LOH**：页位图是 `byte[]`（大对象）。LOH 跟着页面积走 = 活对象；"
             + "回收后 LOH 明显下降 = 之前是垃圾/待回收；不降 = 仍被引用（缓存 / 双缓冲）。");
@@ -571,8 +627,9 @@ internal sealed partial class App
         if (trim200 != null && trim200.LohMb > 1 && anyZoomed && trim200.CpuPageMb < 0.5)
         {
             sb.AppendLine($"- ⚠ **本次读数**：200% 回收后 LOH 仍有 {DocMemMb(trim200.LohMb)}MB，"
-                + "但所有驻留页的 CPU 像素都已放掉（`页CPU` = 0）。说明这块字节数组由别处持有——"
-                + "最可能是页渲染 worker 线程最后一次 PDFium 渲染的缓冲区（线程停在循环里，"
+                + "但所有驻留页的 CPU 像素都已放掉（`页CPU` = 0）。这一块里通常有一份是"
+                + "**补丁单槽**（一块屏大小，有意保留复用，见上一条「缓冲复用」）；"
+                + "剩下若是页渲染 worker 线程最后一次 PDFium 渲染的缓冲（线程停在循环里，"
                 + "栈引用让一整页活过一次 GC），也可能是 D2D 上传暂存。它随当前页面积走、有界（一页 1×，"
                 + "本机约 36MB；补丁阴影下不再有 137MB 那份）；要坐实需在 worker 退出后再 trim 一次比对。");
         }
@@ -611,6 +668,11 @@ internal sealed partial class App
             Console.WriteLine($"    200% 回收后: WS {DocMemMb(trim200.WsMb)} / 私有 {DocMemMb(trim200.PrivMb)}"
                 + $" / GPU {DocMemMb(trim200.GpuLocalMb)} / LOH {DocMemMb(trim200.LohMb)}"
                 + $" / 托管 {DocMemMb(trim200.ManagedMb)}");
+        var c1 = DocMemFind(rows, "c1 100% settle");
+        var c3 = DocMemFind(rows, "c3 100% settle");
+        if (c1 != null && c3 != null)
+            Console.WriteLine($"    每轮100% : c1 私有 {DocMemMb(c1.PrivMb)}MB → c3 {DocMemMb(c3.PrivMb)}MB"
+                + $"（Δ {DocMemMb(c3.PrivMb - c1.PrivMb)}MB；补丁缓冲复用 {c3.PatchReuse} 次）");
         Console.WriteLine($"  报告：{path}");
     }
 

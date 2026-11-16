@@ -294,6 +294,67 @@ internal sealed partial class App
     }
 
     /// <summary>
+    /// J3：**补丁缓冲复用**（2026-11-16 内存抖动修复的判据）。
+    ///
+    /// 100→200→100 三轮：每轮回 100% 后 `ImageData.LiveBytes` 必须回到基线（±5MB），
+    /// 且第二、三轮渲新补丁时命中单槽（`PatchBufferReuseCount` 涨）——
+    /// 也就是不再每轮新分配一块 ~25MB 的 LOH（那正是私有字节每轮 +40~50MB 的来源）。
+    /// </summary>
+    private void ZoomTestPatchBufferPool(Action<string, bool, string> check)
+    {
+        Console.WriteLine("  -- J3 补丁缓冲复用：100→200→100 ×3（回基线 / 第二轮起命中单槽）--");
+
+        SetDocZoomFromUi(1f);
+        ZoomTestResetCamera();
+        SettleFrames(240);
+        long baseline = ImageData.LiveBytes;
+
+        bool reused2 = false, reused3 = false;
+        long maxAt200 = 0, last100 = baseline;
+        var detail = new System.Text.StringBuilder();
+        for (int c = 1; c <= 3; c++)
+        {
+            int reuseBefore = DocPatch?.PatchBufferReuseCount ?? 0;
+            SetDocZoomFromUi(2f);
+            SettleFrames(220);
+            ZoomTestWaitPatch(0, 4000);
+            long at200 = ImageData.LiveBytes;
+            if (at200 > maxAt200) maxAt200 = at200;
+
+            SetDocZoomFromUi(1f);
+            bool back = ZoomTestWaitLiveBytes(baseline, 5L << 20, 4000);
+            last100 = ImageData.LiveBytes;
+            int reuseAfter = DocPatch?.PatchBufferReuseCount ?? 0;
+            if (c == 2) reused2 = reuseAfter > reuseBefore;
+            if (c == 3) reused3 = reuseAfter > reuseBefore;
+            detail.Append($"c{c} {at200 / 1048576.0:F1}→{last100 / 1048576.0:F1}MB"
+                        + $"{(back ? "" : "（未回落）")} ");
+        }
+
+        long delta = last100 - baseline;
+        check("补丁 CPU 像素账回 100% 基线（±5MB，三轮后）",
+              Math.Abs(delta) <= 5L * 1024 * 1024,
+              $"基线 {baseline / 1048576.0:F1}MB → 末轮 100% {last100 / 1048576.0:F1}MB"
+              + $"（Δ {delta / 1048576.0:+0.0;-0.0}MB；200% 峰值 {maxAt200 / 1048576.0:F1}MB）");
+        check("第二轮起：新补丁命中单槽（不再每轮新分配一块）",
+              reused2 && reused3,
+              $"复用 {DocPatch?.PatchBufferReuseCount ?? 0} 次（c2={reused2} c3={reused3}）"
+              + $" | {detail.ToString().Trim()}");
+    }
+
+    /// <summary>等到 `ImageData.LiveBytes` 落进 target±tol（期间照常出帧）；超时返回最后一次判断。</summary>
+    private bool ZoomTestWaitLiveBytes(long target, long tol, int maxMs)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < maxMs)
+        {
+            if (Math.Abs(ImageData.LiveBytes - target) <= tol) return true;
+            SettleFrames(16);
+        }
+        return Math.Abs(ImageData.LiveBytes - target) <= tol;
+    }
+
+    /// <summary>
     /// 区域渲染 vs 整页渲染：重叠区必须逐像素一致（允许抗锯齿的极小差异）。
     /// 这一条直接证明 `FPDF_RenderPageBitmap(startX = -rx, startY = -ry)` 在本仓的
     /// PDFium 版本上**确实按负起点裁剪**，也证明补丁和底图不会错位/出接缝。
@@ -346,6 +407,23 @@ internal sealed partial class App
                   $"{bad}/{compared} 像素有差异（{rw}×{rh} @ {rx},{ry}）");
             check("区域渲染：这块里确实有文字/线条（不是空白）", dark > 200,
                   $"{dark} 个暗像素");
+
+            // 复用缓冲（2026-11-16 内存修复的前提）：**渲进调用方给的脏数组**，
+            // 像素必须和"每次新分配"逐字节相同——池子不许改变输出。
+            // 数组故意比需要的大一圈（真实单槽就是这样：够长就用），尾巴不读。
+            int need = rw * rh * 4;
+            byte[] reuse = new byte[need + 4096];
+            for (int i = 0; i < reuse.Length; i++) reuse[i] = 0x5A;
+            byte[] again = doc.RenderRegion(0, fullW, fullH, rx, ry, rw, rh, reuse);
+            long diff = -1;
+            if (again != null && part != null && again.Length >= need)
+            {
+                diff = 0;
+                for (int i = 0; i < need; i++) if (again[i] != part[i]) diff++;
+            }
+            check("复用缓冲：渲进调用方数组，像素与每次新分配逐字节相同",
+                  ReferenceEquals(again, reuse) && diff == 0,
+                  diff < 0 ? "复用渲染失败" : $"{diff}/{need} 字节不同（同一块数组，长 {reuse.Length}）");
         }
         finally
         {

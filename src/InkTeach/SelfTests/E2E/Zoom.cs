@@ -77,6 +77,7 @@ internal sealed partial class App
             ZoomTestShots(Check);           // E：上屏 + 50/100/200 三张图
             ZoomTestTiles(Check);           // I：分块倍率 / 防抖 / 预取环字节上限
             ZoomTestPatches(Check);         // J：高清补丁（区域渲染一致 / 一块屏 / 平移不灰闪 / 翻页回收）
+            ZoomTestPatchBufferPool(Check); // J3：补丁缓冲复用（三轮回基线 / 第二轮起命中单槽）
             ZoomTestBarAndPan(Check);       // G：文档条缩放组 / 档位浮层 / 横向拖页 / Ctrl+滚轮
             ZoomTestSelectionFurniture(Check, pdf);   // H：选中家具在 200% 下保持屏幕尺寸
             ZoomTestWorker(Check, pdf);     // F：worker 代次

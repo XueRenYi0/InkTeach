@@ -53,19 +53,19 @@
       - `DocImport.Pan.cs` 167 行 — 文档「手掌」拖页：文档模式下按下拖动平移相机（不落墨、不选中）。
       - `DocMemory.cs` 85 行
       - `DocPages.cs` 602 行 — 文档页底层：页配方、惰性生成、视口窗口回收；缩放只记相机倍率（页位图恒 1×）。
-      - `DocPatch.cs` 660 行 — PDF 页的**视口高清补丁**：1× 整页底图之上，只为可见区域渲一块设备分辨率小图（单 worker、单在飞、落稳 120ms）。
+      - `DocPatch.cs` 730 行 — PDF 页的**视口高清补丁**：1× 整页底图之上，只为可见区域渲一块设备分辨率小图（单 worker、单在飞、落稳 120ms）。
       - `DocResume.cs` 340 行 — 文档「上次看到第 N 页」恢复提示：读写位置、卡片命中、继续/从头、落盘节流。
       - `DocResumeLayout.cs` 97 行 — 文档恢复提示卡的几何：卡片 / 两行字 / 两个按钮的矩形（画与命中同一份）。
       - `DocResumeStore.cs` 135 行 — 文档「上次看到第几页」的落盘：一文档一目录一小文本文件（跨会话恢复用）。
       - `DocStore.cs` 246 行
-      - `Pdfium.cs` 412 行
+      - `Pdfium.cs` 420 行
 
     **InkEngine/Export/**
       - `ClipboardImage.cs` 191 行
       - `ClipboardInk.cs` 134 行
       - `ClipboardText.cs` 59 行
       - `Export.cs` 1,178 行 — 导出格式表：PNG/JPEG/BMP 与编码器选择。
-      - `ImageData.cs` 224 行
+      - `ImageData.cs` 258 行
       - `ImageFile.cs` 208 行
       - `PhotoBeautify.cs` 345 行
       - `ScreenCapture.cs` 106 行
@@ -250,7 +250,7 @@
         - `BandAction.cs` 84 行
         - `BoardAndLaser.cs` 1,377 行 — 白板底纹/激光/光标 E2E。
         - `Diagnostics.cs` 3,295 行 — 诊断/环境/性能 E2E。
-        - `DocMem.cs` 634 行 — PDF 缩放内存归因诊断（--docmem）：WS/私有/托管/LOH/GPU/页位图/分块，含 100ms 峰值与回收后快照。
+        - `DocMem.cs` 696 行 — PDF 缩放内存归因诊断（--docmem）：WS/私有/托管/LOH/GPU/页位图/分块，含 100ms 峰值与回收后快照。
         - `DocResume.cs` 194 行 — 文档「上次看到第 N 页」恢复提示 E2E（挂在 --doctest 末尾的 F 组）。
         - `Documents.cs` 1,463 行 — 文档导入 E2E。
         - `Erasers.cs` 1,003 行 — 橡皮擦 E2E（整笔/像素/动态）。
@@ -297,9 +297,9 @@
         - `TextStyleShow.cs` 125 行
         - `ToastTest.cs` 43 行
         - `Touch.cs` 1,271 行 — 触摸手势 E2E。
-        - `Zoom.cs` 771 行 — 文档缩放 E2E（阶段 2：渲染核心 + 引擎缩放 API）。
+        - `Zoom.cs` 772 行 — 文档缩放 E2E（阶段 2：渲染核心 + 引擎缩放 API）。
         - `ZoomSelection.cs` 211 行 — 文档缩放 E2E（选中家具：手柄 / 操作条 / 面板 / 旋转柄在缩放下的屏幕恒定性）。
-        - `ZoomShots.cs` 569 行 — 文档缩放 E2E：出图（50/100/200 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
+        - `ZoomShots.cs` 647 行 — 文档缩放 E2E：出图（50/100/200 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
 
       **InkTeach/SelfTests/Unit/**
         - `UnitTestRunner.cs` 135 行

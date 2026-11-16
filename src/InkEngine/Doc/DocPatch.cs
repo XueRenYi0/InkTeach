@@ -100,6 +100,20 @@ internal sealed class DocPatchCache : IDisposable
     private int _frozenPage = -1;
 
     /// <summary>
+    /// 补丁位图的**单槽复用缓冲**（2026-11-16 内存抖动修复）。
+    ///
+    /// 为什么：每块补丁是一块 ~25MB 的 `byte[]`（2520×1680×4），走 LOH；缩放来回一轮就
+    /// 新分配一块，而 LOH 空闲时不回收 → 私有字节每轮 +40~50MB。补丁的 CPU 像素只活到
+    /// "上传 GPU"那一刻（`Overlay.Content` 的 `DropCpuBytes`），之后什么都不读它，
+    /// 所以**一块就够**：worker 取走 → 渲 → 采纳/丢弃时原地还回来。
+    ///
+    /// 只在 <see cref="_gate"/> 里读写（worker 与 UI 的释放路径都碰它）。
+    /// </summary>
+    private byte[] _spare;
+
+    private int _reuseCount;
+
+    /// <summary>
     /// 补丁变了哪几块（画布矩形）。渲染层照单 MarkDirty，**由引擎在所有窗口都渲染完之后清**
     /// （每个窗口都要铺一遍自己那块分块；哪个窗口先清，后面的窗口就漏铺）。
     /// </summary>
@@ -110,6 +124,12 @@ internal sealed class DocPatchCache : IDisposable
     public int RequestCount { get; private set; }
     public int RenderCount { get; private set; }
     public int FailCount { get; private set; }
+
+    /// <summary>
+    /// 诊断口径：`TakeBuffer` **命中单槽**的次数（= 没有新分配那块 ~25MB）。
+    /// 第二次 100→200 起就该一直涨；不涨说明池子没接上（`--zoomtest` 会断言）。
+    /// </summary>
+    public int PatchBufferReuseCount => Volatile.Read(ref _reuseCount);
 
     public DocPatchCache(PdfiumDoc pdf, Func<int, RectF?> pageRect, Func<int> pageCount, Action wake)
     {
@@ -264,6 +284,7 @@ internal sealed class DocPatchCache : IDisposable
             _inFlight = null;
             _ready?.Image?.Release();
             _ready = null;
+            _spare = null;              // 池里那块也放掉（关文档后补丁不再有）
         }
         foreach (var p in _patches.Values) p.Image?.Release();
         _patches.Clear();
@@ -556,6 +577,42 @@ internal sealed class DocPatchCache : IDisposable
     //  后台渲染线程
     // ======================================================================
 
+    /// <summary>
+    /// 取一块**至少** <paramref name="bytes"/> 字节的补丁缓冲：单槽够大就用它（不再分配），
+    /// 否则新分配。命中时 `PatchBufferReuseCount` +1（诊断口径）。
+    /// 命中/不命中都把槽清空——这块从现在起只归 worker 用。
+    /// </summary>
+    private byte[] TakeBuffer(int bytes)
+    {
+        byte[] spare;
+        lock (_gate)
+        {
+            spare = _spare;
+            _spare = null;
+        }
+        if (spare != null && spare.Length >= bytes)
+        {
+            Interlocked.Increment(ref _reuseCount);
+            return spare;
+        }
+        return new byte[bytes];             // 槽里那块太小（换了屏 / 不同取整）→ 丢，新分配一块
+    }
+
+    /// <summary>
+    /// 把补丁缓冲还回单槽：**只留最大的一块**（更小的直接丢）。
+    /// 线程安全：worker 渲完的失败路径、`ImageData` 回调（UI 上传那一拍 / 采纳前作废）都会进来，
+    /// 而且有些路径是在 `_gate` 里调的（`Release` 多在锁内），所以这里用同一把锁（可重入）。
+    /// </summary>
+    private void ReturnBuffer(byte[] buffer)
+    {
+        if (buffer == null || buffer.Length == 0) return;
+        lock (_gate)
+        {
+            if (_disposed) return;          // 关文档后不再留：留着就是一块没人用的 LOH
+            if (_spare == null || buffer.Length > _spare.Length) _spare = buffer;
+        }
+    }
+
     private void WorkerLoop()
     {
         while (true)
@@ -576,11 +633,13 @@ internal sealed class DocPatchCache : IDisposable
                 continue;
             }
 
+            int need = req.Rw * req.Rh * 4;      // 一块屏 ≈ 25MB，int 安全
+            byte[] buf = TakeBuffer(need);
             byte[] bgra = null;
             try
             {
                 bgra = _pdf.RenderRegion(req.Page, req.FullW, req.FullH,
-                                         req.Rx, req.Ry, req.Rw, req.Rh);
+                                         req.Rx, req.Ry, req.Rw, req.Rh, buf);
             }
             catch (Exception ex)
             {
@@ -588,10 +647,14 @@ internal sealed class DocPatchCache : IDisposable
             }
 
             Patch done = null;
-            if (bgra != null && bgra.Length >= (long)req.Rw * req.Rh * 4)
+            bool adopted = false;
+            if (bgra != null && bgra.Length >= (long)need)
             {
-                var img = ImageData.Adopt(req.Rw, req.Rh, bgra, false);
+                // 回调 = 这一块 CPU 像素被丢掉的那一刻（上传后 / 没采纳就作废）还回单槽。
+                var img = ImageData.Adopt(req.Rw, req.Rh, bgra, false, ReturnBuffer);
                 if (img != null)
+                {
+                    adopted = true;
                     done = new Patch
                     {
                         Page = req.Page,
@@ -599,6 +662,13 @@ internal sealed class DocPatchCache : IDisposable
                         CanvasRect = req.CanvasRect,
                         Image = img,
                     };
+                }
+            }
+            if (!adopted)
+            {
+                // 渲失败 / 没采纳：缓冲当场还回去，别等到下一次 GC 才收（这就是以前每轮 +25MB 的来源）。
+                if (bgra != null) ReturnBuffer(bgra);
+                if (!ReferenceEquals(bgra, buf)) ReturnBuffer(buf);
             }
             if (done == null)
                 done = new Patch

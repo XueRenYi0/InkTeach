@@ -66,6 +66,12 @@ internal sealed class ImageData
     /// </summary>
     private bool _accounted;
 
+    /// <summary>
+    /// CPU 像素被丢掉时把**同一个数组**交回去（高清补丁的缓冲池）。
+    /// **只在意一次**：置 null 之后再丢不会重复回调（`Release` 可以被重复调用）。
+    /// </summary>
+    private Action<byte[]> _onCpuReleased;
+
     /// <summary>当前存活的位图字节数（诊断用，和 Stroke.LiveGeometries 同一路）。</summary>
     public static long LiveBytes;
     public static int LiveImages;
@@ -76,8 +82,13 @@ internal sealed class ImageData
     /// 收下一份像素。<paramref name="hasAlpha"/> = 来源**声明**这个 alpha 是
     /// 有意义的（CF_DIBV5 的 V4 头、或者我们自己抓的已知格式）。默认 false，
     /// 走"alpha 一律填满"的那条路。
+    ///
+    /// <paramref name="onCpuReleased"/>：CPU 像素被丢掉时**回调一次**，把**同一个数组**交回去
+    /// （高清补丁的缓冲池用；见 <see cref="DropCpuBytes"/> / <see cref="Release"/>）。
+    /// 默认 null = 和以前完全一样（截图 / 页面 / 贴纸都不传，`Release` 之后像素仍留着可重建位图）。
     /// </summary>
-    public static ImageData Adopt(int width, int height, byte[] bgra, bool hasAlpha = false)
+    public static ImageData Adopt(int width, int height, byte[] bgra, bool hasAlpha = false,
+                                  Action<byte[]> onCpuReleased = null)
     {
         if (width <= 0 || height <= 0) return null;
         if (bgra == null || bgra.Length < (long)width * height * 4) return null;
@@ -89,6 +100,7 @@ internal sealed class ImageData
             Height = height,
             Bgra = bgra,
             _accounted = true,
+            _onCpuReleased = onCpuReleased,
         };
         // 记账用原子操作：文档页是**后台线程**渲染的，Adopt 可能在非主线程调
         // （渲染线程同款计数也在跑），普通 ++/-- 会丢增量。
@@ -205,6 +217,9 @@ internal sealed class ImageData
             _bitmap.Dispose();
             _bitmap = null;
         }
+        // 还没上传就作废（渲好没被采纳、采纳前换倍率）：CPU 像素也一并还回池子。
+        // 上传过的那条路上回调已经在 DropCpuBytes 里用掉了，这里不会再触发一次。
+        ReturnCpuBytesIfPending();
         if (_accounted)
         {
             _accounted = false;
@@ -218,7 +233,26 @@ internal sealed class ImageData
     /// <summary>
     /// 文档页专用：上传 GPU 之后把 CPU 那半份放掉（页图不存档、不导出，重生成就是了）。
     /// 位图本身留着；配合 <see cref="Release"/> 就是"整个对象可以扔了"。
+    /// 带回调的那种（高清补丁）会在这里把数组还给调用方，之后 `Bgra` 为 null。
     /// </summary>
-    public void DropCpuBytes() => Bgra = null;
+    public void DropCpuBytes()
+    {
+        ReturnCpuBytesIfPending();
+        Bgra = null;
+    }
+
+    /// <summary>
+    /// 把 CPU 像素交给回调（如果有），**保证只交一次**。
+    /// 用 `Interlocked.Exchange` 抢回调：`Release` 可能被重复调用，
+    /// 同一块数组交回池子两次就会被两处同时写（花屏 / 越界）。
+    /// </summary>
+    private void ReturnCpuBytesIfPending()
+    {
+        var cb = Interlocked.Exchange(ref _onCpuReleased, null);
+        if (cb == null) return;
+        var bytes = Bgra;
+        Bgra = null;                        // 先摘引用，回调那边立刻可以拿去复用
+        if (bytes != null) cb(bytes);
+    }
 
 }
