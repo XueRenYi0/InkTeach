@@ -95,7 +95,7 @@ previews the sector under the cursor.
 - **Common colour is fixed at north**, and its colour follows the main colour band (red by default;
   change that swatch and the sector follows). The east/west cells are next/previous colour — the
   neighbours of the current colour in the main band, read from the same live band.
-- **Clear page is at the south-west corner** (trash icon) and requires a 0.8s hold (current page only);
+- **Clear page is at the south-west corner** (trash icon); **one click** runs it (current page only, reverts with one Ctrl+Z);
   **undo is at the north-west corner**.
 - The palette **no longer closes after 5s** (9.4.0): it stays until release / click / click outside / Esc.
 - Skipping the wait: the palette appears after 120ms, so an expert can flick before it is ever shown.

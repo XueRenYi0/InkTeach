@@ -494,7 +494,8 @@ public interface IEngineCommands
     void Undo();
     void Redo();
     /// <summary>
-    /// 清空**当前页 / 当前幻灯片 / 当前这一屏**的墨迹（橡皮带按住 0.8 秒）。
+    /// 清空**当前页 / 当前幻灯片 / 当前这一屏**的墨迹（主条垃圾桶单击 / `Ctrl+Shift+C` /
+    /// 呼出盘清屏格，都是一步可撤销）。
     /// 整份文档 / 演示文稿的清空走翻页条菜单，不从这里。
     /// </summary>
     void Clear();

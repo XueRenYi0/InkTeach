@@ -114,9 +114,7 @@ internal sealed partial class OverlayWindow
             }
         }
 
-        // 清屏进度：停在西南扇格 0.8s，沿盘边画一段红弧（到点自动执行）。
-        float clearP = app.RadialClearProgress;
-        if (clearP > 0) DrawRadialClearProgress(c, dpi, clearP);
+        // 清屏格单击即清（可撤销），不再有 0.8s 进度弧。
 
         // 中央：空心色环 + 当前功能图标（2026-10-25 用户定，替代 v3 的实心色圆）。
         // 色环外径 23.5、内沿 19：整个环都在 24 的中央死区里，
@@ -207,7 +205,7 @@ internal sealed partial class OverlayWindow
             2 => $"下一色：{app.RadialNextPenName}",
             3 => already ? "矩形 ⇄ 套索" : "切到框选",
             4 => already ? "整笔擦 ⇄ 面积擦" : "切到橡皮",
-            5 => "清屏：按住 0.8 秒",
+            5 => "清屏：单击清空本页（可撤销）",
             6 => $"上一色：{app.RadialPrevPenName}",
             _ => "撤销一步",
         };
@@ -377,22 +375,6 @@ internal sealed partial class OverlayWindow
         {
             _ctx.DrawLine(new Vector2(x + s * 0.55f, y - s), new Vector2(x - s * 0.55f, y), _scratch, w);
             _ctx.DrawLine(new Vector2(x - s * 0.55f, y), new Vector2(x + s * 0.55f, y + s), _scratch, w);
-        }
-    }
-
-    /// <summary>清屏扇区的 0.8s 进度弧（沿盘边，红色，到点自动执行）。</summary>
-    private void DrawRadialClearProgress(Vector2 c, float dpi, float p)
-    {
-        float r = 92f * dpi;
-        float a0 = -90f + 45f * 5 - 21.5f;          // 西南扇格左边界
-        float a1 = a0 + 43f * Math.Clamp(p, 0f, 1f);
-        _scratch.Color = new Color4(0.90f, 0.30f, 0.28f, 1f);
-        const int seg = 14;
-        for (int t = 0; t < seg; t++)
-        {
-            float t0 = a0 + (a1 - a0) * t / seg;
-            float t1 = a0 + (a1 - a0) * (t + 1) / seg;
-            _ctx.DrawLine(OnCircle(c, r, t0), OnCircle(c, r, t1), _scratch, 3f * dpi);
         }
     }
 

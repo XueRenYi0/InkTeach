@@ -6431,27 +6431,51 @@ internal sealed partial class App
               drew && Doc.Strokes.Count == strokesBefore,
               $"画前 {strokesBefore}，画后 {Doc.Strokes.Count}");
 
-        // ---- ⑥.2 西南 = 清屏：停不满 0.8s 不执行，停满才清当前页 ----
+        // ---- ⑥.2 西南 = 清屏：单击即清（不再要按住 0.8s；只清当前页、一步可撤销） ----
         var clearProbe = new Stroke { Tool = Tool.Pen, Color = InkPalette.PenBand[1].Color, Width = 6f };
         for (int i = 0; i <= 12; i++) clearProbe.AddPoint(cx - 80 + i * 12, cy + 200, 0.9f, i);
         Doc.AddStroke(clearProbe);
         Doc.InvalidateAll();
         SettleFrames(120);
         int n0 = Doc.Strokes.Count;
+
+        // (a) 键盘松手（HandleKeyUp → CommitRadialPalette）：松手那一刻就执行。
         RadialOpenForTest(cx, cy);
         RadialMoveForTest(cx - 85f, cy + 85f);          // 西南 = 清屏
-        Check("划向西南 = 选中「清屏」扇区", RadialPaletteSector == 5, $"扇区 {RadialPaletteSector}");
-        RadialCommitForTest();                          // 没停满 → 不执行
-        Check("清屏：停不满 0.8s 松手 = 不清",
-              !RadialPaletteActive && Doc.Strokes.Count == n0,
+        Check("划向西南 = 选中「清屏」扇区", RadialPaletteSector == RadialClearSector,
+              $"扇区 {RadialPaletteSector}");
+        RadialCommitForTest();                          // 松手（不再等 0.8s）
+        Check("清屏：松手即清空当前页（不再要求停 0.8s）",
+              !RadialPaletteActive && n0 > 0 && Doc.Strokes.Count == 0,
               $"active = {RadialPaletteActive}，笔画 {Doc.Strokes.Count} / {n0}");
 
+        // (b) 撤销还原：清屏必须和垃圾桶一样是"一步可撤销"。
+        Host.Commands.Undo();
+        SettleFrames(120);
+        Check("清屏后撤销：笔画整步回来", Doc.Strokes.Count == n0,
+              $"笔画 {Doc.Strokes.Count} / {n0}");
+
+        // (c) 点选（触屏轻点 / 鼠标单击盘面，都走 RadialPaletteTryPointerDown）：一下即清。
         RadialOpenForTest(cx, cy);
-        RadialMoveForTest(cx - 85f, cy + 85f);
-        SettleFrames(900);                              // 停满 0.8s
-        Check("清屏：停满 0.8s = 自动清空并关盘",
-              !RadialPaletteActive && Doc.Strokes.Count == 0,
-              $"active = {RadialPaletteActive}，笔画 {Doc.Strokes.Count}");
+        RadialPumpForTest();                            // 自检保持态：泵一帧让盘可见
+        bool clicked = RadialClickForTest(cx - 85f, cy + 85f);
+        Check("清屏：点选一次即清（触屏轻点 / 鼠标单击同一条路）",
+              clicked && !RadialPaletteActive && Doc.Strokes.Count == 0,
+              $"clicked = {clicked}，active = {RadialPaletteActive}，笔画 {Doc.Strokes.Count}");
+
+        // (d) 0.8s 那套（计时字段 / 进度属性 / 进度弧）必须删干净，不能留半截。
+        static bool NoMember(Type t, string name) =>
+            t.GetMember(name, System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.Static
+                | System.Reflection.BindingFlags.Public
+                | System.Reflection.BindingFlags.NonPublic).Length == 0;
+        Check("清屏：0.8s 计时与进度弧已删除",
+              NoMember(typeof(InkEngine.InkEngine), "RadialClearProgress")
+              && NoMember(typeof(InkEngine.InkEngine), "RadialClearHoldMs")
+              && NoMember(typeof(InkEngine.InkEngine), "RadialClearHoldDone")
+              && NoMember(typeof(InkEngine.InkEngine), "_radialClearArmedAtMs")
+              && NoMember(typeof(OverlayWindow), "DrawRadialClearProgress"),
+              "计时字段 / 进度属性 / 进度弧都不存在");
 
         // ---- ⑥.5 v3 排序与扇面几何（2026-10-25 定稿；2026-11-16 北格改名常用色） ----
         Check("v3 排序：北常用色、东西翻色、四角撤销/荧光/清屏/框选",
@@ -6678,6 +6702,31 @@ internal sealed partial class App
                   $"穿透 = {PassThrough}，工具 = {Host.State.Tool}，色 = {Host.State.PaletteBase}");
             Host.Commands.SetPassThrough(false);
             SettleFrames(200);
+
+            // ---- ⑮ 真键盘：西南清屏，松手即清（2026-11-16：不再要按住 0.8 秒） ----
+            // ⑫ 钉的是"松手 = 执行"，这里钉清屏格也走同一条松手提交，
+            // 而且和主条垃圾桶一样一步可撤销。
+            var clearKeyProbe = new Stroke { Tool = Tool.Pen, Color = InkPalette.PenBand[1].Color, Width = 6f };
+            for (int i = 0; i <= 12; i++) clearKeyProbe.AddPoint(cx - 80 + i * 12, cy + 220, 0.9f, i);
+            Doc.AddStroke(clearKeyProbe);
+            Doc.InvalidateAll();
+            SettleFrames(150);
+            int keyN = Doc.Strokes.Count;
+            SendMouse((int)cx, (int)cy, 0);
+            SettleFrames(150);
+            Native.SendInput((uint)qDown.Length, qDown, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(250);
+            SendMouse((int)(cx - 85f), (int)(cy + 85f), 0);   // 西南 = 清屏
+            SettleFrames(200);
+            Native.SendInput((uint)qUp.Length, qUp, Marshal.SizeOf<Native.INPUT_KBD>());
+            SettleFrames(250);
+            Check("真键盘：西南清屏松手即清（不等 0.8 秒）",
+                  !RadialPaletteActive && keyN > 0 && Doc.Strokes.Count == 0,
+                  $"active = {RadialPaletteActive}，笔画 {Doc.Strokes.Count} / {keyN}");
+            Host.Commands.Undo();
+            SettleFrames(150);
+            Check("真键盘清屏后撤销：笔画回来", Doc.Strokes.Count == keyN,
+                  $"笔画 {Doc.Strokes.Count} / {keyN}");
         }
 
         // 收尾
