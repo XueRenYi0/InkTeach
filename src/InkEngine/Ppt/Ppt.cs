@@ -652,8 +652,21 @@ public partial class InkEngine
     private const string PptBarXPref = "pptBarX";
     private const string PptBarYPref = "pptBarY";
 
+    /// <summary>
+    /// 文档模式**缩放条**（`[−][100% ▾][+]`）自己的状态：位置 + 单击/拖动判定。
+    /// 和翻页条完全独立（各有各的位置、各有各的拖动），裹成一个对象见 ADR-005 D1。
+    /// </summary>
+    private readonly PptBar.ZoomBarState _docZoomBar = new();
+
+    /// <summary>缩放条位置存盘的键（同样是相对屏幕左上角的逻辑偏移）。</summary>
+    private const string DocZoomBarXPref = "docZoomBarX";
+    private const string DocZoomBarYPref = "docZoomBarY";
+
     /// <summary>自检用：把位置清回"未定"，下一次问位置时重新用默认值（模拟刚开软件）。</summary>
     internal void ResetPptBarPosForTest() { _pptBarX = float.NaN; _pptBarY = float.NaN; }
+
+    /// <summary>自检用：缩放条位置清回"未定"（默认 = 右下角）。</summary>
+    internal void ResetDocZoomBarPosForTest() { _docZoomBar.X = float.NaN; _docZoomBar.Y = float.NaN; }
 
     // ---- 交互状态 ------------------------------------------------------------
 
@@ -939,9 +952,11 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 条的矩形（物理像素）。位置：**记住的**优先（拖动后存进偏好），
+    /// 翻页条的矩形（物理像素）。位置：**记住的**优先（拖动后存进偏好），
     /// 没有就取默认（**屏幕左下角**，用户 2026-09-26 定的"因为 PPT 本来的工具就在这里"），
     /// 最后一律**夹进屏幕**——拖出去找不回来是这个功能最坏的失败模式。
+    ///
+    /// 文档模式这条**仍然 206 宽**（缩放那三格搬到独立的缩放条，见 <see cref="DocZoomBarRect"/>）。
     ///
     /// 避让界面（工具条）：**只在"还没被用户拖过"时**做一次。用户亲手放的位置是他的决定，
     /// 我们不再擅自挪（那会变成"我放好了它自己跑"）。
@@ -957,7 +972,7 @@ public partial class InkEngine
             var d = PptBar.DefaultTopLeft(screen, dpi);
             _pptBarX = d.X; _pptBarY = d.Y;
         }
-        var p = PptBar.ClampTopLeft(_pptBarX, _pptBarY, screen, dpi, DocZoomBar);
+        var p = PptBar.ClampTopLeft(_pptBarX, _pptBarY, screen, dpi);
 
         if (first)
         {
@@ -968,25 +983,66 @@ public partial class InkEngine
             // 而默认位置是左下角。用户实测"先放映、再开面板"看不到这条，因为条在放映
             // 第一帧就定位完了；真正的危险顺序是"面板先开着、PptMode 才打开"。
             if (!ui.IsEmpty && !UiLooksFullscreen(ui, screen)
-                && RectsOverlap(PptBar.RectAt(p.X, p.Y, dpi, DocZoomBar), ui))
+                && RectsOverlap(PptBar.RectAt(p.X, p.Y, dpi), ui))
             {
                 // 界面（工具条）也在底部那一带：上移到它上面，留 8 不重叠。
                 float above = ui.MinY - 8f * dpi - PptBar.BarH * dpi;
-                p = PptBar.ClampTopLeft(p.X, above, screen, dpi, DocZoomBar);
+                p = PptBar.ClampTopLeft(p.X, above, screen, dpi);
             }
         }
 
         _pptBarX = p.X; _pptBarY = p.Y;
-        return PptBar.RectAt(p.X, p.Y, dpi, DocZoomBar);
+        return PptBar.RectAt(p.X, p.Y, dpi);
     }
+
+    /// <summary>
+    /// 文档模式**缩放条**的矩形（物理像素）：默认**屏幕右下角**（和翻页条镜像对称：
+    /// 右边距 16、下边距 16），可独立拖动、位置落盘（`docZoomBarX/Y`），一律夹进屏幕。
+    ///
+    /// 三条规矩：
+    ///   · **不缩条**：窗口窄的时候靠挪位置解决（见 <see cref="PptBar.SeparateFromLeftBar"/>）；
+    ///   · **不压翻页条**：重叠就先把缩放条往左让，再不行叠到它上方；
+    ///   · 第一次定位避让主工具条（全屏模态面板不算），和翻页条同一条判据。
+    /// </summary>
+    internal RectF DocZoomBarRect()
+    {
+        var screen = ScreenRectPhysical();
+        float dpi = UiUnit;
+
+        bool first = float.IsNaN(_docZoomBar.X);
+        if (first)
+        {
+            var d = PptBar.ZoomBarDefaultTopLeft(screen, dpi);
+            _docZoomBar.X = d.X; _docZoomBar.Y = d.Y;
+        }
+        var p = PptBar.ClampZoomBarTopLeft(_docZoomBar.X, _docZoomBar.Y, screen, dpi);
+
+        if (first)
+        {
+            var ui = UiRectPhysical();
+            if (!ui.IsEmpty && !UiLooksFullscreen(ui, screen)
+                && RectsOverlap(PptBar.ZoomBarRectAt(p.X, p.Y, dpi), ui))
+            {
+                float above = ui.MinY - 8f * dpi - PptBar.BarH * dpi;
+                p = PptBar.ClampZoomBarTopLeft(p.X, above, screen, dpi);
+            }
+        }
+
+        p = PptBar.SeparateFromLeftBar(PptBarRect(), p.X, p.Y, screen, dpi);
+        _docZoomBar.X = p.X; _docZoomBar.Y = p.Y;
+        return PptBar.ZoomBarRectAt(p.X, p.Y, dpi);
+    }
+
+    /// <summary>缩放条正在被拖动（绘制据此把整条描边变强调色）。</summary>
+    internal bool DocZoomBarDragging => _docZoomBar.Dragging;
 
     /// <summary>菜单矩形。</summary>
     internal void PptMenuRect(out RectF rect)
         => rect = PptBar.MenuRect(PptBarRect(), PptMenuItemCount, UiUnit, ScreenRectPhysical());
 
-    /// <summary>缩放档位浮层矩形（点百分比格弹出来那张）。</summary>
+    /// <summary>缩放档位浮层矩形（点缩放条百分比格弹出来那张；锚在缩放条上）。</summary>
     internal void PptZoomMenuRect(out RectF rect)
-        => rect = PptBar.ZoomMenuRect(PptBarRect(), DocZoomPresets.Length, UiUnit, ScreenRectPhysical());
+        => rect = PptBar.ZoomMenuRect(DocZoomBarRect(), DocZoomPresets.Length, UiUnit, ScreenRectPhysical());
 
     /// <summary>缩放档位浮层第 <paramref name="index"/> 行（绘制 / 命中 / 悬停读同一份）。</summary>
     internal void PptZoomMenuItemRectAt(int index, out RectF rect)
@@ -1014,138 +1070,117 @@ public partial class InkEngine
         rect = PptBar.CellRect(panel, index, UiUnit);
     }
 
-    /// <summary>这一块归不归底部条（**穿透豁免**与命中都要用同一份判据——
-    /// "看得见的一块"和"点得到的一块"必须是同一个）。PPT 放映和文档模式共用这一条。</summary>
+    /// <summary>这一块归不归底部那两条（**穿透豁免**与命中都要用同一份判据——
+    /// "看得见的一块"和"点得到的一块"必须是同一个）。PPT 放映 / 白板 / 文档共用这一条。</summary>
     internal bool PptBarContains(float x, float y)
     {
         if (!PageBarVisible) return false;
         if (PptBarRect().Contains(x, y)) return true;
+        if (DocZoomBar && DocZoomBarRect().Contains(x, y)) return true;
         if (PptMenuOpen) { PptMenuRect(out var menu); if (menu.Contains(x, y)) return true; }
         if (PptPagePanelOpen) { PptPanelRect(out var panel); if (panel.Contains(x, y)) return true; }
         if (PptZoomMenuOpen) { PptZoomMenuRect(out var zm); if (zm.Contains(x, y)) return true; }
         return false;
     }
 
-    /// <summary>条上的命中判据（**带模式**：文档模式多出缩放组）。
-    /// 引擎里所有 <see cref="PptBar.ZoneAt"/> 都从这里走，别在调用处各传一遍 bool。</summary>
+    /// <summary>翻页条的命中判据。引擎里所有 <see cref="PptBar.ZoneAt"/> 都从这里走。</summary>
     private PptBarZone BarZoneAt(float x, float y)
-        => PptBar.ZoneAt(PptBarRect(), x, y, UiUnit, DocZoomBar);
+        => PptBar.ZoneAt(PptBarRect(), x, y, UiUnit);
+
+    /// <summary>缩放条的命中判据（文档模式没开时一律 None）。</summary>
+    private PptBarZone ZoomBarZoneAt(float x, float y)
+        => DocZoomBar ? PptBar.ZoomBarZoneAt(DocZoomBarRect(), x, y, UiUnit) : PptBarZone.None;
 
     /// <summary>
     /// 按下：**返回 true = 这一下归它**（引擎不再当笔画处理）。
     ///
-    /// 判定顺序（五块的分工，写死在这里）：
+    /// 判定顺序（两条条 ＋ 三层浮层，写死在这里）：
     ///   ① 缩放浮层 → 菜单 → 面板（先问最上面那几层浮层）；
-    ///   ② 箭头：**按下即翻页**（最高频操作，不给它延迟）；
-    ///   ③ ☰：**按下即开 / 收菜单**（它只管一张菜单，不需要"松开才算"）；
-    ///   ④ 文档模式的缩放组：− / ＋ 按下即一档、百分比按下即开 / 收档位浮层；
-    ///   ⑤ 页码格：**先只记录，不下结论**——没动过 = 单击（开页号面板）、
-    ///      移动超阈值 = 拖条（见 <see cref="PptBarPointerMove"/> 与
-    ///      <see cref="PptBarPointerUp"/>）。**长按自 2026-10-02 第五轮起不是入口了**。
-    ///   ⑥ 面板里的格子：跳页、**面板保持打开**（2026-10-09 用户定："继续点下一格；
-    ///      点其他位置才消失"）；面板外的任何落点都会把它收掉。
+    ///   ② 翻页条：箭头**按下即翻页**、☰ **按下即开 / 收菜单**、页码格先只记录；
+    ///   ③ 缩放宽条：− / ＋ **按下即一档**、百分比格先只记录（单击开浮层 / 拖动挪条）。
+    /// 两条条不重叠（几何见 <see cref="DocZoomBarRect"/>），所以先后问不影响判定。
     /// </summary>
     internal bool PptBarPointerDown(float x, float y)
     {
         if (!PageBarVisible) return false;
+        if (PptZoomMenuOpen && ZoomMenuPress(x, y)) return true;
+        if (PptMenuOpen && MainMenuPress(x, y)) return true;
+        if (PptPagePanelOpen && PagePanelPress(x, y)) return true;
+        if (DocBarPress(x, y)) return true;
+        return DocZoomBarPress(x, y);
+    }
 
-        // 缩放档位浮层开着（最上层）：命中就执行并收起；点外面就收起，
-        // 而点回百分比格 = "再点一次收起"（吃掉它，别再弹）。
-        if (PptZoomMenuOpen)
+    /// <summary>缩放浮层开着：命中项就执行并收起；点外面收起；点回百分比格 = 再点一次收起。</summary>
+    private bool ZoomMenuPress(float x, float y)
+    {
+        for (int i = 0; i < DocZoomPresetCount; i++)
         {
-            for (int i = 0; i < DocZoomPresetCount; i++)
+            PptZoomMenuItemRectAt(i, out var item);
+            if (!item.Contains(x, y)) continue;
+            RunDocZoomPreset(i);
+            PptZoomMenuOpen = false;
+            _dirty = true;
+            return true;
+        }
+        PptZoomMenuOpen = false;
+        _dirty = true;
+        return ZoomBarZoneAt(x, y) == PptBarZone.ZoomPct;
+    }
+
+    /// <summary>菜单开着：命中项执行并吃掉；点外面先收起（这一下照常往下走）。</summary>
+    private bool MainMenuPress(float x, float y)
+    {
+        for (int i = 0; i < PptMenuItemCount; i++)
+        {
+            PptMenuItemRectAt(i, out var item);
+            if (!item.Contains(x, y)) continue;
+            // 置灰的项：**这一下吃掉，但不执行**（菜单留着，右侧"0 笔"就是原因）
+            if (PptMenuItemEnabled(i)) RunPptMenuItem(i);
+            _dirty = true;
+            return true;
+        }
+        PptMenuOpen = false;
+        PptClearConfirm = false;               // 菜单关了，"等确认"也一起放掉
+        _dirty = true;
+        // 点回页码格 / ☰ = "再点一次收起"：吃掉它，别再打开（不收就成了点不掉的鬼打墙）。
+        var z = BarZoneAt(x, y);
+        return z is PptBarZone.Page or PptBarZone.Menu;
+    }
+
+    /// <summary>页号面板开着：格子跳页（面板留着）；面板里的空白吃掉；点外面先收起。</summary>
+    private bool PagePanelPress(float x, float y)
+    {
+        PptPanelRect(out var panel);
+        if (panel.Contains(x, y))
+        {
+            int total = Math.Max(1, BarTotal);
+            for (int i = 0; i < total; i++)
             {
-                PptZoomMenuItemRectAt(i, out var item);
-                if (!item.Contains(x, y)) continue;
-                RunDocZoomPreset(i);
-                PptZoomMenuOpen = false;
+                PptPanelCellRectAt(i, out var cell);
+                if (!cell.Contains(x, y)) continue;
+                int page = i + 1;
+                if (page != BarPageNow) BarGoto(page);   // 文档：跳页顶；PPT：命令它跳页
+                // **跳完不关面板**（2026-10-09 用户定）：点错了可以接着点下一格；
+                // 高亮每帧读 BarPageNow、自己会跟过去。只有点"别的地方"才收。
                 _dirty = true;
                 return true;
             }
-            PptZoomMenuOpen = false;
-            _dirty = true;
-            if (BarZoneAt(x, y) == PptBarZone.ZoomPct) return true;
+            return true;                       // 面板里的空白：吃掉，别穿透到画布
         }
+        PptPagePanelOpen = false;
+        _dirty = true;
+        // 点回页码格 = 收起但不重开（同菜单那一条）。
+        return BarZoneAt(x, y) == PptBarZone.Page;
+    }
 
-        // 菜单开着：命中就执行并吃掉；没命中就收起来，**这一下照常往下走**
-        //（和颜色/层级面板"点外面先收起来再照常"是同一条口径）。
-        if (PptMenuOpen)
-        {
-            for (int i = 0; i < PptMenuItemCount; i++)
-            {
-                PptMenuItemRectAt(i, out var item);
-                if (item.Contains(x, y))
-                {
-                    // 置灰的项：**这一下吃掉，但不执行**（菜单留着，右侧"0 笔"就是原因）
-                    if (PptMenuItemEnabled(i)) RunPptMenuItem(i);
-                    _dirty = true;
-                    return true;
-                }
-            }
-            PptMenuOpen = false;
-            PptClearConfirm = false;               // 菜单关了，"等确认"也一起放掉
-            _dirty = true;
-            // 点在页码格 / ☰ 上 = "再点一次收起"：吃掉它，别再打开（不收就成了点不掉的鬼打墙）。
-            // ☰ 要的就是"同一颗键开、同一颗键收"。
-            var z = BarZoneAt(x, y);
-            if (z is PptBarZone.Page or PptBarZone.Menu) return true;
-        }
-
-        // 页号面板开着
-        if (PptPagePanelOpen)
-        {
-            PptPanelRect(out var panel);
-            if (panel.Contains(x, y))
-            {
-                int total = Math.Max(1, BarTotal);
-                for (int i = 0; i < total; i++)
-                {
-                    PptPanelCellRectAt(i, out var cell);
-                    if (!cell.Contains(x, y)) continue;
-                    int page = i + 1;
-                    if (page != BarPageNow) BarGoto(page);   // 文档：跳页顶；PPT：命令它跳页
-                    // **跳完不关面板**（2026-10-09 用户定）：点错了可以接着点下一格；
-                    // 高亮每帧读 BarPageNow、自己会跟过去。只有点"别的地方"才收——
-                    // 见下面"面板外"分支，以及 Engine.OnPointerDown 开头那段（兜界面）。
-                    _dirty = true;
-                    return true;
-                }
-                return true;                       // 面板里的空白：吃掉，别穿透到画布
-            }
-
-            // 点在面板外：先收起来
-            PptPagePanelOpen = false;
-            _dirty = true;
-            // 而如果这一下正落在页码格上，那就是"再点一次收起"——**吃掉它，别再弹**
-            //（不收的话就成了"点一下收起、松手又打开"的鬼打墙）。
-            // ☰ 例外：它是另一颗键，这一下继续往下走 = 顺手把菜单打开（菜单打开时
-            // 自己会把面板收掉，两者不并存）。
-            if (BarZoneAt(x, y) == PptBarZone.Page) return true;
-        }
-
+    /// <summary>翻页条的三个热区；分隔带不是热区，但必须吃掉（漏下去就变成画布上的一笔）。</summary>
+    private bool DocBarPress(float x, float y)
+    {
         var bar = PptBarRect();
         var zone = BarZoneAt(x, y);
-        // 分隔带（8 宽）不是热区，但**必须吃掉**：漏下去就变成画布上的一笔。
         if (zone == PptBarZone.None) return bar.Contains(x, y);
-
         if (zone == PptBarZone.LeftArrow) { BarPrev(); return true; }
         if (zone == PptBarZone.RightArrow) { BarNext(); return true; }
-
-        // 缩放组：− / ＋ **按下即一档**（和翻页箭头同一套，不给延迟）；
-        // 百分比格**按下即开 / 收浮层**（它只管一张小纸，不需要"松开才算"）。
-        if (zone == PptBarZone.ZoomOut) { if (DocZoomOutEnabled) DocZoomOut(); return true; }
-        if (zone == PptBarZone.ZoomIn) { if (DocZoomInEnabled) DocZoomIn(); return true; }
-        if (zone == PptBarZone.ZoomPct)
-        {
-            PptZoomMenuOpen = true;
-            PptMenuOpen = false;
-            PptPagePanelOpen = false;
-            PptClearConfirm = false;
-            _dirty = true;
-            Console.WriteLine($"[文档] 缩放档位浮层打开（当前 {DocZoomPercentText}）");
-            return true;
-        }
-
         if (zone == PptBarZone.Menu)
         {
             // 三层浮层**不并存**：开菜单就把另外两层收掉（每颗键各管一层）。
@@ -1157,11 +1192,25 @@ public partial class InkEngine
             Console.WriteLine($"[{(BoardOn ? "白板" : PptMode ? "PPT" : "文档")}] 菜单打开（共 {BarTotal} 页）");
             return true;
         }
-
         // 页码格：**先只记录，松手再决定**——没动过 = 单击（开页号面板）；
         // 移动超阈值 = 拖条（见 PptBarPointerMove / PptBarPointerUp）。
         _pptPressX = x; _pptPressY = y;
         _pptPressed = true;
+        _dirty = true;
+        return true;
+    }
+
+    /// <summary>缩放条的三格：− / ＋ 按下即一档；百分比格先记录（单击开浮层 / 拖动挪条）。</summary>
+    private bool DocZoomBarPress(float x, float y)
+    {
+        if (!DocZoomBar) return false;
+        var bar = DocZoomBarRect();
+        var zone = PptBar.ZoomBarZoneAt(bar, x, y, UiUnit);
+        if (zone == PptBarZone.ZoomOut) { if (DocZoomOutEnabled) DocZoomOut(); return true; }
+        if (zone == PptBarZone.ZoomIn) { if (DocZoomInEnabled) DocZoomIn(); return true; }
+        if (zone != PptBarZone.ZoomPct) return bar.Contains(x, y);
+        _docZoomBar.PressX = x; _docZoomBar.PressY = y;
+        _docZoomBar.Pressed = true;
         _dirty = true;
         return true;
     }
@@ -1190,11 +1239,14 @@ public partial class InkEngine
         // ---- 拖动中：条跟着指针走 ----
         if (PptBarDragging)
         {
-            var sp = PptBar.ClampTopLeft(x - _pptGrabDX, y - _pptGrabDY, ScreenRectPhysical(), UiUnit, DocZoomBar);
+            var sp = PptBar.ClampTopLeft(x - _pptGrabDX, y - _pptGrabDY, ScreenRectPhysical(), UiUnit);
             _pptBarX = sp.X; _pptBarY = sp.Y;
             _dirty = true;
             return true;                           // 拖动中吃掉所有移动，别去落墨
         }
+
+        // ---- 缩放条：同一套"点击 vs 拖动"（百分比格按住拖 = 挪缩放条）----
+        if (DocZoomBarDrag(x, y)) return true;
 
         // ---- 悬停高亮（给绘制用）----
         // **顺序与按下分派一致：缩放浮层 → 菜单 → 面板 → 条**（见 PptBarPointerDown 的判定顺序）。
@@ -1231,6 +1283,7 @@ public partial class InkEngine
         if (hover < 0)
         {
             var zone = BarZoneAt(x, y);
+            if (zone == PptBarZone.None) zone = ZoomBarZoneAt(x, y);
             if (zone != PptBarZone.None) hover = (int)zone;
         }
         if (hover != PptBarHover) { PptBarHover = hover; _dirty = true; }
@@ -1239,18 +1292,59 @@ public partial class InkEngine
     }
 
     /// <summary>
+    /// 缩放条的拖动判定（和翻页条逐句同构）：移动超 <see cref="PptBar.DragSlop"/> = 拖条，
+    /// 没动过松手 = 单击百分比格（开档位浮层）。拖动中吃掉所有移动，别去落墨。
+    /// </summary>
+    private bool DocZoomBarDrag(float x, float y)
+    {
+        if (!DocZoomBar) return false;
+        float moved = Math.Abs(x - _docZoomBar.PressX) + Math.Abs(y - _docZoomBar.PressY);
+        if (_docZoomBar.Pressed && !_docZoomBar.Dragging && moved > PptBar.DragSlop * UiUnit)
+        {
+            _docZoomBar.Pressed = false;
+            _docZoomBar.Dragging = true;
+            var b0 = DocZoomBarRect();
+            _docZoomBar.GrabDX = _docZoomBar.PressX - b0.MinX;
+            _docZoomBar.GrabDY = _docZoomBar.PressY - b0.MinY;
+        }
+        if (!_docZoomBar.Dragging) return false;
+        var sp = PptBar.ClampZoomBarTopLeft(x - _docZoomBar.GrabDX, y - _docZoomBar.GrabDY,
+                                            ScreenRectPhysical(), UiUnit);
+        _docZoomBar.X = sp.X; _docZoomBar.Y = sp.Y;
+        _dirty = true;
+        return true;
+    }
+
+    /// <summary>
     /// 抬起。松手这一刻才决定"这一次按下"到底是什么：
     ///   · 拖过 → **放下**（存位置，重启还在）；
     ///   · 没动过 + 在页码格上 → **开页号面板**（2026-11-15 第五轮：菜单搬去 ☰ 之后，
-    ///     页码格回归"直接跳页"这个本职）。
+    ///     页码格回归"直接跳页"这个本职）；
+    ///   · 缩放条同理：没动过 + 在百分比格上 → **开缩放档位浮层**。
     /// </summary>
     internal void PptBarPointerUp(float x, float y)
     {
         if (!PageBarVisible) return;
 
+        if (_docZoomBar.Dragging)
+        {
+            DocZoomBarRect();                      // 先把"避让翻页条"的结果落进状态
+            SaveDocZoomBarPos();
+            _docZoomBar.Dragging = false;
+            _dirty = true;
+            Console.WriteLine($"[文档] 缩放条已挪到 ({_docZoomBar.X / UiUnit:F0}, "
+                              + $"{_docZoomBar.Y / UiUnit:F0}) 逻辑像素");
+            return;
+        }
+        if (_docZoomBar.Pressed)
+        {
+            _docZoomBar.Pressed = false;
+            if (ZoomBarZoneAt(x, y) == PptBarZone.ZoomPct) OpenDocZoomMenu();
+        }
+
         if (PptBarDragging)
         {
-            var p = PptBar.ClampTopLeft(_pptBarX, _pptBarY, ScreenRectPhysical(), UiUnit, DocZoomBar);
+            var p = PptBar.ClampTopLeft(_pptBarX, _pptBarY, ScreenRectPhysical(), UiUnit);
             _pptBarX = p.X; _pptBarY = p.Y;
             SavePptBarPos();                       // 记住（下次打开还在）
             PptBarDragging = false;
@@ -1276,9 +1370,22 @@ public partial class InkEngine
         }
     }
 
+    /// <summary>开缩放档位浮层（三层浮层不并存：它开就把菜单 / 面板收掉）。</summary>
+    private void OpenDocZoomMenu()
+    {
+        PptZoomMenuOpen = true;
+        PptMenuOpen = false;
+        PptPagePanelOpen = false;
+        PptClearConfirm = false;
+        _dirty = true;
+        Console.WriteLine($"[文档] 缩放档位浮层打开（当前 {DocZoomPercentText}）");
+    }
+
     /// <summary>取消这一次"按下"（指针丢了 / 退出放映）：按下标记和拖动状态一起清掉。</summary>
     private void CancelPptPress()
     {
+        _docZoomBar.Pressed = false;
+        _docZoomBar.Dragging = false;
         if (!_pptPressed && !PptBarDragging) return;
         _pptPressed = false;
         PptBarDragging = false;
@@ -1288,6 +1395,8 @@ public partial class InkEngine
     /// <summary>
     /// 每帧推进（2026-10-02 第五轮起**没有长按**了）：只做两件到点的事——
     /// 引导卡过期、清空"再点确认"过期。接输入小窗的同步也在这里。
+    /// 另外：**条一收（退出放映 / 关文档 / 进白板 / 穿透）就收缩放浮层和拖动状态**，
+    /// 不留一个飘在屏幕上吃点击的孤儿浮层（用户 2026-11-16 明确要求）。
     /// </summary>
     internal void StepPptBar()
     {
@@ -1295,6 +1404,7 @@ public partial class InkEngine
         // 放在 `!PageBarVisible` 早退**之前**：退出放映也要能看到"该收了"。
         SyncPptInputWindow();
 
+        if (!PageBarVisible || !DocZoomBar) CloseDocZoomBarUi();
         if (!PageBarVisible) return;
 
         // 引导到点就擦掉（它只显示那么一两秒）
@@ -1306,6 +1416,13 @@ public partial class InkEngine
             PptClearConfirm = false;
             _dirty = true;
         }
+    }
+
+    /// <summary>缩放条不可见时把它的浮层 / 按下 / 拖动状态一起收干净（每帧调，无变化不标脏）。</summary>
+    internal void CloseDocZoomBarUi()
+    {
+        if (PptZoomMenuOpen) { PptZoomMenuOpen = false; _dirty = true; }
+        if (_docZoomBar.Pressed || _docZoomBar.Dragging) { _docZoomBar.Pressed = false; _docZoomBar.Dragging = false; _dirty = true; }
     }
 
     // =====================================================================
@@ -1334,6 +1451,7 @@ public partial class InkEngine
         // 也不能让"看得见的一块"落在小窗之外）。没开的那两块自然不参与。
         var box = RectF.Empty;
         box.Add(PptBarRect());
+        if (DocZoomBar) box.Add(DocZoomBarRect());
         if (PptMenuOpen) { PptMenuRect(out var menu); box.Add(menu); }
         if (PptPagePanelOpen) { PptPanelRect(out var panel); box.Add(panel); }
         if (PptZoomMenuOpen) { PptZoomMenuRect(out var zm); box.Add(zm); }
@@ -1694,5 +1812,33 @@ public partial class InkEngine
         var screen = ScreenRectPhysical();
         _pptBarX = screen.MinX + x * DpiScale;
         _pptBarY = screen.MinY + y * DpiScale;
+    }
+
+    /// <summary>缩放条位置落盘（同 <see cref="SavePptBarPos"/> 的口径：相对屏幕左上角的逻辑偏移）。</summary>
+    private void SaveDocZoomBarPos()
+    {
+        if (float.IsNaN(_docZoomBar.X)) return;
+        var screen = ScreenRectPhysical();
+        SetUiPref(DocZoomBarXPref, ((_docZoomBar.X - screen.MinX) / DpiScale)
+            .ToString("F1", CultureInfo.InvariantCulture));
+        SetUiPref(DocZoomBarYPref, ((_docZoomBar.Y - screen.MinY) / DpiScale)
+            .ToString("F1", CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// 读缩放条位置：**每次打开文档读一次**（老师上次把它放哪儿，这次还在那儿）。
+    /// 没有 / 读坏了 = 保持 NaN → 下一次问位置时回右下角默认（坏配置不能拖垮启动）。
+    /// 自检也走这一条（`--zoomtest` 验"重启后位置还在"）。
+    /// </summary>
+    internal void LoadDocZoomBarPos()
+    {
+        var sx = GetUiPref(DocZoomBarXPref);
+        var sy = GetUiPref(DocZoomBarYPref);
+        if (sx == null || sy == null) return;
+        if (!float.TryParse(sx, NumberStyles.Float, CultureInfo.InvariantCulture, out float x)) return;
+        if (!float.TryParse(sy, NumberStyles.Float, CultureInfo.InvariantCulture, out float y)) return;
+        var screen = ScreenRectPhysical();
+        _docZoomBar.X = screen.MinX + x * DpiScale;
+        _docZoomBar.Y = screen.MinY + y * DpiScale;
     }
 }

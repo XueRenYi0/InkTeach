@@ -1779,6 +1779,7 @@ public partial class InkEngine
         ViewScale = zoom;
         ViewOffsetX = anchorScreenX - cx * zoom;
         ViewOffsetY = anchorScreenY - cy * zoom;
+        CenterDocPageIfFits(zoom);             // ≤100% 且整页装得下 → 横向摆正到视口中心
         ClampViewOffset();
 
         DocZoom = zoom;
@@ -1788,6 +1789,30 @@ public partial class InkEngine
             + $"（页位图 {DocView.PageRenderScale:F2}x / 相机 {ViewScale:F2}x）");
         NoteDocResumeChange();
         NotifyUiStateChanged();
+    }
+
+    /// <summary>
+    /// **缩到 100% 及以下时把页横向摆正**（2026-11-16 用户要求）：
+    /// 只要"页宽 × 倍率 ≤ 视口宽"（整页装得下），就让页中心压着视口中心：
+    ///   `ViewOffsetX = 视口中心 X − 页中心 X × ViewScale`
+    /// 然后照旧夹进合法范围。这样从"200% 拖到左边"缩回 100% / 50% 时页不会贴死在左边。
+    ///
+    /// **100% 是例外**：那条路必须逐像素保持原样（`ViewOffsetX` 严格 0、页锚在主屏中心），
+    /// 所以这里不在 100% 时算"居中"，交给 <see cref="ClampOffsetX"/> 归零。
+    /// &gt;100% 不碰：页比视口宽，横向自由拖 + 夹取（现状）。
+    /// </summary>
+    private void CenterDocPageIfFits(float zoom)
+    {
+        if (!DocView.IsOpen || DocView.Count <= 0) return;
+        if (zoom > 1.0001f || MathF.Abs(zoom - 1f) <= 0.0005f) return;
+        int i = Math.Clamp(BarPageNow - 1, 0, DocView.Count - 1);
+        var p = DocView.At(i);
+        if (p == null) return;
+        float pageW = (p.Rect.MaxX - p.Rect.MinX) * zoom;
+        if (pageW > _virtualW + 0.5f) return;              // 页仍比视口宽：保持自由横拖
+        float pageCx = (p.Rect.MinX + p.Rect.MaxX) * 0.5f;
+        ViewOffsetX = _virtualX + _virtualW * 0.5f - pageCx * zoom;
+        ViewOffsetX = ClampOffsetX(ViewOffsetX);
     }
 
     /// <summary>放大一档（到头就停在 200%）。</summary>

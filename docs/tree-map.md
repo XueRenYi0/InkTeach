@@ -22,7 +22,7 @@
     **InkEngine/Core/**
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 156 行
-      - `Engine.cs` 2,841 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
+      - `Engine.cs` 2,866 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
       - `Engine.Host.cs` 2,225 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
@@ -49,7 +49,7 @@
 
     **InkEngine/Doc/**
       - `DocImageSource.cs` 292 行
-      - `DocImport.cs` 661 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
+      - `DocImport.cs` 663 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
       - `DocImport.Pan.cs` 167 行 — 文档「手掌」拖页：文档模式下按下拖动平移相机（不落墨、不选中）。
       - `DocMemory.cs` 84 行
       - `DocPages.cs` 662 行 — 文档页底层：页配方、惰性生成、视口窗口回收、文档缩放的页位图倍率。
@@ -116,8 +116,8 @@
       - `UpdateProbe.cs` 364 行
 
     **InkEngine/Ppt/**
-      - `Ppt.cs` 1,698 行 — PPT 批注：放映联动、按页落盘、翻页。
-      - `PptBar.cs` 348 行
+      - `Ppt.cs` 1,844 行 — PPT 批注：放映联动、按页落盘、翻页。
+      - `PptBar.cs` 396 行
       - `PptComLate.cs` 319 行
       - `PptComSource.cs` 440 行
       - `PptLaunch.cs` 236 行
@@ -137,8 +137,8 @@
       - `Overlay.Capture.cs` 789 行 — 截图取景框绘制：遮罩/准线/读数/手柄。
       - `Overlay.Content.cs` 685 行 — 内容层合成：分块光栅、相机变换、缩放合成、滚动条。
       - `Overlay.cs` 1,386 行 — 覆盖层主文件：窗口/初始化/生命周期。
-      - `Overlay.Frame.cs` 1,661 行 — 覆盖层帧渲染：内容/界面/装饰合成。
-      - `Overlay.PptBar.cs` 769 行 — PPT 条/回放条/滚动条绘制。
+      - `Overlay.Frame.cs` 1,662 行 — 覆盖层帧渲染：内容/界面/装饰合成。
+      - `Overlay.PptBar.cs` 785 行 — PPT 条/回放条/滚动条绘制。
       - `Overlay.Radial.cs` 657 行 — 呼出盘绘制。
       - `Overlay.Readout.cs` 1,572 行 — 读数、收藏面板、滚动条、回放/PPT 条绘制。
       - `Overlay.SelectionBar.cs` 1,065 行 — 选中操作条/色板/字体/图层/菜单的绘制。
@@ -295,7 +295,7 @@
         - `TextStyleShow.cs` 125 行
         - `ToastTest.cs` 43 行
         - `Touch.cs` 1,271 行 — 触摸手势 E2E。
-        - `Zoom.cs` 720 行 — 文档缩放 E2E（阶段 2：渲染核心 + 引擎缩放 API）。
+        - `Zoom.cs` 781 行 — 文档缩放 E2E（阶段 2：渲染核心 + 引擎缩放 API）。
         - `ZoomSelection.cs` 211 行 — 文档缩放 E2E（选中家具：手柄 / 操作条 / 面板 / 旋转柄在缩放下的屏幕恒定性）。
 
       **InkTeach/SelfTests/Unit/**

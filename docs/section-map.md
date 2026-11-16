@@ -94,7 +94,7 @@
 | 537 | 底行：名单 / 学号范围 |
 | 563 | 绘制小工具 |
 
-## src/InkEngine/Core/Engine.cs（2,841 行）
+## src/InkEngine/Core/Engine.cs（2,866 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -102,11 +102,11 @@
 | 28 | `internal enum PassThroughMode` |
 | 45 | `public partial class InkEngine` |
 | 576 | `internal enum CaptureDrag { None, Move, L, R, T, B, TL, TR, BL, BR }` |
-| 2176 | `internal enum VertexReadoutKind` |
-| 2306 | `internal enum AlignSnapKind` |
-| 2315 | `private enum AlignLineRole` |
-| 2322 | `private struct AlignAxisCandidate` |
-| 2424 | `private enum FrameDrive` |
+| 2201 | `internal enum VertexReadoutKind` |
+| 2331 | `internal enum AlignSnapKind` |
+| 2340 | `private enum AlignLineRole` |
+| 2347 | `private struct AlignAxisCandidate` |
+| 2449 | `private enum FrameDrive` |
 
 | 行 | 段落 |
 | --- | --- |
@@ -124,17 +124,17 @@
 | 1401 | 自绘预测尾（2026-10-15 接入：线性预测，Chromium 同族） |
 | 1481 | 长度限速（在"像素"上做，治"跳跃的笔头"） |
 | 1724 | 文档缩放（v1：只缩文档，50/75/100/125/150/200） |
-| 1989 | 交互矢量图的参数滑杆（v2.1） |
-| 2037 | 图形定义元素编辑（直线 / 箭头 / 圆 / 椭圆）：和"拖对象"同一条快路 |
-| 2295 | 对象吸附（2026-10-18） |
-| 2449 | 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictorLinear.cs） |
-| 2472 | 书写期间的分配 / GC 仪表（低配机排查用） |
-| 2555 | perf accounting |
-| 2568 | 界面接入口 |
-| 2576 | 工具带色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成 8 个可改色位） |
-| 2605 | 荧光笔的 5 个色位 / 5 档浓度（2026-10-28） |
-| 2629 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
-| 2687 | 延时探针（见 Latency.cs） |
+| 2014 | 交互矢量图的参数滑杆（v2.1） |
+| 2062 | 图形定义元素编辑（直线 / 箭头 / 圆 / 椭圆）：和"拖对象"同一条快路 |
+| 2320 | 对象吸附（2026-10-18） |
+| 2474 | 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictorLinear.cs） |
+| 2497 | 书写期间的分配 / GC 仪表（低配机排查用） |
+| 2580 | perf accounting |
+| 2593 | 界面接入口 |
+| 2601 | 工具带色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成 8 个可改色位） |
+| 2630 | 荧光笔的 5 个色位 / 5 档浓度（2026-10-28） |
+| 2654 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
+| 2712 | 延时探针（见 Latency.cs） |
 
 ## src/InkEngine/Core/Engine.Host.cs（2,225 行）
 
@@ -369,7 +369,7 @@
 | 2638 | 自定义取色板（8.2.0，色相条 + 饱和度/明度方块）的尺寸（逻辑像素） |
 | 3299 | 选中条弹层（AI / `⋯` 共用一套几何，2026-11-08） |
 
-## src/InkEngine/Doc/DocImport.cs（661 行）
+## src/InkEngine/Doc/DocImport.cs（663 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -697,7 +697,7 @@
 | 488 | 取清单 |
 | 587 | 下载与校验 |
 
-## src/InkEngine/Ppt/Ppt.cs（1,698 行）
+## src/InkEngine/Ppt/Ppt.cs（1,844 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -714,15 +714,16 @@
 | 627 | 底部那一条（PptBar）：翻页 / 页码 / 菜单 |
 | 639 | ---- 位置（可拖动 + 持久化） |
 | 641 | 位置（可拖动 + 持久化） |
-| 658 | 交互状态 |
-| 696 | 穿透模式下的"接输入小窗"（条那一块） |
-| 725 | 菜单里的开关与确认 |
-| 789 | 文档缩放档位浮层（2026-11-16）：点百分比格弹出来 |
-| 1174 | 按下之后移动够了 = **直接拖动**（不用先长按——用户 2026-09-26 定的 |
-| 1190 | 拖动中：条跟着指针走 |
-| 1199 | 悬停高亮（给绘制用） |
-| 1311 | 穿透模式下"PPT 条那一块"的接输入小窗 |
-| 1667 | 位置的持久化 |
+| 671 | 交互状态 |
+| 709 | 穿透模式下的"接输入小窗"（条那一块） |
+| 738 | 菜单里的开关与确认 |
+| 802 | 文档缩放档位浮层（2026-11-16）：点百分比格弹出来 |
+| 1223 | 按下之后移动够了 = **直接拖动**（不用先长按——用户 2026-09-26 定的 |
+| 1239 | 拖动中：条跟着指针走 |
+| 1248 | 缩放条：同一套"点击 vs 拖动"（百分比格按住拖 = 挪缩放条） |
+| 1251 | 悬停高亮（给绘制用） |
+| 1428 | 穿透模式下"PPT 条那一块"的接输入小窗 |
+| 1785 | 位置的持久化 |
 
 ## src/InkEngine/Rendering/Engine.Cursor.cs（800 行）
 
@@ -799,7 +800,7 @@
 | 726 | 延时探针 |
 | 775 | 委托墨迹轨迹（微软的低延迟湿墨通道） |
 
-## src/InkEngine/Rendering/Overlay.Frame.cs（1,661 行）
+## src/InkEngine/Rendering/Overlay.Frame.cs（1,662 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -809,7 +810,7 @@
 | --- | --- |
 | 23 | Frame |
 
-## src/InkEngine/Rendering/Overlay.PptBar.cs（769 行）
+## src/InkEngine/Rendering/Overlay.PptBar.cs（785 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -817,7 +818,7 @@
 
 | 行 | 段落 |
 | --- | --- |
-| 357 | 回放（墨迹 C） |
+| 373 | 回放（墨迹 C） |
 
 ## src/InkEngine/Rendering/Overlay.Radial.cs（657 行）
 
@@ -1635,7 +1636,7 @@
 | 1226 | ④ 第二根手指按下：正在写的那一笔不许被换掉 |
 | 1251 | 收尾：两根一起抬，交进文档 |
 
-## src/InkTeach/SelfTests/E2E/Zoom.cs（720 行）
+## src/InkTeach/SelfTests/E2E/Zoom.cs（781 行）
 
 | 行 | 顶层类型 |
 | --- | --- |

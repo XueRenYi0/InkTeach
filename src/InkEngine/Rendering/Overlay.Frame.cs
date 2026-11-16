@@ -535,6 +535,7 @@ internal sealed partial class OverlayWindow
             if (app.PageBarVisible)
             {
                 cur = app.PptBarRect();
+                if (app.DocZoomBar) cur.Add(app.DocZoomBarRect());
                 if (app.PptPagePanelOpen) { app.PptPanelRect(out var pp); cur.Add(pp.MinX, pp.MinY); cur.Add(pp.MaxX, pp.MaxY); }
                 // 菜单和首次引导都长在条的上方（引导还比菜单窄一点，用同一个矩形兜住就够）
                 if ((!app.BoardOn && app.PptMode && app.PptHintVisible) || app.PptMenuOpen)

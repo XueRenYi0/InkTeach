@@ -583,6 +583,7 @@ public partial class InkEngine
         // 先进页空间（切槽 + 相机就位），再排页——页的锚点是固定的，不依赖当时视口。
         DocStoreKey = storeKey;
         EnterDocPageSpace(storeKey);
+        LoadDocZoomBarPos();              // 缩放条位置：这份/上次的文档模式记下的位置
 
         float gap = 24f * DpiScale;                       // 页缝 = 24 逻辑像素（和白板页界线同语言）
         DocView.Open(specs, title, PrimaryScreenCenterX(), 0f, gap);
@@ -623,6 +624,7 @@ public partial class InkEngine
         // 手掌是"文档模式"的一部分：关文档就关掉（退出文档 = 回到桌面 + 那格恢复成穿透箭头）。
         ExitDocPan("关文档");
         PptZoomMenuOpen = false;            // 缩放浮层同理：文档都没了，别留一个孤儿浮层吃点击
+        CloseDocZoomBarUi();                // 缩放条的按下 / 拖动状态一起收（无孤儿状态）
         string title = DocView.Title;
 
         // 白板是独立槽：关文档前先退出白板，回到文档页，避免出现

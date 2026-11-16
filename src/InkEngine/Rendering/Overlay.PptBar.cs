@@ -118,27 +118,9 @@ internal sealed partial class OverlayWindow
         DrawPptArrow(app, PptBar.ArrowCell(bar, left: false, dpi),
                      left: false, hot: app.PptBarHover == (int)PptBarZone.RightArrow);
 
-        // **文档模式**（PDF / 图片）多一组缩放：`│ [−] [100% ▾] [+] │`。
-        // 插在页码组和 ☰ 之间，顺序固定、不镜像；PPT / 白板的 206 宽条一个像素都不变。
-        if (app.DocZoomBar)
-        {
-            DrawPptZoomButton(app, PptBar.ZoomOutCell(bar, dpi), plus: false,
-                              hot: app.PptBarHover == (int)PptBarZone.ZoomOut,
-                              enabled: app.DocZoomOutEnabled);
-            DrawPptZoomButton(app, PptBar.ZoomInCell(bar, dpi), plus: true,
-                              hot: app.PptBarHover == (int)PptBarZone.ZoomIn,
-                              enabled: app.DocZoomInEnabled);
-            DrawPptZoomPercent(app, PptBar.ZoomPctCell(bar, dpi),
-                               hot: app.PptBarHover == (int)PptBarZone.ZoomPct,
-                               open: app.PptZoomMenuOpen);
-
-            // 页码组 ↔ 缩放组的分隔线（和右边那条同一个画法）
-            float ldx = PptBar.DividerLeftX(bar, dpi);
-            _scratch.Color = new Color4(theme.PanelBorder.R, theme.PanelBorder.G,
-                                        theme.PanelBorder.B, 0.7f);
-            _ctx.DrawLine(new Vector2(ldx, bar.MinY + 10f * dpi),
-                          new Vector2(ldx, bar.MaxY - 10f * dpi), _scratch, 1f * dpi);
-        }
+        // **文档模式**（PDF / 图片）另有一条**独立缩放条**（右下角，见 DrawDocZoomBar）。
+        // 翻页条本身仍是 206 宽、一个像素都不变；缩放条不跟它拴在一起。
+        if (app.DocZoomBar) DrawDocZoomBar(app);
 
         // 1px 分隔线：把"翻页组"和"菜单键"分成两块（页码组内部一对箭头 + 页码仍然是一套）。
         // 画在 8 宽分隔带的正中间，上下各留 10——不是通栏，看着不割裂。
@@ -187,11 +169,45 @@ internal sealed partial class OverlayWindow
         if (!app.BoardOn && app.PptMode && app.PptHintVisible) DrawPptHint(app);
         if (app.PptPagePanelOpen) DrawPptPagePanel(app);
         if (app.PptMenuOpen) DrawPptMenu(app);
+    }
+
+    /// <summary>
+    /// 文档模式的**缩放条**（独立的一条）：`[−] [100% ▾] [+]`。参考浏览器 PDF 阅读器
+    /// 右下角那颗独立缩放胶囊——和翻页条分开之后，窄窗口里两条各让各的，不会挤成一条 366。
+    ///
+    /// 悬停 / 拖动反馈和翻页条同一套：悬停格有底、拖动中整条描边变强调色。
+    /// 档位浮层锚在它的百分比格上、开在它上方（几何见 <see cref="PptBar.ZoomMenuRect"/>）。
+    /// </summary>
+    private void DrawDocZoomBar(InkEngine app)
+    {
+        float dpi = app.UiUnit;
+        var theme = app.FloatingTheme;
+        var bar = app.DocZoomBarRect();
+        float radius = MathF.Min(theme.CornerRadius * dpi, (bar.MaxY - bar.MinY) * 0.5f);
+        DrawPanelCard(app, bar, radius);
+
+        if (app.DocZoomBarDragging)
+        {
+            _scratch.Color = theme.ActiveBg;
+            _ctx.DrawRoundedRectangle(
+                new RoundedRectangle(new Vortice.RawRectF(bar.MinX, bar.MinY, bar.MaxX, bar.MaxY),
+                                     radius, radius), _scratch, 2f * dpi);
+        }
+
+        DrawPptZoomButton(app, PptBar.ZoomOutCell(bar, dpi), plus: false,
+                          hot: app.PptBarHover == (int)PptBarZone.ZoomOut,
+                          enabled: app.DocZoomOutEnabled);
+        DrawPptZoomButton(app, PptBar.ZoomInCell(bar, dpi), plus: true,
+                          hot: app.PptBarHover == (int)PptBarZone.ZoomIn,
+                          enabled: app.DocZoomInEnabled);
+        DrawPptZoomPercent(app, PptBar.ZoomPctCell(bar, dpi),
+                           hot: app.PptBarHover == (int)PptBarZone.ZoomPct,
+                           open: app.PptZoomMenuOpen);
         if (app.PptZoomMenuOpen) DrawPptZoomMenu(app);
     }
 
     /// <summary>
-    /// 缩放组里的 − / ＋：**自绘**（和翻页箭头同一套视觉重量：1.5 线宽、次要色，
+    /// 缩放条里的 − / ＋：**自绘**（和翻页箭头同一套视觉重量：1.5 线宽、次要色，
     /// 悬停转深）。到头的那一颗**置灰**——"点了没反应"是最伤人的，先让它看着不能点。
     /// </summary>
     private void DrawPptZoomButton(InkEngine app, in RectF box, bool plus, bool hot, bool enabled)

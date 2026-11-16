@@ -112,20 +112,20 @@ public partial class InkEngine
             if ((PptBarZone)PptBarHover == PptBarZone.ZoomOut)
             {
                 EngineTooltipHover(14, "缩小", "Ctrl+滚轮", "上一档（最小 50%）",
-                    PptBar.ZoomOutCell(bar, DpiScale));
+                    PptBar.ZoomOutCell(DocZoomBarRect(), DpiScale));
                 return;
             }
             if ((PptBarZone)PptBarHover == PptBarZone.ZoomIn)
             {
                 EngineTooltipHover(15, "放大", "Ctrl+滚轮", "下一档（最大 200%）",
-                    PptBar.ZoomInCell(bar, DpiScale));
+                    PptBar.ZoomInCell(DocZoomBarRect(), DpiScale));
                 return;
             }
             if ((PptBarZone)PptBarHover == PptBarZone.ZoomPct)
             {
                 EngineTooltipHover(16, "缩放", null,
-                    "点 = 档位表（适合宽度 / 适合整页 / 50%~200%）；Ctrl+滚轮也行",
-                    PptBar.ZoomPctCell(bar, DpiScale));
+                    "点 = 档位表（适合宽度 / 适合整页 / 50%~200%）；按住拖可挪条",
+                    PptBar.ZoomPctCell(DocZoomBarRect(), DpiScale));
                 return;
             }
         }
