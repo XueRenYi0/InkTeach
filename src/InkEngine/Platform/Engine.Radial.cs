@@ -32,9 +32,11 @@ public partial class InkEngine
     //   · 颜色扇区 = "给我这支颜色的笔"（不在笔上就切到笔，走 SwitchTool）。
     //
     // 扇区顺序（从北起、顺时针，**排序 V-a**：上下左右四个正位给前四高频、四角给次频；
-    // 用户 2026-09-30 定）：笔 / 黑 / 红 / 蓝 / 橡皮 / 框选 / 荧光笔 / 激光。
-    // 正位 = 笔·红·橡皮·荧光笔；四角 = 黑·蓝·框选·激光。黑红蓝 = `InkPalette.PenBand`
-    // 的前三个（色带本来就是"常用的排前面：黑红蓝绿…"），且保持顺时针相邻。
+    // 用户 2026-09-30 定；2026-10-25 v3 定型为现在的八格）：
+    //   常用色 / 荧光笔 / 下一色 / 框选 / 橡皮 / 清屏 / 上一色 / 撤销。
+    // 颜色格（北 / 东 / 西）**一律读主条活色带**（`PenSwatchColors`，2026-11-16 起）：
+    // 北 = 色带第 2 格（老版本写死的"红"）；东西 = 当前色在活色带里的前后一格。
+    // 用户在主条上改过色位之后，盘上的颜色/名字必须一起变（见 LivePenBand 那几个成员）。
     // 尺寸与视觉规格对齐（2026-09-30 v4 定稿：方案 S「全扇面」、直径 192）：
     // 盘半径 96、死区 24、锁定 36；环带 40→96、图标 24 居中在 R68（见 Overlay）。
     // 判位一直是**按角度分 45° 扇区**，扇面化只换画法：死区/锁定/滞回一个字没动。
@@ -65,10 +67,11 @@ public partial class InkEngine
 
     /// <summary>
     /// 扇区名：画盘、日志、自检共用一份（顺序 = 从北顺时针）。
-    /// 2026-10-25 v3：红笔居中、东西翻色、四角常用（撤销/荧光/清屏/框选）。
+    /// 2026-10-25 v3：颜色格居中、东西翻色、四角常用（撤销/荧光/清屏/框选）。
+    /// 2026-11-16：北格从「红笔」改成「常用色」——它的颜色跟主条活色带走，不再是写死的红。
     /// </summary>
     internal static readonly string[] RadialSectorNames =
-        { "红笔", "荧光笔", "下一色", "框选", "橡皮", "清屏", "上一色", "撤销" };
+        { "常用色", "荧光笔", "下一色", "框选", "橡皮", "清屏", "上一色", "撤销" };
 
     /// <summary>中央文案要用的"划过又回中心"判据（盘开着时才有意义）。</summary>
     internal bool RadialMovedForDraw => _radialMoved;
@@ -252,10 +255,11 @@ public partial class InkEngine
             if (PassThrough) SetPassThrough(false, restoreBoard: false);
 
             Console.WriteLine($"呼出盘 → {RadialSectorNames[sec]}");
-            // v3（2026-10-25）：北=红笔（固定）、东西=翻色、四角=撤销/荧光/清屏/框选。
+            // v3（2026-10-25）：颜色格在北、东西=翻色、四角=撤销/荧光/清屏/框选。
+            // 2026-11-16：北格 = 「常用色」，颜色跟主条活色带走（不再是写死的红）。
             switch (sec)
             {
-                case 0: PickPenColorFromPalette(1); break;      // 红笔（PenBand[1]）
+                case 0: PickPenColorFromPalette(RadialCommonColorBandIndex); break;   // 常用色（活色带第 2 格）
                 case 1: ToolKeyPress(KeyAction.ToolHighlighter); break;
                 case 2: CyclePenColor(+1); break;               // 下一色
                 case 3: ToolKeyPress(KeyAction.ToolMarquee); break;
@@ -278,47 +282,88 @@ public partial class InkEngine
             ? (float)Math.Clamp((NowMs - _radialClearArmedAtMs) / RadialClearHoldMs, 0, 1)
             : 0f;
 
-    /// <summary>西格要显示的“上一支笔”颜色（当前色不在色带里时从白开始）。</summary>
+    /// <summary>
+    /// 北格「常用色」用主条活色带的第几格（2026-11-16）。
+    /// 老版本这里是写死的 `InkPalette.PenBand[1]`（红）；现在整盘颜色格都跟主条那排
+    /// 色片走，所以下标记在这里——以后调"常用色"占哪一格只改这一个数。
+    /// </summary>
+    internal const int RadialCommonColorBandIndex = 1;
+
+    /// <summary>
+    /// **活色带** = 主条那排色片（<see cref="PenSwatchColors"/>：顺序、长度和色带 UI 一致，
+    /// 用户在主条上改过的颜色就是这一份）。呼出盘所有颜色格都读它——用户改过色位之后，
+    /// 盘上的扇格 / 色环 / 名字必须跟着变，不能还显示出厂默认色。
+    /// </summary>
+    private Color4[] LivePenBand => PenSwatchColors;
+
+    private int ClampBandIndex(int i) => Math.Clamp(i, 0, LivePenBand.Length - 1);
+
+    /// <summary>北格「常用色」的实时颜色（= 活色带第 2 格）。</summary>
+    internal Color4 RadialCommonPenColor => LivePenBand[ClampBandIndex(RadialCommonColorBandIndex)];
+
+    /// <summary>北格「常用色」的名字（改过这个色位就说“自定义色”）。</summary>
+    internal string RadialCommonPenName => LivePenBandName(RadialCommonColorBandIndex);
+
+    /// <summary>西格要显示的“上一支笔”颜色（当前色不在色带里时从最后一格开始）。</summary>
     internal Color4 RadialPrevPenColor => PenBandColorAtOffset(-1);
 
-    /// <summary>东格要显示的“下一支笔”颜色（当前色不在色带里时从黑开始）。</summary>
+    /// <summary>东格要显示的“下一支笔”颜色（当前色不在色带里时从第一格开始）。</summary>
     internal Color4 RadialNextPenColor => PenBandColorAtOffset(+1);
 
     /// <summary>盘下提示里的“上一色/下一色”名字。</summary>
-    internal string RadialPrevPenName => InkPalette.PenBand[PenBandOffsetIndex(-1)].Name;
-    internal string RadialNextPenName => InkPalette.PenBand[PenBandOffsetIndex(+1)].Name;
+    internal string RadialPrevPenName => LivePenBandName(PenBandOffsetIndex(-1));
+    internal string RadialNextPenName => LivePenBandName(PenBandOffsetIndex(+1));
 
     /// <summary>
-    /// 在 `InkPalette.PenBand` 里按当前笔色找位置再前后挪一格。
-    /// 不着色带（主条自定义色）时：下一色从黑（0）开始、上一色从白（末尾）开始。
+    /// 色位名：颜色还是默认色就沿用色带名（红/蓝…）；被换成**别的**颜色就说“自定义色”——
+    /// 中央提示不能显示一个跟格子颜色对不上的名字。换进来的正好是另一支默认色时，
+    /// 说那支默认色的名字（更接近用户眼里的颜色）。
+    /// </summary>
+    private string LivePenBandName(int i)
+    {
+        if (i < 0 || i >= LivePenBand.Length) return "自定义色";
+        var c = LivePenBand[i];
+        if (i < InkPalette.PenBand.Length && ColorNear(c, InkPalette.PenBand[i].Color, 0.02f))
+            return InkPalette.PenBand[i].Name;
+        foreach (var (name, color) in InkPalette.PenBand)
+            if (ColorNear(c, color, 0.02f)) return name;
+        return "自定义色";
+    }
+
+    /// <summary>
+    /// 在**活色带**里按当前笔色找位置再前后挪一格。
+    /// 不着色带（主条自定义色）时：下一色从第一格开始、上一色从最后一格开始
+    /// （语义和改版前一致，只是颜色换成活色带的那一份）。
     /// </summary>
     private int PenBandOffsetIndex(int dir)
     {
-        int n = InkPalette.PenBand.Length;
+        int n = LivePenBand.Length;
         int idx = -1;
         for (int i = 0; i < n; i++)
         {
-            if (ColorNear(CurrentColor, InkPalette.PenBand[i].Color, 0.02f)) { idx = i; break; }
+            if (ColorNear(CurrentColor, LivePenBand[i], 0.02f)) { idx = i; break; }
         }
         if (idx < 0) idx = dir > 0 ? -1 : 0;
         return ((idx + dir) % n + n) % n;
     }
 
-    private Color4 PenBandColorAtOffset(int dir) => InkPalette.PenBand[PenBandOffsetIndex(dir)].Color;
+    private Color4 PenBandColorAtOffset(int dir) => LivePenBand[PenBandOffsetIndex(dir)];
 
-    /// <summary>呼出盘“上一色 / 下一色”：切到笔 + 在色带里前后挪一格（2026-10-25 v3）。</summary>
+    /// <summary>
+    /// 呼出盘“上一色 / 下一色”：切到笔 + 在**主条活色带**里前后挪一格（2026-10-25 v3，
+    /// 2026-11-16 起读活色带）。
+    /// </summary>
     private void CyclePenColor(int dir)
     {
         if (Tool != Tool.Pen) SwitchTool(Tool.Pen);
         SetColorFromUi(PenBandColorAtOffset(dir));
     }
 
-    /// <summary>颜色扇区 = "给我这支颜色的笔"（不在笔上就切到笔；穿透互斥等照常态）。</summary>
+    /// <summary>颜色扇区 = "给我这支颜色的笔"（活色带第 bandIndex 格；不在笔上就切到笔）。</summary>
     private void PickPenColorFromPalette(int bandIndex)
     {
-        bandIndex = Math.Clamp(bandIndex, 0, InkPalette.PenBand.Length - 1);
         if (Tool != Tool.Pen) SwitchTool(Tool.Pen);
-        SetColorFromUi(InkPalette.PenBand[bandIndex].Color);
+        SetColorFromUi(LivePenBand[ClampBandIndex(bandIndex)]);
     }
 
     private void CancelRadialPalette(string why)

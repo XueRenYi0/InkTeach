@@ -88,13 +88,14 @@ default position never hides by accident. Hiding has to be a deliberate drag.
 
 `Ctrl+Alt+Shift+Q` (**a global key: it works while any other app is in front**): hold it and eight
 sectors appear at the cursor; flick toward the function you want and **release to apply**.
-Eight sectors (clockwise from north) = red pen / highlighter / next colour / select / eraser /
+Eight sectors (clockwise from north) = common colour / highlighter / next colour / select / eraser /
 clear page / previous colour / undo. The centre shows the current tool icon + colour ring and
 previews the sector under the cursor.
 
-- **Red pen is fixed at north**; the east/west cells are next/previous colour (black and blue sit
-  on either side of red).
-- **Clear page is at the south-west corner** and requires a 0.8s hold (current page only);
+- **Common colour is fixed at north**, and its colour follows the main colour band (red by default;
+  change that swatch and the sector follows). The east/west cells are next/previous colour — the
+  neighbours of the current colour in the main band, read from the same live band.
+- **Clear page is at the south-west corner** (trash icon) and requires a 0.8s hold (current page only);
   **undo is at the north-west corner**.
 - The palette **no longer closes after 5s** (9.4.0): it stays until release / click / click outside / Esc.
 - Skipping the wait: the palette appears after 120ms, so an expert can flick before it is ever shown.
@@ -265,12 +266,15 @@ centre mark.
 - **Whiteboard**: an opaque layer (white / green / black plus grid or ruled patterns); your ink is
   still there when you switch back to the slide.
 - **Timer / random student picker**: two independent centred windows that share the toolbar's visual
-  language, in both themes. The timer keeps three independent modes (switching tabs doesn't stop a
-  running one, it rings at zero), collapses to a 320×150 clock, and can go truly fullscreen; at zero
-  the **digits and the progress ring turn red together**, readable from the back of the room.
+  language, in both themes. The timer keeps four independent modes (switching tabs doesn't stop a
+  running one, it rings at zero); the fourth, **Clock**, just shows local `HH:mm` (24-hour, no
+  seconds). It collapses to a **206×48** clock (same height as the PDF bar) and can go truly
+  fullscreen; at zero the **digits and the progress ring turn red together**, readable from the back
+  of the room.
   The stopwatch always shows total time; **Lap** records a split without stopping it, and pausing
   shows per-lap, cumulative, average, fastest and slowest times. Continue keeps the records;
-  Reset clears them.
+  Reset clears them. A collapsed clock comes back automatically when a PDF opens, unless you closed
+  it with ×; opening the timer manually re-enables that.
   The picker never repeats anyone (and resets when exhausted); the roster lives in
   `%APPDATA%\InkTeach\Names.txt`, and with no roster it can pick student numbers `1–N` directly.
 
@@ -283,7 +287,7 @@ centre mark.
 <p align="center">
 <img src="design/readme/09-计时改时长.png" width="560" alt="Editing the duration: hours/minutes/seconds columns">
 &nbsp;&nbsp;
-<img src="design/readme/10-计时最小化.png" width="320" alt="Minimised: 320×150 clock">
+<img src="design/readme/10-计时最小化.png" width="320" alt="Minimised: 206×48 clock">
 &nbsp;&nbsp;
 <img src="design/readme/12-课堂窗-深色-点名.png" width="560" alt="Random picker, dark theme">
 </p>

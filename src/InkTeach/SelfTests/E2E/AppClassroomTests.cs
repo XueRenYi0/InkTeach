@@ -2,6 +2,7 @@
 // [测试] --timertest / --rolltest
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -12,16 +13,16 @@ namespace InkTeach;
 
 /// <summary>
 /// 课堂窗自检（2026-10-02 起：计时/点名改为 InkClass 式独立窗口）。
-/// 计时：三模式 / 改时长 / 开始暂停 / 到点超时 / 最小化 / 全屏 / 真拖动 / 接输入小窗。
+/// 计时：四模式 / 改时长 / 开始暂停 / 到点超时 / 最小化 / 全屏 / 真拖动 / 接输入小窗。
 /// 点名：人数 / 抽奖定格 / 去重池 / 三列排布 / 名单 / 快捷态自动关 / 真拖动 / 接输入小窗。
 /// </summary>
 internal sealed partial class App
 {
-    /// <summary>`--timertest`：计时窗（独立窗：三模式 / 改时长 / 到点 / 最小化 / 全屏 / 拖动）。</summary>
+    /// <summary>`--timertest`：计时窗（独立窗：四模式 / 改时长 / 到点 / 最小化 / 全屏 / 拖动）。</summary>
     private void TimerTest()
     {
         Console.WriteLine();
-        Console.WriteLine("=== 课堂计时器自检（独立窗：三模式 / 改时长 / 到点 / 最小化 / 全屏 / 接输入小窗）===");
+        Console.WriteLine("=== 课堂计时器自检（独立窗：四模式 / 改时长 / 到点 / 最小化 / 全屏 / 接输入小窗）===");
         int pass = 0, fail = 0;
         void Check(string name, bool ok, string detail = "")
         {
@@ -61,13 +62,15 @@ internal sealed partial class App
         var c2 = Card();
         float lu = TimerWin.Layout(c2, U());
 
-        // ② 命中：页签/开始/重置/最小化/全屏/关闭/数字
+        // ② 命中：四页签/开始/重置/最小化/全屏/关闭/数字
         TimerZone Z(in RectF r) => TimerWin.ZoneAt(c2, lu, (r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f,
                                                    TimerSettingsOpen, TimerKind == TimerMode.Countdown);
-        Check("命中：三页签 / 开始 / 重置 / 最小化 / 全屏 / 关闭 / 数字 都判对",
-              Z(TimerWin.TabRect(c2, lu, 0)) == TimerZone.Tab0
+        Check("命中：四页签 / 开始 / 重置 / 最小化 / 全屏 / 关闭 / 数字 都判对",
+              TimerWin.ModeCount == 4
+              && Z(TimerWin.TabRect(c2, lu, 0)) == TimerZone.Tab0
               && Z(TimerWin.TabRect(c2, lu, 1)) == TimerZone.Tab1
               && Z(TimerWin.TabRect(c2, lu, 2)) == TimerZone.Tab2
+              && Z(TimerWin.TabRect(c2, lu, 3)) == TimerZone.Tab3
               && Z(TimerWin.BtnRect(c2, lu, TimerZone.Start)) == TimerZone.Start
               && Z(TimerWin.BtnRect(c2, lu, TimerZone.Reset)) == TimerZone.Reset
               && Z(TimerWin.BtnRect(c2, lu, TimerZone.Minimize)) == TimerZone.Minimize
@@ -75,11 +78,27 @@ internal sealed partial class App
               && Z(TimerWin.BtnRect(c2, lu, TimerZone.Close)) == TimerZone.Close
               && Z(TimerWin.ValueRect(c2, lu)) == TimerZone.Value);
 
-        // ③ 三模式页签（待机可切）
+        // ②.5 四段页签不重叠、不压窗口钮、都在 980 卡片里
+        {
+            var tab0 = TimerWin.TabRect(c2, lu, 0);
+            var tab3 = TimerWin.TabRect(c2, lu, 3);
+            var winBtn = TimerWin.BtnRect(c2, lu, TimerZone.Minimize);
+            Check("页签：4×108 排得下（不重叠 / 不压窗口钮）",
+                  tab0.MaxX < TimerWin.TabRect(c2, lu, 1).MinX
+                  && TimerWin.TabRect(c2, lu, 1).MaxX < TimerWin.TabRect(c2, lu, 2).MinX
+                  && TimerWin.TabRect(c2, lu, 2).MaxX < tab3.MinX
+                  && tab3.MaxX < winBtn.MinX
+                  && tab3.MaxX <= c2.MaxX,
+                  $"t3={tab3.MaxX:F0} 按钮={winBtn.MinX:F0}");
+        }
+
+        // ③ 四模式页签（待机可切）
         ClickRect(TimerWin.TabRect(c2, lu, 1));
         Check("页签：切「正计时」", TimerKind == TimerMode.CountUp, $"{TimerKind}");
         ClickRect(TimerWin.TabRect(c2, lu, 2));
         Check("页签：切「秒表」", TimerKind == TimerMode.Stopwatch, $"{TimerKind}");
+        ClickRect(TimerWin.TabRect(c2, lu, 3));
+        Check("页签：切「时间」", TimerKind == TimerMode.Clock, $"{TimerKind}");
         ClickRect(TimerWin.TabRect(c2, lu, 0));
         Check("页签：切回「倒计时」", TimerKind == TimerMode.Countdown, $"{TimerKind}");
 
@@ -199,21 +218,29 @@ internal sealed partial class App
             StopTimerFromUi();
         }
 
-        // ⑧ 最小化（320×150）/ 还原；全屏往返
+        // ⑧ 最小化（206×48）/ 还原；全屏往返
         OpenTimerCardFromUi();
         var fullWin = TimerCardRect();
         var fullCard = TimerWin.CardRect(fullWin, U(), false);
         float fullLu = TimerWin.Layout(fullCard, U());
         ClickRect(TimerWin.BtnRect(fullCard, fullLu, TimerZone.Minimize));
         var minWin = TimerCardRect();
-        Check("最小化：320×150 逻辑",
+        Check("最小化：206×48 逻辑",
               TimerMinimized
               && MathF.Abs(minWin.MaxX - minWin.MinX - TimerWin.MinDW * U()) < 1.5f
               && MathF.Abs(minWin.MaxY - minWin.MinY - TimerWin.MinDH * U()) < 1.5f,
               $"{minWin.MaxX - minWin.MinX:F0}×{minWin.MaxY - minWin.MinY:F0}");
-        ClickRect(TimerWin.MinimalDigitsRect(minWin, U()));
+        Check("最小化：不跳位（窗口中心不变）",
+              MathF.Abs((minWin.MinX + minWin.MaxX) * 0.5f - (fullWin.MinX + fullWin.MaxX) * 0.5f) < 1.5f
+              && MathF.Abs((minWin.MinY + minWin.MaxY) * 0.5f - (fullWin.MinY + fullWin.MaxY) * 0.5f) < 1.5f,
+              $"({(minWin.MinX + minWin.MaxX) * 0.5f:F0},{(minWin.MinY + minWin.MaxY) * 0.5f:F0})");
+        var mdr = TimerWin.MinimalDigitsRect(minWin, U());
+        Check("最小化：整框都是还原/拖动热区（不留底部拖条）",
+              MathF.Abs(mdr.MinX - minWin.MinX) < 0.5f && MathF.Abs(mdr.MinY - minWin.MinY) < 0.5f
+              && MathF.Abs(mdr.MaxX - minWin.MaxX) < 0.5f && MathF.Abs(mdr.MaxY - minWin.MaxY) < 0.5f);
+        ClickRect(mdr);
         var backWin = TimerCardRect();
-        Check("最小化：点数字还原 1100×700",
+        Check("最小化：点整框还原 1100×700",
               !TimerMinimized
               && MathF.Abs(backWin.MaxX - backWin.MinX - TimerWin.DW * U()) < 1.5f,
               $"{backWin.MaxX - backWin.MinX:F0}×{backWin.MaxY - backWin.MinY:F0}");
@@ -395,6 +422,141 @@ internal sealed partial class App
               st.TimerCardOpen == TimerCardOpen && st.TimerSettingsOpen == TimerSettingsOpen
               && st.TimerMode == TimerKind);
         StopTimerFromUi(); SettleFrames(100);
+
+        // ⑭ 「时间」档（2026-11-16）：HH:mm / 无开始重置 / 收起 206×48 /
+        //    文档自动挂回 / × 抑制 / 手动打开清抑制 / 偏好跨重启
+        {
+            void OpenFakeDoc(string key)
+            {
+                CloseDocument();
+                var specs = new List<DocPages.Spec>();
+                for (int i = 0; i < 4; i++)
+                    specs.Add(new DocPages.Spec
+                    {
+                        Kind = 0, Source = "clock-test.png", SourceIndex = i,
+                        OutW = 800, OutH = 1120,
+                    });
+                DocPageWorker = false;
+                StartDocViewForTest(specs, "时钟测试.pdf", key);
+                DocView.Generator = sp => FakeDocPageBgra(sp.OutW, sp.OutH, 246, 246, 248);
+                SettleFrames(80);
+            }
+
+            StopTimerFromUi();
+            OpenTimerCardFromUi();
+            var cw = TimerWin.CardRect(TimerCardRect(), U(), false);
+            float clu = TimerWin.Layout(cw, U());
+
+            StartTimerFromUi(TimerMode.Countdown, 300f);   // 后台跑一个，验"切到时间不打断计时"
+            ClickRect(TimerWin.TabRect(cw, clu, 3));
+            Check("时间：切过去不打断后台倒计时", TimerKind == TimerMode.Clock && TimerTabRunning(0));
+            string t = TimerDisplayText();
+            bool hhmm = t.Length == 5 && t[2] == ':'
+                        && t[0] >= '0' && t[0] <= '9' && t[1] >= '0' && t[1] <= '9'
+                        && t[3] >= '0' && t[3] <= '9' && t[4] >= '0' && t[4] <= '9';
+            Check("时间：显示 HH:mm（24 小时、不含秒）", TimerKind == TimerMode.Clock && hhmm, t);
+            Check("时间：纯函数 ClockText 补零/24 小时",
+                  TimerWin.ClockText(new DateTime(2026, 11, 16, 9, 5, 0)) == "09:05"
+                  && TimerWin.ClockText(new DateTime(2026, 11, 16, 23, 59, 0)) == "23:59");
+
+            Check("时间：切过去只要一帧（分钟边界），不跟 60fps", TimerWantsFrame);
+            TimerTickForTest();
+            Check("时间：分钟 tick 之后不再连续要帧", !TimerWantsFrame);
+
+            TimerZone ZC(in RectF r) => TimerWin.ZoneAt(cw, clu, (r.MinX + r.MaxX) * 0.5f,
+                                                       (r.MinY + r.MaxY) * 0.5f, false, false, false, true);
+            Check("时间：开始 / 重置 / 分段 / 数字都不再是动作热区",
+                  ZC(TimerWin.BtnRect(cw, clu, TimerZone.Start)) == TimerZone.Body
+                  && ZC(TimerWin.BtnRect(cw, clu, TimerZone.Reset)) == TimerZone.Body
+                  && ZC(TimerWin.BtnRect(cw, clu, TimerZone.Lap)) == TimerZone.Body
+                  && ZC(TimerWin.ValueRect(cw, clu)) == TimerZone.Body
+                  && ZC(TimerWin.TabRect(cw, clu, 3)) == TimerZone.Tab3
+                  && ZC(TimerWin.BtnRect(cw, clu, TimerZone.Close)) == TimerZone.Close);
+            ClickRect(TimerWin.BtnRect(cw, clu, TimerZone.Start));
+            Check("时间：点开始位置不会启动（无运行态、模式不变）",
+                  !TimerActive && !TimerPaused && TimerKind == TimerMode.Clock);
+
+            // 秒表收起：隐藏 .cc
+            ClickRect(TimerWin.TabRect(cw, clu, 2));
+            StartTimerFromUi(TimerMode.Stopwatch, 0f);
+            SettleFrames(40);
+            TimerTickForTest();
+            string fullSw = TimerDisplayText();
+            ClickRect(TimerWin.BtnRect(cw, clu, TimerZone.Minimize));
+            string minSw = TimerMinimalText();
+            Check("秒表：全卡保留百分秒、收起只留 MM:SS",
+                  fullSw.Contains('.') && !minSw.Contains('.') && minSw.Length == 5,
+                  $"{fullSw} → {minSw}");
+            ClickRect(TimerWin.MinimalDigitsRect(TimerCardRect(), U()));
+
+            // 四种模式收起都是 206×48
+            bool allMin = true;
+            for (int i = 0; i < TimerWin.ModeCount; i++)
+            {
+                var cc = TimerWin.CardRect(TimerCardRect(), U(), false);
+                float cclu = TimerWin.Layout(cc, U());
+                ClickRect(TimerWin.TabRect(cc, cclu, i));
+                ClickRect(TimerWin.BtnRect(cc, cclu, TimerZone.Minimize));
+                var mr = TimerCardRect();
+                allMin &= TimerMinimized
+                          && MathF.Abs(mr.MaxX - mr.MinX - TimerWin.MinDW * U()) < 1.5f
+                          && MathF.Abs(mr.MaxY - mr.MinY - TimerWin.MinDH * U()) < 1.5f;
+                ClickRect(TimerWin.MinimalDigitsRect(mr, U()));
+            }
+            Check("收起几何：四种模式都是 206×48 逻辑", allMin);
+
+            // 时间 + 收起 → 偏好 → 模拟重启
+            var c3 = TimerWin.CardRect(TimerCardRect(), U(), false);
+            float c3lu = TimerWin.Layout(c3, U());
+            ClickRect(TimerWin.TabRect(c3, c3lu, 3));
+            ClickRect(TimerWin.BtnRect(c3, c3lu, TimerZone.Minimize));
+            Check("时间：收起态数字仍是 HH:mm", TimerMinimized && TimerMinimalText().Length == 5,
+                  TimerMinimalText());
+            Check("偏好：timerKind=3 / timerMinimized=1 / timerCardOpen=1",
+                  GetUiPref("timerKind") == "3" && GetUiPref("timerMinimized") == "1"
+                  && GetUiPref("timerCardOpen") == "1",
+                  $"kind={GetUiPref("timerKind")} min={GetUiPref("timerMinimized")} open={GetUiPref("timerCardOpen")}");
+            TimerReloadPrefsForTest();
+            SetPassThroughFromUi(false);       // 模拟新进程：不是"手动开窗强制穿透"那条路
+            Check("模拟重启：读回「时间」+ 收起，但窗口不自己开",
+                  TimerKind == TimerMode.Clock && TimerMinimized && !TimerCardOpen && !TimerClockClosed);
+
+            // 进文档：自动挂回（收起 206×48）
+            OpenFakeDoc("clock-auto-1");
+            var aw = TimerCardRect();
+            Check("文档打开：时间挂钟自动挂回（收起 206×48）",
+                  TimerCardOpen && TimerMinimized
+                  && MathF.Abs(aw.MaxX - aw.MinX - TimerWin.MinDW * U()) < 1.5f
+                  && MathF.Abs(aw.MaxY - aw.MinY - TimerWin.MinDH * U()) < 1.5f,
+                  $"{aw.MaxX - aw.MinX:F0}×{aw.MaxY - aw.MinY:F0}");
+
+            // 点整框还原 → × 关窗 = 以后不再自动挂回
+            ClickRect(TimerWin.MinimalDigitsRect(TimerCardRect(), U()));
+            Check("收起：点整框还原成完整卡片", !TimerMinimized && TimerCardOpen);
+            var fw = TimerWin.CardRect(TimerCardRect(), U(), false);
+            float flu = TimerWin.Layout(fw, U());
+            ClickRect(TimerWin.BtnRect(fw, flu, TimerZone.Close));
+            Check("时间档 ×：记下 clockClosed 并关窗", TimerClockClosed && !TimerCardOpen);
+            Check("偏好：timerClockClosed=1、timerCardOpen 清掉",
+                  GetUiPref("timerClockClosed") == "1" && GetUiPref("timerCardOpen") == null);
+            CloseDocument();
+            OpenFakeDoc("clock-auto-2");
+            Check("× 关过后再进文档：不自动挂回", !TimerCardOpen && TimerClockClosed);
+
+            // 手动打开 = 清抑制（再模拟一次重启，确认偏好里真的清掉了）
+            OpenTimerCardFromUi();
+            Check("手动打开：清掉 clockClosed（下次文档仍会挂回）",
+                  !TimerClockClosed && TimerCardOpen);
+            TimerReloadPrefsForTest();
+            Check("手动打开并重启：窗口不自己开、抑制已清",
+                  !TimerCardOpen && !TimerClockClosed);
+            CloseDocument();
+            OpenFakeDoc("clock-auto-3");
+            Check("手动打开后进文档：照常挂回（按展开态）",
+                  TimerCardOpen && !TimerMinimized && TimerKind == TimerMode.Clock);
+            CloseDocument();
+            StopTimerFromUi(); SettleFrames(80);
+        }
 
         Console.WriteLine();
         Console.WriteLine($"  合计 {pass + fail} 项：通过 {pass}，失败 {fail}");

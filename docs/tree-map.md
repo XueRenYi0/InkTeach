@@ -16,7 +16,7 @@
       - `OcrText.cs` 148 行
 
     **InkEngine/Classroom/**
-      - `Classroom.cs` 2,104 行 — 计时/点名窗：状态、名单、窗口交互。
+      - `Classroom.cs` 2,238 行 — 计时/点名窗：状态、名单、窗口交互。
       - `ClassroomDraw.cs` 717 行 — 课堂窗绘制：卡片/按钮/名牌/环/分段表。
 
     **InkEngine/Core/**
@@ -49,7 +49,7 @@
 
     **InkEngine/Doc/**
       - `DocImageSource.cs` 292 行
-      - `DocImport.cs` 715 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
+      - `DocImport.cs` 718 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
       - `DocImport.Pan.cs` 342 行 — 文档「手掌」拖页 + 双指捏合缩放 / 放大后平移（文档相机）。
       - `DocMemory.cs` 86 行
       - `DocPages.cs` 602 行 — 文档页底层：页配方、惰性生成、视口窗口回收；缩放只记相机倍率（页位图恒 1×）。
@@ -100,11 +100,11 @@
       - `DiagLog.cs` 1,270 行 — 运行日志、设备卡、日志上传同意。
       - `Engine.Hotkey.cs` 625 行 — 热键处理：WM_HOTKEY → 动作。
       - `Engine.Keyboard.cs` 628 行 — 键盘模式与键盘手势：工具键、色带键、滚轮/↑↓ 视野平移。
-      - `Engine.Radial.cs` 680 行 — 呼出盘：按住/划向扇区/松手。
+      - `Engine.Radial.cs` 725 行 — 呼出盘：按住/划向扇区/松手。
       - `Engine.Update.cs` 1,124 行 — 自动更新：检查/下载/换壳。
       - `EraserTelemetry.cs` 329 行
       - `GcLatency.cs` 109 行
-      - `KeyBindings.cs` 576 行 — 键位表、作用域、冲突检测、解析。
+      - `KeyBindings.cs` 577 行 — 键位表、作用域、冲突检测、解析。
       - `Latency.cs` 216 行
       - `LogFeedback.cs` 93 行
       - `Native.cs` 1,451 行 — Win32 P/Invoke 集合。
@@ -140,7 +140,7 @@
       - `Overlay.cs` 1,417 行 — 覆盖层主文件：窗口/初始化/生命周期。
       - `Overlay.Frame.cs` 1,662 行 — 覆盖层帧渲染：内容/界面/装饰合成。
       - `Overlay.PptBar.cs` 785 行 — PPT 条/回放条/滚动条绘制。
-      - `Overlay.Radial.cs` 657 行 — 呼出盘绘制。
+      - `Overlay.Radial.cs` 669 行 — 呼出盘绘制。
       - `Overlay.Readout.cs` 1,572 行 — 读数、收藏面板、滚动条、回放/PPT 条绘制。
       - `Overlay.SelectionBar.cs` 1,064 行 — 选中操作条/色板/字体/图层/菜单的绘制。
       - `Overlay.Toast.cs` 339 行
@@ -148,7 +148,7 @@
       - `OverlayLayerManager.cs` 192 行
       - `OverlayLayerRegistration.cs` 215 行
       - `SvgPath.cs` 271 行
-      - `Ui.cs` 1,675 行 — 界面接入契约：IOverlayUi / IEngineCommands / UiState。
+      - `Ui.cs` 1,678 行 — 界面接入契约：IOverlayUi / IEngineCommands / UiState。
       - `UiHost.cs` 262 行
       - `UiImageBytes.cs` 40 行
 
@@ -204,10 +204,10 @@
       - `App.Dev.Geometry.cs` 470 行
       - `App.Dev.Input.cs` 76 行
       - `App.Dev.Metrics.cs` 590 行
-      - `App.Dev.PageShow.cs` 689 行 — 界面出图 / 状态探针：--panelshow 离屏截图、--pageshow 画布截图。
+      - `App.Dev.PageShow.cs` 757 行 — 界面出图 / 状态探针：--panelshow 离屏截图、--pageshow 画布截图。
       - `App.Dev.Render.cs` 484 行
       - `App.Dev.Sheets.cs` 382 行
-      - `App.Dev.Showcase.cs` 438 行
+      - `App.Dev.Showcase.cs` 449 行
       - `App.Dev.Smooth.cs` 624 行 — 平滑/运动模型展示工具（开发期）。
       - `App.Dev.TextShow.cs` 488 行
       - `AppIconUi.cs` 199 行
@@ -243,7 +243,7 @@
       **InkTeach/SelfTests/E2E/**
         - `AiApiShow.cs` 44 行
         - `ApiConfigTest.cs` 103 行
-        - `AppClassroomTests.cs` 629 行 — 课堂窗 E2E（计时/点名）。
+        - `AppClassroomTests.cs` 791 行 — 课堂窗 E2E（计时/点名）。
         - `ArrowClearTest.cs` 94 行
         - `AutoStart.cs` 106 行
         - `Backup.cs` 210 行
@@ -274,7 +274,7 @@
         - `Navigation.cs` 1,154 行 — 滚动/翻页/相机 E2E。
         - `OverlayAudit.cs` 218 行
         - `PageAudit.cs` 153 行
-        - `PanelAndKeys.cs` 6,598 行 — 产品界面/键位/穿透 E2E。
+        - `PanelAndKeys.cs` 6,643 行 — 产品界面/键位/穿透 E2E。
         - `PhotoBeautifyShow.cs` 80 行
         - `PlotFromCard.cs` 174 行
         - `PlotSuiteTest.cs` 205 行

@@ -306,6 +306,17 @@ internal sealed partial class App
         ShowHud = false;
         RadialTestHold = true;
 
+        // --customband：把主条色带改成**非默认**（band[1] 绿、band[2] 橙），
+        // 用来验"呼出盘的北格/东西格跟着活色带走"（2026-11-16）。
+        // 顺手开白板：出图背景干净，色块/垃圾桶看得清（和 --axisshow 同一套做法）。
+        if (Environment.GetCommandLineArgs().Contains("--customband"))
+        {
+            BoardOn = true;
+            PenSwatchColors[1] = new Color4(0.20f, 0.78f, 0.35f, 1f);
+            PenSwatchColors[2] = new Color4(0.98f, 0.52f, 0.10f, 1f);
+            CurrentColor = PenSwatchColors[0];       // 当前 = 第一格：下一色才是改过的绿
+        }
+
         float cx = _virtualX + _virtualW * 0.5f;
         float cy = _virtualY + _virtualH * 0.5f;
 

@@ -615,6 +615,9 @@ public partial class InkEngine
         LoadDocInk(storeKey);
         ClampViewOffset();
         LoadDocResumePrompt(storeKey);   // 只在跨会话、且位置不是"第 1 页页顶"时弹卡（不自动跳）
+        // 进文档（PDF）模式：如果「时间」档还挂着（收起或展开、且没被 × 关过），按上次状态挂回来。
+        // 每次打开文档都判断一次——不是只有第一次（用户 2026-11-16 定）。
+        MaybeAutoShowTimerOnDocEntry();
         _docSavedVersion = Doc.Version;
         SetInkStatus($"文档：{title}（{DocView.Count} 页）");
         Console.WriteLine($"[文档] 已打开 {title}：{DocView.Count} 页（页图惰性生成）");

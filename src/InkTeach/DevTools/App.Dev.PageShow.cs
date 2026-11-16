@@ -263,6 +263,14 @@ internal sealed partial class App
                 _quit = true;
                 return;
             }
+            // --pdfclock：出「PDF 打开 + 时间档收起挂钟」整屏图（2026-11-16）。
+            // 走真实路径：先选时间档并收起 → 模拟重启（只剩偏好）→ 打开假文档触发自动挂回。
+            if (cli.Contains("--pdfclock"))
+            {
+                PdfClockShowcase(path);
+                _quit = true;
+                return;
+            }
             // --width N：先把粗细调成 N 再出图（看"真实大小预览"用）
             int wi = Array.IndexOf(cli, "--width");
             if (wi >= 0 && wi + 1 < cli.Length && float.TryParse(cli[wi + 1], out float widthArg))
@@ -456,7 +464,7 @@ internal sealed partial class App
                         float tcu = TimerUnit();
                         var tcin = TimerWin.CardRect(TimerCardRect(), tcu, false);
                         float tlu = TimerWin.Layout(tcin, tcu);
-                        var tr = TimerWin.TabRect(tcin, tlu, Math.Clamp(tabArg, 0, 2));
+                        var tr = TimerWin.TabRect(tcin, tlu, Math.Clamp(tabArg, 0, TimerWin.ModeCount - 1));
                         TimerPointerDownForTest((tr.MinX + tr.MaxX) * 0.5f, (tr.MinY + tr.MaxY) * 0.5f);
                         TimerPointerUpForTest((tr.MinX + tr.MaxX) * 0.5f, (tr.MinY + tr.MaxY) * 0.5f);
                     }
@@ -504,10 +512,14 @@ internal sealed partial class App
                 if (argvW.Contains("--keepboard")) SetPassThroughFromUi(false);
                 SettleFrames(300);
                 var wr = argvW.Contains("--timerwin") ? TimerCardRect() : RollCardRect();
-                bool okW = ScreenProbe.SaveBmp(path,
-                    (int)MathF.Floor(wr.MinX), (int)MathF.Floor(wr.MinY),
-                    Math.Max(1, (int)MathF.Ceiling(wr.MaxX - wr.MinX)),
-                    Math.Max(1, (int)MathF.Ceiling(wr.MaxY - wr.MinY)));
+                int wx = (int)MathF.Floor(wr.MinX), wy = (int)MathF.Floor(wr.MinY);
+                int ww = Math.Max(1, (int)MathF.Ceiling(wr.MaxX - wr.MinX));
+                int wh = Math.Max(1, (int)MathF.Ceiling(wr.MaxY - wr.MinY));
+                // 路径写 .png 就转成真 PNG（BMP 字节直接改后缀，看图工具会打不开）；
+                // 其余后缀沿用老习惯写 BMP。
+                bool okW = path.EndsWith(".png", StringComparison.OrdinalIgnoreCase)
+                    ? SaveScreenPng(path, wx, wy, ww, wh)
+                    : ScreenProbe.SaveBmp(path, wx, wy, ww, wh);
                 Console.WriteLine(okW
                     ? $"已出图 {path}（截屏 {wr.MaxX - wr.MinX:F0}×{wr.MaxY - wr.MinY:F0}）"
                     : "出图失败");
@@ -658,6 +670,62 @@ internal sealed partial class App
         bool ok = SaveScreenPng(path, (int)_virtualX, (int)_virtualY,
                                 Math.Max(1, (int)_virtualW), Math.Max(1, (int)_virtualH));
         Console.WriteLine(ok ? $"已出图 {path}（文档恢复卡）" : "出图失败");
+        ExitCode = ok ? 0 : 1;
+        CloseDocument();
+        DocResumeStore.Delete(key);
+    }
+
+    /// <summary>
+    /// `--panelshow &lt;out.png&gt; --pdfclock`：PDF（假页）打开 + 「时间」档收起挂钟 206×48。
+    ///
+    /// 走的是产品路径，不是摆拍：选「时间」→ 点收起 → `TimerReloadPrefsForTest` 模拟重启
+    /// （窗口关着，只剩 timerKind/timerMinimized/timerCardOpen 三条偏好）→ `StartDocViewForTest`
+    /// → `StartDocView` 里的 `MaybeAutoShowTimerOnDocEntry` 把挂钟挂回来。
+    /// 图里同时能看到翻页条 / 缩放条，验收"206×48 不挡底条"。
+    /// </summary>
+    private void PdfClockShowcase(string path)
+    {
+        if (DocView.IsOpen) CloseDocument();
+        string key = "clock-showcase";
+        DocResumeStore.Delete(key);
+        BoardOn = false;
+        Tool = Tool.Pen;
+
+        // ① 产品路径：开计时窗 → 选「时间」→ 收起 → 模拟重启（窗口不在了，偏好还在）
+        OpenTimerCardFromUi();
+        SettleFrames(120);
+        var cw = TimerWin.CardRect(TimerCardRect(), TimerUnit(), false);
+        float clu = TimerWin.Layout(cw, TimerUnit());
+        void ClickAxis(in RectF r)
+        {
+            TimerPointerDownForTest((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
+            TimerPointerUpForTest((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
+        }
+        ClickAxis(TimerWin.TabRect(cw, clu, 3));
+        ClickAxis(TimerWin.BtnRect(cw, clu, TimerZone.Minimize));
+        SettleFrames(150);
+        TimerReloadPrefsForTest();
+        SetPassThroughFromUi(false);      // 模拟新进程：不是"开窗时强制穿透"的那条路
+
+        // ② 打开文档：StartDocView 里的自动挂回把「时间」按收起状态放回来
+        var specs = new List<DocPages.Spec>();
+        for (int i = 0; i < 8; i++)
+            specs.Add(new DocPages.Spec
+            {
+                Kind = 0, Source = "示范讲义.png", SourceIndex = i,
+                OutW = 1400, OutH = 1980,
+            });
+        DocPageWorker = false;
+        StartDocViewForTest(specs, "示范讲义.pdf", key);
+        DocView.Generator = sp => FakeDocPageBgra(sp.OutW, sp.OutH, 250, 250, 252);
+        SettleFrames(800);
+
+        var tw = TimerCardRect();
+        Console.WriteLine($"  [pdfclock] 挂钟 {tw.MaxX - tw.MinX:F0}×{tw.MaxY - tw.MinY:F0}"
+                          + $" 开={TimerCardOpen} 收起={TimerMinimized} 显示={TimerDisplayText()}");
+        bool ok = SaveScreenPng(path, (int)_virtualX, (int)_virtualY,
+                                Math.Max(1, (int)_virtualW), Math.Max(1, (int)_virtualH));
+        Console.WriteLine(ok ? $"已出图 {path}（PDF + 时间挂钟）" : "出图失败");
         ExitCode = ok ? 0 : 1;
         CloseDocument();
         DocResumeStore.Delete(key);

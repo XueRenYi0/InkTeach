@@ -505,7 +505,7 @@ internal sealed partial class App
             TileTest();
             return null;
         }),
-        new("--timertest", "课堂计时器自检（功能卡：设置态↔运行态 / ⚙ / ±1分 / 到点超时 / 提示音 / 穿透小窗）", args =>
+        new("--timertest", "课堂计时器自检（四模式：倒计时/正计时/秒表/时间 / 改时长 / 到点 / 收起 206×48 / PDF 自动挂钟）", args =>
         {
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;

@@ -757,7 +757,7 @@ public sealed partial class FullUi
     /// </summary>
     private (string Label, string Hint, bool Enabled, bool Danger) HubTileInfo(int code) => code switch
     {
-        0 => ("计时器", "倒计时 / 正计时 / 秒表；卡片可拖动、双击放大", true, false),
+        0 => ("计时器", "倒计时 / 正计时 / 秒表 / 时间；卡片可拖动、双击放大", true, false),
         1 => ("点名", "全名单，抽过的不重复；范围可设", true, false),
         2 => ("随机一人", "自动抽一个，1.5 秒自动关", true, false),
         3 => ("保存…", "整份板书存成 .inkb，或存成图片（jpg / png，好发微信）", _host != null && !_host.State.PptMode && _host.State.StrokeCount > 0, false),

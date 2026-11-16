@@ -38,7 +38,7 @@
 | 75 | `internal sealed class OcrLine` |
 | 82 | `internal sealed class ModelListResult` |
 
-## src/InkEngine/Classroom/Classroom.cs（2,104 行）
+## src/InkEngine/Classroom/Classroom.cs（2,238 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -46,31 +46,31 @@
 | 32 | `internal enum RollZone` |
 | 49 | `internal static class WinScale` |
 | 99 | `internal static class TimerWin` |
-| 451 | `internal static class RollWin` |
-| 705 | `public partial class InkEngine` |
-| 712 | `private struct TimerRun` |
+| 471 | `internal static class RollWin` |
+| 725 | `public partial class InkEngine` |
+| 733 | `private struct TimerRun` |
 
 | 行 | 段落 |
 | --- | --- |
-| 106 | 版式常量（相对卡片左上角；数字后面那行是"凭什么这么定"） |
-| 125 | 暂停统计（秒表） |
-| 193 | 主区（环 + 数字 + 说明） |
-| 212 | 秒表暂停统计 |
-| 286 | 底部主按钮（带文字） |
-| 325 | 改时长态 |
-| 364 | 最小化态 |
-| 407 | 文本格式（纯函数） |
-| 480 | 名牌区 |
-| 598 | 控制行（人数步进 + 抽奖） |
-| 617 | 信息行（不重复池） |
-| 628 | 顶栏 / 底行 |
-| 650 | 无名单时的学号范围 |
-| 707 | 计时器 |
-| 1198 | 计时窗指针 |
-| 1435 | 计时窗接输入小窗（穿透时） |
-| 1545 | 点名 |
-| 2011 | 点名名单（Names.txt） |
-| 2078 | 自检钩子（开发期用） |
+| 109 | 版式常量（相对卡片左上角；数字后面那行是"凭什么这么定"） |
+| 128 | 暂停统计（秒表） |
+| 197 | 主区（环 + 数字 + 说明） |
+| 222 | 秒表暂停统计 |
+| 296 | 底部主按钮（带文字） |
+| 335 | 改时长态 |
+| 374 | 最小化态 |
+| 422 | 文本格式（纯函数） |
+| 500 | 名牌区 |
+| 618 | 控制行（人数步进 + 抽奖） |
+| 637 | 信息行（不重复池） |
+| 648 | 顶栏 / 底行 |
+| 670 | 无名单时的学号范围 |
+| 727 | 计时器 |
+| 1330 | 计时窗指针 |
+| 1552 | 计时窗接输入小窗（穿透时） |
+| 1662 | 点名 |
+| 2128 | 点名名单（Names.txt） |
+| 2195 | 自检钩子（开发期用） |
 
 ## src/InkEngine/Classroom/ClassroomDraw.cs（717 行）
 
@@ -82,8 +82,8 @@
 | --- | --- |
 | 80 | 通用小工具（卡片 / 按钮 / 名牌 / 环） |
 | 163 | 计时窗 |
-| 197 | 顶栏：左边分段（凹槽 + 选中药丸） |
-| 227 | 顶栏：右上角三个窗口钮（收起 / 全屏 / 关闭） |
+| 190 | 顶栏：左边分段（凹槽 + 选中药丸） |
+| 220 | 顶栏：右上角三个窗口钮（收起 / 全屏 / 关闭） |
 | 354 | 左栏：总时长 + 关键统计 |
 | 397 | 右栏：分段表 |
 | 475 | 点名窗 |
@@ -370,7 +370,7 @@
 | 2638 | 自定义取色板（8.2.0，色相条 + 饱和度/明度方块）的尺寸（逻辑像素） |
 | 3299 | 选中条弹层（AI / `⋯` 共用一套几何，2026-11-08） |
 
-## src/InkEngine/Doc/DocImport.cs（715 行）
+## src/InkEngine/Doc/DocImport.cs（718 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -611,7 +611,7 @@
 | 365 | 笔的 8 个色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成可改色位） |
 | 487 | 滚轮 / ↑↓：同一类"阅读视野"输入（放在键盘这一份，避免再开 partial） |
 
-## src/InkEngine/Platform/Engine.Radial.cs（680 行）
+## src/InkEngine/Platform/Engine.Radial.cs（725 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -621,7 +621,7 @@
 | --- | --- |
 | 18 | 呼出盘（Ctrl+Alt+Shift+Q）：按住 → 划向扇区 → 松手 |
 | 20 | 来龙去脉：《调研-笔键方案.md》附录 C/D（键盘呼出版；笔身键版留待真机实测硬件）。 |
-| 442 | 呼出盘自检钩子（--radialtest / --radialshow） |
+| 487 | 呼出盘自检钩子（--radialtest / --radialshow） |
 
 ## src/InkEngine/Platform/Engine.Update.cs（1,124 行）
 
@@ -838,7 +838,7 @@
 | --- | --- |
 | 373 | 回放（墨迹 C） |
 
-## src/InkEngine/Rendering/Overlay.Radial.cs（657 行）
+## src/InkEngine/Rendering/Overlay.Radial.cs（669 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -886,21 +886,21 @@
 | --- | --- |
 | 23 | 界面层 |
 
-## src/InkEngine/Rendering/Ui.cs（1,675 行）
+## src/InkEngine/Rendering/Ui.cs（1,678 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 23 | `public interface IOverlayUi` |
 | 183 | `public interface IUiHost` |
-| 310 | `public enum TimerMode` |
-| 321 | `public interface IEngineCommands` |
-| 823 | `public static class InkPalette` |
-| 964 | `public static class Hsv` |
-| 1016 | `public static class ShapeSpec` |
-| 1160 | `public static class LibraryCategoryIds` |
-| 1538 | `public enum UiTouchScrollPhase` |
-| 1574 | `public static class UiTouchFling` |
-| 1661 | `public sealed class NullUi : IOverlayUi` |
+| 311 | `public enum TimerMode` |
+| 324 | `public interface IEngineCommands` |
+| 826 | `public static class InkPalette` |
+| 967 | `public static class Hsv` |
+| 1019 | `public static class ShapeSpec` |
+| 1163 | `public static class LibraryCategoryIds` |
+| 1541 | `public enum UiTouchScrollPhase` |
+| 1577 | `public static class UiTouchFling` |
+| 1664 | `public sealed class NullUi : IOverlayUi` |
 
 ## src/InkEngine/Shapes/Engine.Library.cs（1,105 行）
 
@@ -1023,7 +1023,7 @@
 | 59 | 拖动 / 改宽 / 点答案（走和真机同一条指针路径） |
 | 135 | 普通文本框：同一套对象/存档/8 手柄 |
 
-## src/InkTeach/DevTools/App.Dev.PageShow.cs（689 行）
+## src/InkTeach/DevTools/App.Dev.PageShow.cs（757 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -1062,11 +1062,11 @@
 | --- | --- |
 | 15 | `internal sealed partial class App` |
 
-## src/InkTeach/SelfTests/E2E/AppClassroomTests.cs（629 行）
+## src/InkTeach/SelfTests/E2E/AppClassroomTests.cs（791 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
-| 18 | `internal sealed partial class App` |
+| 19 | `internal sealed partial class App` |
 
 ## src/InkTeach/SelfTests/E2E/BoardAndLaser.cs（1,377 行）
 
@@ -1320,7 +1320,7 @@
 | 974 | 下一笔 B：默认从 A 的左上斜穿到右下；左侧场景在 A 左边再竖写一条 |
 | 1078 | 滚动阶段（--left）：内容垫够两屏 → 滚 5 格，按"S 像素整体平移"逐行对； |
 
-## src/InkTeach/SelfTests/E2E/PanelAndKeys.cs（6,598 行）
+## src/InkTeach/SelfTests/E2E/PanelAndKeys.cs（6,643 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -1431,20 +1431,21 @@
 | 6273 | ① 打开：盘心 = 按下那一刻的指针 |
 | 6280 | ② 死区（没移动）松手 = 取消 |
 | 6290 | ③ 划向正东 =「下一色」：红 → 蓝 |
-| 6303 | ④ 在别的工具上点北（红笔）= 切回笔 + 红 |
-| 6315 | ⑤ 北格固定红：已经是红笔时再点，还是红（不循环） |
+| 6303 | ④ 在别的工具上点北（常用色，默认 = 红）= 切回笔 + 那个颜色 |
+| 6315 | ⑤ 北格 = 常用色：已经是它时再点，还是这个色（不循环） |
 | 6324 | ⑥ 其余扇区（v3：东北=荧光、南=橡皮、西=上一色、东南=框选、西北=撤销） |
 | 6352 | ⑥.1 西北 = 撤销一步 |
 | 6373 | ⑥.2 西南 = 清屏：停不满 0.8s 不执行，停满才清当前页 |
-| 6395 | ⑥.5 v3 排序与扇面几何（2026-10-25 定稿） |
-| 6411 | ⑦ 跨扇区滞回：出界 9° 以内不跳扇区 |
-| 6425 | ⑧ 穿透里照样能呼出：这是"把笔从下层抢回来"的入口（2026-10-04 用户定） |
-| 6465 | ⑨ 写字中（笔尖在屏上）不响应 |
-| 6472 | ⑩ 松键轮询：放映那条路没有 KeyUp，靠每帧 GetAsyncKeyState |
-| 6480 | ⑪ 呼出盘现在是常驻全局键（Ctrl+Alt+Shift+Q），放映临时表里不重复挂 |
-| 6493 | ⑫ 真键盘 + 真鼠标：全局热键那条路（RegisterHotKey → WM_HOTKEY → 打开） |
-| 6529 | ⑬ 真键盘：先松修饰键（盘还在）→ 松开 Alt/Shift 后按 Esc 取消 |
-| 6554 | ⑭ 真键盘 + 穿透：开着穿透按 Ctrl+Alt+Shift+Q 也能调出笔来 |
+| 6395 | ⑥.5 v3 排序与扇面几何（2026-10-25 定稿；2026-11-16 北格改名常用色） |
+| 6411 | ⑥.6 活色带（2026-11-16）：盘上的颜色格跟主条那排色片走 |
+| 6456 | ⑦ 跨扇区滞回：出界 9° 以内不跳扇区 |
+| 6470 | ⑧ 穿透里照样能呼出：这是"把笔从下层抢回来"的入口（2026-10-04 用户定） |
+| 6510 | ⑨ 写字中（笔尖在屏上）不响应 |
+| 6517 | ⑩ 松键轮询：放映那条路没有 KeyUp，靠每帧 GetAsyncKeyState |
+| 6525 | ⑪ 呼出盘现在是常驻全局键（Ctrl+Alt+Shift+Q），放映临时表里不重复挂 |
+| 6538 | ⑫ 真键盘 + 真鼠标：全局热键那条路（RegisterHotKey → WM_HOTKEY → 打开） |
+| 6574 | ⑬ 真键盘：先松修饰键（盘还在）→ 松开 Alt/Shift 后按 Esc 取消 |
+| 6599 | ⑭ 真键盘 + 穿透：开着穿透按 Ctrl+Alt+Shift+Q 也能调出笔来 |
 
 ## src/InkTeach/SelfTests/E2E/PptStorage.cs（1,783 行）
 

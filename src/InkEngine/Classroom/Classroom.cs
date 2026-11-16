@@ -17,10 +17,10 @@ internal enum TimerZone
     Start,       // 开始 / 暂停 / 继续 / 到点重开
     Lap,         // 秒表：分段（只记录，不打断计时）
     Reset,       // 重置回待机
-    Minimize,    // 收成 320×150 小时钟（点数字还原）
+    Minimize,    // 收成 206×48 小挂钟（点一下还原）
     Fullscreen,  // 全屏
     Close,       // 停止并关窗（InkClass 同款语义）
-    Tab0, Tab1, Tab2,
+    Tab0, Tab1, Tab2, Tab3,
     Ok,          // 改时长态的 ✓
     Restore,     // 最小化态点数字：还原
 }
@@ -74,7 +74,7 @@ internal static class WinScale
 /// <summary>
 /// 计时窗几何（**2026-10-05 重设计**，理由见下面那段"为什么重画"）。
 ///
-/// 设计稿 1100×700、卡片内缩 60（卡片 980×580）；改时长态、最小化 320×150、全屏。
+/// 设计稿 1100×700、卡片内缩 60（卡片 980×580）；改时长态、最小化 206×48、全屏。
 /// 全部乘 u（= DpiScale × 适配缩放）得到物理像素。
 ///
 /// ## 为什么重画（这一段是这次改动的全部理由，别删）
@@ -99,7 +99,10 @@ internal static class WinScale
 internal static class TimerWin
 {
     public const float DW = 1100f, DH = 700f, Inset = 60f;
-    public const float MinDW = 320f, MinDH = 150f;
+    /// <summary>收起后的挂钟：206×48 逻辑（和 PDF 底条同高），整框可拖、单击还原。</summary>
+    public const float MinDW = 206f, MinDH = 48f;
+    /// <summary>模式数（倒计时 / 正计时 / 秒表 / 时间）——页签、运行槽、命中都读它。</summary>
+    public const int ModeCount = 4;
     private const float CardDW = DW - Inset * 2f;   // 980
     private const float CardDH = DH - Inset * 2f;   // 580
 
@@ -173,7 +176,7 @@ internal static class TimerWin
 
     // ---- 顶栏 ---------------------------------------------------------------
 
-    /// <summary>三段模式控件：贴左边，不再居中（居中那三个药丸是原来最像"照搬"的地方）。</summary>
+    /// <summary>四段模式控件：贴左边，不再居中（居中那三个药丸是原来最像"照搬"的地方）。</summary>
     public static RectF TabRect(in RectF card, float u, int i)
     {
         float x = card.MinX + (Pad + i * (SegW + SegGap)) * u;
@@ -181,11 +184,12 @@ internal static class TimerWin
         return new RectF { MinX = x, MinY = y, MaxX = x + SegW * u, MaxY = y + SegH * u };
     }
 
-    /// <summary>分段控件外面那道**凹槽**（三段整体内缩 4）——和工具带上那档同一套画法。</summary>
+    /// <summary>分段控件外面那道**凹槽**（整段内缩 4）——和工具带上那档同一套画法。
+    /// 2026-11-16 起是四段（倒计时 / 正计时 / 秒表 / 时间），4×108 + 3×4 在 980 卡片里放得下。</summary>
     public static RectF SegTroughRect(in RectF card, float u)
     {
         var a = TabRect(card, u, 0);
-        var b = TabRect(card, u, 2);
+        var b = TabRect(card, u, ModeCount - 1);
         return new RectF { MinX = a.MinX - 4f * u, MinY = card.MinY + TopY * u,
                            MaxX = b.MaxX + 4f * u, MaxY = card.MinY + (TopY + TopH) * u };
     }
@@ -208,6 +212,12 @@ internal static class TimerWin
     public static RectF PillRect(in RectF card, float u)
         => new() { MinX = CX(card) - CapW * u * 0.5f, MinY = card.MinY + CapY * u,
                    MaxX = CX(card) + CapW * u * 0.5f, MaxY = card.MinY + (CapY + CapH) * u };
+
+    /// <summary>「时间」档的大字区（HH:mm）：不画环、不画进度，只占中间这块。
+    /// 比环略高一点，字才撑得满卡片；窗口钮 / 页签仍在顶栏。</summary>
+    public static RectF ClockValueRect(in RectF card, float u)
+        => new() { MinX = CX(card) - 360f * u, MinY = card.MinY + 150f * u,
+                   MaxX = CX(card) + 360f * u, MaxY = card.MinY + 410f * u };
 
     // ---- 秒表暂停统计 --------------------------------------------------------
 
@@ -363,24 +373,29 @@ internal static class TimerWin
 
     // ---- 最小化态 ------------------------------------------------------------
 
+    /// <summary>收起态整框都是"点一下还原"的热区（2026-11-16：原来的底部拖动条去掉，
+    /// 206×48 这么小再分两块只会点错）。拖动判据在移动里按 4px 阈值分开。</summary>
     public static RectF MinimalDigitsRect(in RectF card, float u)
-        => new() { MinX = card.MinX, MinY = card.MinY, MaxX = card.MaxX, MaxY = card.MaxY - 40f * u };
-
-    public static RectF MinimalPillRect(in RectF card, float u)
-    {
-        float w = 64f * u, h = 14f * u, cx = CX(card);
-        return new RectF { MinX = cx - w * 0.5f, MinY = card.MaxY - 28f * u,
-                           MaxX = cx + w * 0.5f, MaxY = card.MaxY - 14f * u };
-    }
+        => new() { MinX = card.MinX, MinY = card.MinY, MaxX = card.MaxX, MaxY = card.MaxY };
 
     // ---- 命中 ---------------------------------------------------------------
 
     public static TimerZone ZoneAt(in RectF card, float u, float x, float y, bool edit, bool countdown,
-                                   bool withLap = false)
+                                   bool withLap = false, bool clock = false)
     {
         if (!card.Contains(x, y)) return TimerZone.None;
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < ModeCount; i++)
             if (TabRect(card, u, i).Contains(x, y)) return TimerZone.Tab0 + i;
+
+        // 「时间」档没有开始 / 暂停 / 重置 / 分段 / 改时长：除了页签和三个窗口钮，
+        // 其余都当空白（可拖动、双击全屏）。数字区也不再是暂停热区。
+        if (clock)
+        {
+            if (BtnRect(card, u, TimerZone.Close).Contains(x, y)) return TimerZone.Close;
+            if (BtnRect(card, u, TimerZone.Minimize).Contains(x, y)) return TimerZone.Minimize;
+            if (BtnRect(card, u, TimerZone.Fullscreen).Contains(x, y)) return TimerZone.Fullscreen;
+            return TimerZone.Body;
+        }
 
         if (edit && countdown)
         {
@@ -432,8 +447,13 @@ internal static class TimerWin
     {
         TimerMode.Countdown => "倒计时",
         TimerMode.CountUp => "正计时",
+        TimerMode.Clock => "时间",
         _ => "秒表",
     };
+
+    /// <summary>「时间」档的显示串：本机 24 小时制 `HH:mm`（不显示秒）。纯函数，自检可直接断言。</summary>
+    public static string ClockText(DateTime now)
+        => now.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>单位标题（时 / 分 / 秒）。</summary>
     public static string UnitName(int unit) => unit switch { 0 => "时", 1 => "分", _ => "秒" };
@@ -708,7 +728,8 @@ public partial class InkEngine
     //  计时器
     // =====================================================================
 
-    /// <summary>一个模式（倒计时/正计时/秒表）自己的运行状态——切页签只换显示，不打断。</summary>
+    /// <summary>一个模式（倒计时/正计时/秒表）自己的运行状态——切页签只换显示，不打断。
+    /// 「时间」不参与运行：它的槽位恒为空。</summary>
     private struct TimerRun
     {
         public bool Active, Paused, Finished;
@@ -717,13 +738,13 @@ public partial class InkEngine
         public long ShownUnit;
     }
 
-    private readonly TimerRun[] _timerRuns = new TimerRun[3];
+    private readonly TimerRun[] _timerRuns = new TimerRun[TimerWin.ModeCount];
 
     private TimerMode _timerKind = TimerMode.Countdown;
     private bool _timerActive, _timerPaused, _timerFinished;
     private bool _timerCardOpen;         // 窗口开着
     private bool _timerEdit;             // 改时长态（仅倒计时）
-    private bool _timerMinimized;        // 收成 320×150 小时钟
+    private bool _timerMinimized;        // 收成 206×48 小挂钟
     private bool _timerFullscreen;
     private int _timerSetH = 0, _timerSetM = 5, _timerSetS = 0;   // 倒计时设定
     private bool _timerSoundOn = true;   // 到点提示音（默认开；窗口上不再放开关）
@@ -774,13 +795,31 @@ public partial class InkEngine
     internal bool TimerStatsVisible
         => _timerKind == TimerMode.Stopwatch && _timerActive && _timerPaused;
 
-    /// <summary>要连续帧：**任一模式**在跑就画（切走的也在跑、也要到点；用户 2026-10-03 定）。</summary>
+    /// <summary>
+    /// 用户在「时间」档按过 ×：之后的文档（PDF）打开**不再自动挂回挂钟**。
+    /// 手动打开计时窗 / 选中「时间」页签会把它清掉。
+    ///
+    /// 不另存字段：这条状态只在读设置、关窗、自动挂回这几处用到，存进偏好表就是唯一真相，
+    /// 也避免给 Engine 再加一个永远跟着 Engine 走的私有 bool（ADR-005 D1）。
+    /// </summary>
+    internal bool TimerClockClosed => GetUiPref("timerClockClosed") == "1";
+
+    private void SetTimerClockClosed(bool closed)
+        => SetUiPref("timerClockClosed", closed ? "1" : null);
+
+    /// <summary>「时间」档的最小刷新粒度：当前分钟（本地时间）。(2026-11-16)</summary>
+    private static long TimerClockMinuteBucket()
+        => DateTime.Now.Ticks / TimeSpan.TicksPerMinute;
+
+    /// <summary>要连续帧：**任一模式**在跑就画（切走的也在跑、也要到点；用户 2026-10-03 定）。
+    /// 「时间」档只要**一分钟一帧**：分钟桶变了才要帧，平时不占 60fps（用户 2026-11-16 定）。</summary>
     internal bool TimerWantsFrame
     {
         get
         {
             if (!_timerCardOpen) return false;
-            for (int i = 0; i < 3; i++)
+            if (_timerKind == TimerMode.Clock) return TimerClockMinuteBucket() != _timerShownUnit;
+            for (int i = 0; i < TimerWin.ModeCount; i++)
             {
                 var r = GetRun((TimerMode)i);
                 if (r.Active && !r.Paused) return true;
@@ -803,9 +842,11 @@ public partial class InkEngine
     internal bool TimerCardContains(float x, float y)
         => _timerCardOpen && TimerCardRect().Contains(x, y);
 
-    /// <summary>窗口上显示的主数字：倒计时待机=设定时长；到点=超时 `+00:27`；其余=计数。</summary>
+    /// <summary>窗口上显示的主数字：倒计时待机=设定时长；到点=超时 `+00:27`；其余=计数；
+    /// 「时间」=本机 `HH:mm`（24 小时，不带秒）。</summary>
     internal string TimerDisplayText()
     {
+        if (_timerKind == TimerMode.Clock) return TimerWin.ClockText(DateTime.Now);
         if (_timerKind == TimerMode.Countdown)
         {
             if (!_timerActive) return TimerWin.Format(_timerDurationMs, TimerMode.Countdown);
@@ -815,9 +856,22 @@ public partial class InkEngine
         return TimerWin.Format(_timerValueMs, _timerKind);
     }
 
-    /// <summary>环的填充比例：倒计时=剩余占比；正计时/秒表=当前一分钟内的进度。</summary>
+    /// <summary>
+    /// 收起态（206×48）的数字：秒表藏掉 `.cc`（那个宽度下小数只会挤成一团），
+    /// 倒计时 / 正计时 / 时间用正常文本。
+    /// </summary>
+    internal string TimerMinimalText()
+    {
+        string s = TimerDisplayText();
+        if (_timerKind != TimerMode.Stopwatch) return s;
+        int dot = s.IndexOf('.');
+        return dot > 0 ? s[..dot] : s;
+    }
+
+    /// <summary>环的填充比例：倒计时=剩余占比；正计时/秒表=当前一分钟内的进度；时间=无环。</summary>
     internal float TimerRingFraction()
     {
+        if (_timerKind == TimerMode.Clock) return 0f;
         if (_timerKind == TimerMode.Countdown)
         {
             if (!_timerActive) return 1f;
@@ -954,7 +1008,7 @@ public partial class InkEngine
     internal void OpenTimerCardFromUi()
     {
         _timerCardOpen = true;
-        for (int i = 0; i < 3; i++) _timerRuns[i] = default;   // 开窗 = 三个模式都归零
+        for (int i = 0; i < TimerWin.ModeCount; i++) _timerRuns[i] = default;   // 开窗 = 各模式都归零
         _timerActive = false;
         _timerPaused = false;
         _timerFinished = false;
@@ -965,16 +1019,51 @@ public partial class InkEngine
         _timerRestoreArmed = false;
         _timerDragging = false;
         _timerShownUnit = long.MinValue;
+        SetTimerClockClosed(false);          // 手动打开 = 撤销"关过时间档"的抑制（2026-11-16）
         ClearTimerLaps();
         ClassroomWantPassThrough(true);
         RefreshTimerValue();
+        SaveTimerPrefs();
         _dirty = true;
         NotifyUiStateChanged();
         Console.WriteLine($"计时器：打开窗口（{TimerWin.ModeName(_timerKind)}）");
     }
 
+    /// <summary>
+    /// 换模式页签：把当前模式"停靠"进数组（跑着的继续跑），再装载目标模式。
+    /// 用户 2026-10-03：允许切、切走继续跑，页签上用小圆点表示在跑。
+    /// 「时间」不参与运行，切过去不打断任何计时（2026-11-16）。
+    /// </summary>
+    private void SwitchTimerMode(TimerMode target)
+    {
+        if (target == _timerKind) return;
+        RefreshRun(_timerKind);
+        ParkVisibleRun();
+        LoadRun(target);
+        _timerEdit = false;
+        if (target != TimerMode.Clock) RefreshRun(target);
+        _timerShownUnit = long.MinValue;
+        if (target == TimerMode.Clock) SetTimerClockClosed(false);   // 选中「时间」= 重新启用自动挂回
+        SaveTimerPrefs();
+        _dirty = true;
+        NotifyUiStateChanged();
+        Console.WriteLine($"计时器：切到 {TimerWin.ModeName(target)}"
+            + (target != TimerMode.Clock && TimerTabRunning((int)target) ? "（继续跑）" : ""));
+    }
+
     internal void StartTimerFromUi(TimerMode mode, float seconds)
     {
+        if (mode == TimerMode.Clock)
+        {
+            // 「时间」不是计时器：只切显示，不置 Active、不写秒数（自检里也不许"开始"它）。
+            SwitchTimerMode(mode);
+            _timerCardOpen = true;
+            _timerMinimized = false;
+            _timerShownUnit = long.MinValue;
+            _dirty = true;
+            NotifyUiStateChanged();
+            return;
+        }
         if (mode != _timerKind) { RefreshRun(_timerKind); ParkVisibleRun(); LoadRun(mode); }
         if (mode == TimerMode.Stopwatch) ClearTimerLaps();   // 新的一轮秒表从零开始
         if (mode == TimerMode.Countdown)
@@ -1079,11 +1168,12 @@ public partial class InkEngine
         Console.WriteLine("计时器：重置回待机");
     }
 
-    /// <summary>✕：停止并关窗（规范里唯一的 ✕ 语义；InkClass 也是关窗即停表）。</summary>
+    /// <summary>✕：停止并关窗（规范里唯一的 ✕ 语义；InkClass 也是关窗即停表）。
+    /// 在「时间」档按 × = 以后文档打开不再自动挂回（用户 2026-11-16 定）。</summary>
     internal void StopTimerFromUi()
     {
         bool was = _timerActive || _timerCardOpen;
-        for (int i = 0; i < 3; i++) _timerRuns[i] = default;   // ✕ = 三模式全部停止
+        for (int i = 0; i < TimerWin.ModeCount; i++) _timerRuns[i] = default;   // ✕ = 各模式全部停止
         _timerActive = false;
         _timerPaused = false;
         _timerFinished = false;
@@ -1095,6 +1185,8 @@ public partial class InkEngine
         _timerFullscreen = false;
         _timerDragging = false;
         _timerRestoreArmed = false;
+        if (_timerKind == TimerMode.Clock) SetTimerClockClosed(true);
+        SaveTimerPrefs();
         // `_timerCapturing` 不在这里清：它是"这一次按下归窗口"的凭据，
         // 必须等抬指那一下由引擎统一放开（提前清 = 漏掉 ReleaseCapture，整机鼠标挂住）。
         _timerPressAtMs = double.NegativeInfinity;
@@ -1126,16 +1218,48 @@ public partial class InkEngine
         SetUiPref("timerM", _timerSetM == 5 ? null : _timerSetM.ToString());
         SetUiPref("timerS", _timerSetS == 0 ? null : _timerSetS.ToString());
         SetUiPref("timerSound", _timerSoundOn ? null : "0");
+        // 收起/展开、窗口开着——文档打开时按这两个把挂钟挂回去（2026-11-16）。
+        SetUiPref("timerMinimized", _timerMinimized ? "1" : null);
+        SetUiPref("timerCardOpen", _timerCardOpen ? "1" : null);
+        // `timerClockClosed` 不在这里写：它由 SetTimerClockClosed 单独管（打开/选时间清、× 置）。
     }
 
     private void LoadTimerPrefs()
     {
-        if (int.TryParse(GetUiPref("timerKind"), out int k) && k is >= 0 and <= 2) _timerKind = (TimerMode)k;
+        if (int.TryParse(GetUiPref("timerKind"), out int k) && k is >= 0 and <= (int)TimerMode.Clock)
+            _timerKind = (TimerMode)k;
         if (int.TryParse(GetUiPref("timerH"), out int h)) _timerSetH = Math.Clamp(h, 0, 99);
         if (int.TryParse(GetUiPref("timerM"), out int m)) _timerSetM = Math.Clamp(m, 0, 59);
         if (int.TryParse(GetUiPref("timerS"), out int s)) _timerSetS = Math.Clamp(s, 0, 59);
         _timerSoundOn = GetUiPref("timerSound") != "0";
+        // 上次收起过？只记在字段里；**窗口不在这里打开**——自动挂回只由文档入口触发。
+        _timerMinimized = GetUiPref("timerMinimized") == "1";
         SyncTimerDurationFromSet();
+    }
+
+    /// <summary>
+    /// 进文档（PDF）模式时把「时间」档挂回来：只在这三件事同时成立时——
+    /// ① 当前模式是时间；② 用户没在时间档按过 ×（`timerClockClosed` 未置）；
+    /// ③ 上次关窗/退出时窗口是开着的（`timerCardOpen` = 1）。
+    /// 恢复的是**上次的收起/展开状态**（收起 = 206×48 小挂钟）。每次进文档都判断，
+    /// 不是"只有第一次"（用户 2026-11-16 定）。
+    /// </summary>
+    internal void MaybeAutoShowTimerOnDocEntry()
+    {
+        if (_timerKind != TimerMode.Clock || TimerClockClosed) return;
+        if (GetUiPref("timerCardOpen") != "1" || _timerCardOpen) return;
+        _timerCardOpen = true;
+        _timerFullscreen = false;         // 进文档不铺全屏卡片，按收起/展开两种状态来
+        _timerEdit = false;
+        _timerRestoreArmed = false;
+        _timerPressAtMs = double.NegativeInfinity;
+        _timerShownUnit = long.MinValue;
+        // 这里**不调 ClassroomWantPassThrough(true)**：文档模式下"穿透"会让文档页整层让开
+        // （Overlay.Content.DrawDocPages 遇 PassThrough 直接 return），挂钟回来了 PDF 却没了。
+        // 挂钟自己那块由 OverlayLayerRegistration 的计时层接输入，不依赖穿透。
+        _dirty = true;
+        NotifyUiStateChanged();
+        Console.WriteLine($"计时器：进文档自动挂回「时间」（{(_timerMinimized ? "收起 206×48" : "展开")}）");
     }
 
     private void PlayTimerBeep()
@@ -1150,10 +1274,18 @@ public partial class InkEngine
     {
         if (_timerCardOpen)
         {
+            // 「时间」档：借这口 250ms 的钟算"到分钟没有"——变了才置脏并记住这一分钟
+            // （下一次再等下一个分钟边界；不是 60fps，用户 2026-11-16 定）。
+            if (_timerKind == TimerMode.Clock)
+            {
+                long minute = TimerClockMinuteBucket();
+                if (minute != _timerShownUnit) { _timerShownUnit = minute; _dirty = true; }
+            }
             double now = NowMs;
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < TimerWin.ModeCount; i++)
             {
                 var m = (TimerMode)i;
+                if (m == TimerMode.Clock) continue;      // 时间档没有运行状态
                 var r = GetRun(m);
                 if (!r.Active || r.Paused) continue;
                 double elapsed = RunElapsed(r, now);
@@ -1273,7 +1405,8 @@ public partial class InkEngine
         }
 
         var zone = TimerWin.ZoneAt(card, lu, x, y, _timerEdit,
-                                  _timerKind == TimerMode.Countdown, TimerLapButtonVisible);
+                                  _timerKind == TimerMode.Countdown, TimerLapButtonVisible,
+                                  _timerKind == TimerMode.Clock);
         switch (zone)
         {
             case TimerZone.Close: StopTimerFromUi(); return true;
@@ -1281,6 +1414,7 @@ public partial class InkEngine
                 _timerMinimized = true;
                 _timerFullscreen = false;
                 _timerEdit = false;
+                SaveTimerPrefs();
                 _dirty = true; NotifyUiStateChanged();
                 return true;
             case TimerZone.Fullscreen:
@@ -1288,27 +1422,9 @@ public partial class InkEngine
                 _timerEdit = false;
                 _dirty = true; NotifyUiStateChanged();
                 return true;
-            case TimerZone.Tab0: case TimerZone.Tab1: case TimerZone.Tab2:
-            {
-                var target = (TimerMode)(zone - TimerZone.Tab0);
-                if (target != _timerKind)
-                {
-                    // 切页签 = 把当前模式"停靠"进数组（跑着的继续跑），再装载目标模式。
-                    // 用户 2026-10-03：允许切、切走继续跑，页签上用小圆点表示在跑。
-                    RefreshRun(_timerKind);
-                    ParkVisibleRun();
-                    LoadRun(target);
-                    _timerEdit = false;
-                    RefreshRun(target);
-                    _timerShownUnit = long.MinValue;
-                    SaveTimerPrefs();
-                    _dirty = true;
-                    NotifyUiStateChanged();
-                    Console.WriteLine($"计时器：切到 {TimerWin.ModeName(target)}"
-                        + (TimerTabRunning((int)target) ? "（继续跑）" : ""));
-                }
+            case TimerZone.Tab0: case TimerZone.Tab1: case TimerZone.Tab2: case TimerZone.Tab3:
+                SwitchTimerMode((TimerMode)(zone - TimerZone.Tab0));
                 return true;
-            }
             case TimerZone.Ok:
                 _timerEdit = false;
                 _dirty = true; NotifyUiStateChanged();
@@ -1378,7 +1494,8 @@ public partial class InkEngine
         {
             _timerRestoreArmed = false;
             _timerPressAtMs = double.NegativeInfinity;
-            _timerMinimized = false;                 // 点数字还原（InkClass 同款）
+            _timerMinimized = false;                 // 点一下整框还原（InkClass 同款）
+            SaveTimerPrefs();
             _dirty = true;
             NotifyUiStateChanged();
             return;
@@ -2087,6 +2204,23 @@ public partial class InkEngine
     internal void RollPointerUpForTest(float x, float y) => RollCardPointerUp(x, y);
     internal int TimerBeepCountForTest => _timerBeepCount;
     internal float TimerOvertimeForTest => _timerOvertimeMs;
+
+    /// <summary>模拟一次重启：计时窗状态全清，只按偏好表读回来（验证 timerKind / 收起 / 关过 落盘）。</summary>
+    internal void TimerReloadPrefsForTest()
+    {
+        _timerCardOpen = false;
+        _timerMinimized = false;
+        _timerFullscreen = false;
+        _timerEdit = false;
+        _timerActive = false;
+        _timerPaused = false;
+        _timerFinished = false;
+        _timerAccumMs = 0;
+        for (int i = 0; i < TimerWin.ModeCount; i++) _timerRuns[i] = default;
+        _timerKind = TimerMode.Countdown;
+        _timerShownUnit = long.MinValue;
+        LoadTimerPrefs();
+    }
     internal void SetRollSeedForTest(int seed) => _rollRng = new Random(seed);
     internal void SetRollMaxForTest(int v)
     {

@@ -2615,7 +2615,7 @@ internal sealed partial class App
             SettleFrames(150);
             Check("计时窗：✕ = 停止并关窗",
                   !Host.State.TimerCardOpen && !Host.State.TimerActive);
-            // 三模式/改时长/到点/最小化/全屏那些细节在 `--timertest` 里逐条验，这里只验"启动器→窗"的真路。
+            // 四模式/改时长/到点/最小化/全屏那些细节在 `--timertest` 里逐条验，这里只验"启动器→窗"的真路。
 
             // 点名格 → 点名窗（待抽态）；抽奖 → 滚动 → 定格；✕ 关窗
             var moreCellB = ui.CellRectForTest(14);
@@ -6300,23 +6300,23 @@ internal sealed partial class App
               && SameCol(Host.State.PaletteBase, InkPalette.PenBand[2].Color),
               $"工具 = {Host.State.Tool}，色 = {Host.State.PaletteBase}");
 
-        // ---- ④ 在别的工具上点北（红笔）= 切回笔 + 红 ----
+        // ---- ④ 在别的工具上点北（常用色，默认 = 红）= 切回笔 + 那个颜色 ----
         Host.Commands.SetTool(Tool.Eraser);
         SettleFrames(120);
         RadialOpenForTest(cx, cy);
-        RadialMoveForTest(cx, cy - 120f);               // 北 = 红笔
-        Check("划向正北 = 选中「红笔」扇区", RadialPaletteSector == 0, $"扇区 {RadialPaletteSector}");
+        RadialMoveForTest(cx, cy - 120f);               // 北 = 常用色（默认红）
+        Check("划向正北 = 选中「常用色」扇区", RadialPaletteSector == 0, $"扇区 {RadialPaletteSector}");
         RadialCommitForTest();
-        Check("在橡皮上点红笔：切回笔 + 红",
+        Check("在橡皮上点常用色：切回笔 + 色带上那个颜色",
               Host.State.Tool == Tool.Pen
               && SameCol(Host.State.PaletteBase, InkPalette.PenBand[1].Color),
               $"工具 = {Host.State.Tool}，色 = {Host.State.PaletteBase}");
 
-        // ---- ⑤ 北格固定红：已经是红笔时再点，还是红（不循环） ----
+        // ---- ⑤ 北格 = 常用色：已经是它时再点，还是这个色（不循环） ----
         RadialOpenForTest(cx, cy);
-        RadialMoveForTest(cx, cy - 120f);               // 北 = 红笔
+        RadialMoveForTest(cx, cy - 120f);               // 北 = 常用色
         RadialCommitForTest();
-        Check("已经是红笔时再点北：保持红笔（不循环）",
+        Check("已经是常用色时再点北：保持不变（不循环）",
               Host.State.Tool == Tool.Pen
               && SameCol(Host.State.PaletteBase, InkPalette.PenBand[1].Color),
               $"色 = {Host.State.PaletteBase}");
@@ -6392,9 +6392,9 @@ internal sealed partial class App
               !RadialPaletteActive && Doc.Strokes.Count == 0,
               $"active = {RadialPaletteActive}，笔画 {Doc.Strokes.Count}");
 
-        // ---- ⑥.5 v3 排序与扇面几何（2026-10-25 定稿） ----
-        Check("v3 排序：北红笔、东西翻色、四角撤销/荧光/清屏/框选",
-              RadialSectorNames[0] == "红笔" && RadialSectorNames[1] == "荧光笔"
+        // ---- ⑥.5 v3 排序与扇面几何（2026-10-25 定稿；2026-11-16 北格改名常用色） ----
+        Check("v3 排序：北常用色、东西翻色、四角撤销/荧光/清屏/框选",
+              RadialSectorNames[0] == "常用色" && RadialSectorNames[1] == "荧光笔"
               && RadialSectorNames[2] == "下一色" && RadialSectorNames[3] == "框选"
               && RadialSectorNames[4] == "橡皮" && RadialSectorNames[5] == "清屏"
               && RadialSectorNames[6] == "上一色" && RadialSectorNames[7] == "撤销",
@@ -6407,6 +6407,51 @@ internal sealed partial class App
               && OverlayWindow.RadialInnerRadiusLogical > OverlayWindow.RadialCenterLogical,
               $"环带 {OverlayWindow.RadialInnerRadiusLogical}→{OverlayWindow.RadialPlateRadiusLogical}，"
               + $"图标环 {OverlayWindow.RadialIconRingLogical}，锁定 {RadialLockLogical}");
+
+        // ---- ⑥.6 活色带（2026-11-16）：盘上的颜色格跟主条那排色片走 ----
+        // 用户在主条上改了色位之后，北格 / 东 / 西 / 色环 / 名字都必须跟着变，
+        // 不能还显示出厂默认色（这次要钉的就是这一条）。
+        var bandSaved = (Color4[])PenSwatchColors.Clone();
+        var colorSaved = Host.State.PaletteBase;
+        var liveGreen = new Color4(0.20f, 0.78f, 0.35f, 1f);
+        var liveOrange = new Color4(0.98f, 0.52f, 0.10f, 1f);
+        PenSwatchColors[1] = liveGreen;
+        PenSwatchColors[2] = liveOrange;
+        Host.Commands.SetTool(Tool.Pen);
+        Host.Commands.SetColor(PenSwatchColors[0]);        // 当前色 = 活色带第一格
+        SettleFrames(120);
+        Check("活色带：下一色 = 主条第 2 格（改过的绿）",
+              SameCol(RadialNextPenColor, liveGreen), $"下一色 {RadialNextPenColor} vs {liveGreen}");
+        Check("活色带：上一色 = 主条最后一格",
+              SameCol(RadialPrevPenColor, PenSwatchColors[^1]),
+              $"上一色 {RadialPrevPenColor} vs {PenSwatchColors[^1]}");
+        Check("活色带：北格常用色 = 主条第 2 格",
+              SameCol(RadialCommonPenColor, liveGreen), $"常用色 {RadialCommonPenColor} vs {liveGreen}");
+        Check("活色带：改过的色位名字 = 自定义色",
+              RadialNextPenName == "自定义色", $"名字「{RadialNextPenName}」");
+
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx + 120f, cy);                  // 东 = 下一色
+        RadialCommitForTest();
+        Check("活色带：下一色执行 = 切成改过的绿",
+              SameCol(Host.State.PaletteBase, liveGreen), $"色 = {Host.State.PaletteBase}");
+
+        RadialOpenForTest(cx, cy);
+        RadialMoveForTest(cx, cy - 120f);                  // 北 = 常用色
+        RadialCommitForTest();
+        Check("活色带：北格执行 = 切成主条第 2 格",
+              SameCol(Host.State.PaletteBase, liveGreen), $"色 = {Host.State.PaletteBase}");
+
+        var clearIcons = OverlayWindow.RadialIconPathsForTest(5);
+        Check("清屏格图标 = 垃圾桶（扇格 + 中央预览）",
+              clearIcons.Wedge == IconPaths.delete && clearIcons.Center == IconPaths.delete,
+              $"扇格 {(clearIcons.Wedge == IconPaths.delete ? "delete" : "别的")}，"
+              + $"中央 {(clearIcons.Center == IconPaths.delete ? "delete" : "别的")}");
+
+        // 收尾：色带/当前色恢复原样，后面按默认红判的用例（真键盘那几条）才不受影响。
+        for (int i = 0; i < PenSwatchColors.Length; i++) PenSwatchColors[i] = bandSaved[i];
+        Host.Commands.SetColor(colorSaved);
+        SettleFrames(120);
 
         // ---- ⑦ 跨扇区滞回：出界 9° 以内不跳扇区 ----
         RadialOpenForTest(cx, cy);

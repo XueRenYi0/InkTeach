@@ -174,19 +174,12 @@ internal sealed partial class OverlayWindow
         var win = app.TimerCardRect();
         float u = app.TimerUnit();
 
-        // 最小化：320×150，只剩剩余时间 + 底部拖动条（用户 2026-10-03 定）
+        // 最小化：206×48（和 PDF 底条同高），只剩时间数字、整框可拖、单击还原（2026-11-16）
         if (app.TimerMinimized)
         {
             WinCard(win, dpi, pal);
-            WinText(app.TimerDisplayText(),
-                    new RectF { MinX = win.MinX + 6f * dpi, MinY = win.MinY + 14f * dpi,
-                                MaxX = win.MaxX - 6f * dpi, MaxY = win.MaxY - 44f * dpi },
-                    52f * dpi, pal.Ink, true);
-            var pill = TimerWin.MinimalPillRect(win, dpi);
-            _scratch.Color = pal.Muted;
-            float pr = (pill.MaxY - pill.MinY) * 0.5f;
-            _ctx.FillRoundedRectangle(new RoundedRectangle(
-                new RawRectF(pill.MinX, pill.MinY, pill.MaxX, pill.MaxY), pr, pr), _scratch);
+            WinText(app.TimerMinimalText(), TimerWin.MinimalDigitsRect(win, dpi),
+                    27f * dpi, pal.Ink, true);
             return;
         }
 
@@ -200,7 +193,7 @@ internal sealed partial class OverlayWindow
         _scratch.Color = pal.Soft;
         _ctx.FillRoundedRectangle(new RoundedRectangle(
             new RawRectF(trough.MinX, trough.MinY, trough.MaxX, trough.MaxY), trr, trr), _scratch);
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < TimerWin.ModeCount; i++)
         {
             var r = TimerWin.TabRect(card, lu, i);
             bool on = (int)app.TimerKind == i;
@@ -266,6 +259,13 @@ internal sealed partial class OverlayWindow
             WinText($"{app.TimerSetH:00}:{app.TimerSetM:00}:{app.TimerSetS:00}",
                     TimerWin.EditValueRect(card, lu), 72f * lu, bigInk, true);
             WinPillBtn(TimerWin.OkRect(card, lu), lu, pal, "check", "确定", pal.Accent, pal.AccentInk);
+        }
+        else if (app.TimerKind == TimerMode.Clock)
+        {
+            // 「时间」档：只有本机 HH:mm 大字。没有环、没有进度、没有开始/暂停/重置/分段，
+            // 也不进改时长态（用户 2026-11-16 定）；窗口钮仍在顶栏。
+            WinText(app.TimerDisplayText(), TimerWin.ClockValueRect(card, lu), 150f * lu, pal.Ink, true);
+            WinText("现在时间", TimerWin.PillRect(card, lu), 14f * lu, pal.Muted, false);
         }
         else
         {

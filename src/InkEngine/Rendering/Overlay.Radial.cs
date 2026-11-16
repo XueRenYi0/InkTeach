@@ -45,7 +45,8 @@ internal sealed partial class OverlayWindow
 
     /// <summary>
     /// 第 i 个扇区是不是"彩笔"（画彩色 `penFilled`、选中用淡强调底）。
-    /// 2026-10-25 v3：只有北（固定红）和东/西（下一色/上一色）是彩笔。
+    /// 2026-10-25 v3：只有北（常用色）和东/西（下一色/上一色）是彩笔。
+    /// 2026-11-16 起这三格的颜色读主条活色带（见 `InkEngine.LivePenBand`）。
     /// </summary>
     private static readonly bool[] RadialSectorIsColor =
         { true, false, true, false, false, false, true, false };
@@ -87,7 +88,8 @@ internal sealed partial class OverlayWindow
         _ctx.DrawEllipse(new Ellipse(c, R, R), _scratch, 1f * dpi);
 
         // 八格图标（主条同款 Fluent 路径）。
-        // v3：北 = 固定红；东/西 = “下一支/上一支笔”的实时颜色 + 小箭头；其余 = 工具图标。
+        // v3：北 = 常用色；东/西 = “下一支/上一支笔”的实时颜色 + 小箭头；其余 = 工具图标。
+        // 2026-11-16：颜色格全部读主条活色带（用户改过色位后盘上跟着变）。
         float sz = 24f * dpi;
         for (int i = 0; i < 8; i++)
         {
@@ -95,10 +97,10 @@ internal sealed partial class OverlayWindow
             bool on = i == sel;
             if (RadialSectorIsColor[i])
             {
-                // **彩笔不转白**：选中也要看得见“这是红/蓝”（红蓝压实心蓝底会发闷）
+                // **彩笔不转白**：选中也要看得见“这是哪个颜色”（压实心蓝底会发闷）
                 _scratch.Color = i switch
                 {
-                    0 => InkPalette.PenBand[1].Color,        // 北：固定红
+                    0 => app.RadialCommonPenColor,           // 北：常用色（活色带第 2 格）
                     2 => app.RadialNextPenColor,             // 东：下一色
                     _ => app.RadialPrevPenColor,             // 西：上一色
                 };
@@ -125,7 +127,7 @@ internal sealed partial class OverlayWindow
         Color4 ringCol;
         if (sel == 2) ringCol = app.RadialNextPenColor;              // 东：预览下一色
         else if (sel == 6) ringCol = app.RadialPrevPenColor;         // 西：预览上一色
-        else if (sel == 0) ringCol = InkPalette.PenBand[1].Color;    // 北：固定红
+        else if (sel == 0) ringCol = app.RadialCommonPenColor;      // 北：常用色（活色带）
         else if (sel == 1)                                          // 荧光笔：荧光色
             ringCol = new Color4(app.HighlighterCurrent.R, app.HighlighterCurrent.G,
                                  app.HighlighterCurrent.B, 1f);
@@ -200,7 +202,7 @@ internal sealed partial class OverlayWindow
         };
         return i switch
         {
-            0 => already ? "已经是红笔" : "用红笔",
+            0 => already ? "已经是常用色" : $"常用色：{app.RadialCommonPenName}",
             1 => already ? "已经是荧光笔：换下一个色" : "切到荧光笔",
             2 => $"下一色：{app.RadialNextPenName}",
             3 => already ? "矩形 ⇄ 套索" : "切到框选",
@@ -310,28 +312,38 @@ internal sealed partial class OverlayWindow
     /// <summary>
     /// 呼出盘第 i 格的图标（主条同款 Fluent 路径）：常态 regular、选中 filled。
     /// 彩笔格（0 北 / 2 东 / 6 西）不走这里——它们是 `penFilled` 上色，见 <see cref="DrawRadialPalette"/>。
-    /// 清屏（扫帚）和撤销（undo）没有 filled 版本，选中靠底下的淡强调扇格表达。
+    /// 清屏（垃圾桶）和撤销（undo）没有 filled 版本，选中靠底下的淡强调扇格表达。
     /// </summary>
     private static string RadialIconFor(int i, bool selected) => i switch
     {
         1 => selected ? IconPaths.highlighterFilled : IconPaths.highlighter,
         3 => selected ? IconPaths.selectFilled : IconPaths.select,
         4 => selected ? IconPaths.eraserFilled : IconPaths.eraser,
-        5 => IconPaths.broom,
+        5 => IconPaths.delete,
         7 => IconPaths.undo,
         _ => selected ? IconPaths.penFilled : IconPaths.pen,
     };
 
-    /// <summary>中央预览用的扇区图标（regular 20px）。翻色格（2/6）显示笔。</summary>
+    /// <summary>
+    /// 中央预览用的扇区图标（regular 20px）。翻色格（2/6）显示笔。
+    /// 清屏格 2026-11-16 起用垃圾桶（和主条"清空本页"同一个图标，取代扫帚）。
+    /// </summary>
     private static string RadialSectorIcon(int i) => i switch
     {
         1 => IconPaths.highlighter,
         3 => IconPaths.select,
         4 => IconPaths.eraser,
-        5 => IconPaths.broom,
+        5 => IconPaths.delete,
         7 => IconPaths.undo,
         _ => IconPaths.pen,
     };
+
+    /// <summary>
+    /// 自检/摆样：第 i 格的（扇格图标, 中央预览图标）路径。
+    /// 单独开一个口子是给 `--radialtest` 钉"清屏格 = 垃圾桶"用的（绘制本体不对外）。
+    /// </summary>
+    internal static (string Wedge, string Center) RadialIconPathsForTest(int i)
+        => (RadialIconFor(i, false), RadialSectorIcon(i));
 
     /// <summary>没划到扇区时，中央显示“当前实际工具”。</summary>
     private static string RadialToolIcon(Tool t) => t switch
