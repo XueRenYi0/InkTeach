@@ -1480,7 +1480,8 @@ public partial class InkEngine
         if (driver < 0) return;
 
         // 冻结页（半透明白板）只画 1× 底图 → 整层不建补丁。
-        patch.Sync(canvases[driver], NowMs, BoardFrozenDocActive ? BoardFrozenDocPage : -1);
+        patch.Sync(canvases[driver], NowMs, BoardFrozenDocActive ? BoardFrozenDocPage : -1,
+                   busy: _drawing || _textBoxEditing || _camAnimating);
     }
 
     /// <summary>
@@ -2276,6 +2277,7 @@ public partial class InkEngine
         if (_windows.Exists(w => w.TileScalePending)) d |= FrameDrive.Dirty;
         // 文档高清补丁：>100% 且"还缺补丁 / 等落稳 120ms / 有请求在飞"→ 定时待办。
         // 和分块倍率同一个理由：界面不再置脏时主循环会睡在 WaitMessage 上，补丁排不出来。
+        // 缩回 100% 后的一次性空闲清理也由它报（待办期间即使 100% 也返回 true）。
         if (DocPatch is { WantsFrame: true }) d |= FrameDrive.Dirty;
         if (AlignSnapPulseActive) d |= FrameDrive.Align;
         if (_g2FlingActive) d |= FrameDrive.TouchFling;

@@ -1,4 +1,4 @@
-// [职责] 文档缩放 E2E：出图（50/100/200 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
+// [职责] 文档缩放 E2E：出图（50/100/200/300 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
 // [测试] --zoomtest
 
 // 判据和 Zoom.cs 一致：能数出来的东西说话（像素、块字节、应用次数）。
@@ -47,7 +47,7 @@ internal sealed partial class App
         // 页上压一条**黑墨**：200% 的"糊/清晰"只有在墨迹上才看得出来
         // （红页本身是大色块，1× 拉伸也还是红的）。落墨位置按 **200% 的屏幕带**算
         // ——相机围绕视口中心放大，按 100% 的屏幕位置落墨会放大到屏幕外（第一版就这么错了）。
-        AddZoomShotInk();
+        float inkY = AddZoomShotInk();
         SettleFrames(420);
         ZoomTestWaitPatch(0, 4000);
         Save("zoom-patch-200");         // 200% + 黑墨 + 高清补丁（对齐/接缝看这张）
@@ -58,6 +58,28 @@ internal sealed partial class App
         check("200%：屏幕上这块由高清补丁提供",
               DocPatch != null && DocPatch.HasPatch(0),
               $"补丁={DocPatch?.PatchCount ?? 0} / {DocPatch?.PatchBytes / 1048576.0 ?? 0:F1}MB");
+
+        // 300%（2026-11-16 加回）：底图仍 1×、补丁倍率 3；黑墨在 300% 下照样落在屏幕上。
+        SetDocZoomFromUi(3f);
+        SettleFrames(520);
+        ZoomTestWaitPatch(0, 4000);
+        Save("zoom-patch-300");
+        float inkY300 = CanvasToScreenY(inkY);
+        int inkDark300 = ScreenProbe.CountDark(_virtualX, (int)(inkY300 - 24f * DpiScale),
+                                               (int)_virtualW, (int)(48f * DpiScale));
+        check("300%：黑墨真的画在页上（红底黑墨）", inkDark300 > 1000, $"{inkDark300} 个暗像素");
+        var spec300 = DocView.At(0).Spec;
+        check("300%：页底图仍是 1×（不整页重渲）",
+              MathF.Abs(spec300.RenderScale - 1f) < 1e-4f && spec300.BitmapW == baseW,
+              $"倍率={spec300.RenderScale:F2} {spec300.BitmapW}×{spec300.BitmapH}（基准 {baseW}）");
+        ImageData pi300 = null;
+        bool has300p = DocPatch != null && DocPatch.TryGetPatch(0, out pi300, out _);
+        check("300%：补丁倍率 = 3、大小仍是一块屏",
+              has300p && MathF.Abs(DocPatch.Scale - 3f) < 1e-3f
+              && pi300.Width * (long)pi300.Height * 4 <= 64L * 1024 * 1024,
+              has300p ? $"{pi300.Width}×{pi300.Height} = {pi300.Width * (long)pi300.Height / 1e6:F1}MP"
+                        + $" / {DocPatch.PatchBytes / 1048576.0:F1}MB @{DocPatch.Scale:F2}"
+                      : "没有补丁");
         SetDocZoomFromUi(1f);
         SettleFrames(520);
         Save("zoom-ink-100");           // 同一条墨在 100% 下的样子（对照）
@@ -88,12 +110,64 @@ internal sealed partial class App
     }
 
     /// <summary>
+    /// G3b：**300% 档**（2026-11-16 加回）——`+` 一档到 300、到头置灰、`−` 回 200、
+    /// Ctrl+滚轮 200→300；并确认 300% 下页底图仍 1×、高清补丁倍率 = 3（补丁大小仍是一块屏）。
+    /// 走的产品入口（<see cref="InkEngine.DocZoomIn"/> / `DocZoomOut` / `DocZoomWheelFromUi`），
+    /// 不另写换算。
+    /// </summary>
+    private void ZoomTest300Step(Action<string, bool, string> check)
+    {
+        Console.WriteLine("  -- G3b 300% 档：＋ 200→300、到头置灰、− 300→200、Ctrl+滚轮 200→300 --");
+        ZoomTestResetCamera();
+        SetDocZoomFromUi(2f);
+
+        DocZoomIn();
+        check("＋ 一档：200% → 300%、读数 300%、＋ 置灰",
+              MathF.Abs(DocZoom - 3f) < 1e-4f && DocZoomPercentText == "300%" && !DocZoomInEnabled,
+              $"DocZoom={DocZoom:F2} 读数={DocZoomPercentText} ＋={DocZoomInEnabled}");
+        check("300%：界面状态快照带出 DocZoom = 3",
+              Host != null && MathF.Abs(Host.State.DocZoom - 3f) < 1e-4f,
+              $"UiState.DocZoom={(Host != null ? Host.State.DocZoom : float.NaN):F2}");
+        DocZoomIn();
+        check("300% 再点 ＋：停在 300%（不越界）", MathF.Abs(DocZoom - 3f) < 1e-4f, $"{DocZoom:F2}");
+
+        ZoomTestWaitPatch(0, 4000);
+        SettleFrames(200);
+        var spec300 = DocView.At(0).Spec;
+        check("300%：页底图仍是 1× 基准（缩放只换相机）",
+              MathF.Abs(spec300.RenderScale - 1f) < 1e-4f
+              && MathF.Abs(DocView.PageRenderScale - 1f) < 1e-3f,
+              $"Spec={spec300.RenderScale:F2} 页={DocView.PageRenderScale:F2}"
+              + $" 位图={spec300.BitmapW}×{spec300.BitmapH}");
+        ImageData pi = null;
+        bool hasPatch = DocPatch != null && DocPatch.TryGetPatch(0, out pi, out _);
+        check("300%：高清补丁就绪、倍率 = 3、大小仍是一块屏",
+              hasPatch && MathF.Abs(DocPatch.Scale - 3f) < 1e-3f
+              && pi.Width * (long)pi.Height * 4 <= 64L * 1024 * 1024,
+              hasPatch ? $"{pi.Width}×{pi.Height} = {pi.Width * (long)pi.Height / 1e6:F1}MP"
+                        + $" / {DocPatch.PatchBytes / 1048576.0:F1}MB @{DocPatch.Scale:F2}"
+                      : "没有补丁");
+
+        DocZoomOut();
+        check("− 一档：300% → 200%、＋ 恢复可点",
+              MathF.Abs(DocZoom - 2f) < 1e-4f && DocZoomInEnabled, $"{DocZoom:F2}");
+
+        float cx = _virtualX + _virtualW * 0.5f, cy = _virtualY + _virtualH * 0.5f;
+        bool wheelOk = DocZoomWheelFromUi(120, cx, cy);
+        check("Ctrl+滚轮上：200% → 300%（与 ＋ 同一张档位表）",
+              wheelOk && MathF.Abs(DocZoom - 3f) < 1e-4f, $"DocZoom={DocZoom:F2} 吃掉={wheelOk}");
+        DocZoomWheelFromUi(-120, cx, cy);
+        check("Ctrl+滚轮下：300% → 200%", MathF.Abs(DocZoom - 2f) < 1e-4f, $"{DocZoom:F2}");
+    }
+
+    /// <summary>
     /// 往页上写一条黑色折线（出图用）：位置按**当前相机**（E 组调用时是 200%）取
     /// 屏幕 0.30 高的一条横带，夹在首页矩形里。选 0.30 高有两个原因：
     /// 放大到 200% 时它还在屏幕内（围绕视口中心放大的点会往外跑），
     /// 缩回 100% 时它落在约 0.40 高，也不会压到 200% 判据的中心取样块。
+    /// 返回这条墨的**画布 Y**（300% 出图时按它算屏幕位置，不猜）。
     /// </summary>
-    private void AddZoomShotInk()
+    private float AddZoomShotInk()
     {
         var page = DocView.At(0).Rect;
         float pad = 40f;
@@ -115,15 +189,16 @@ internal sealed partial class App
         }
         Doc.AddStroke(s);
         Doc.InvalidateAll();
+        return y;
     }
 
     /// <summary>
-    /// I 组：**分块纹理的倍率**（200% 必须 2×/512、100% 回 1×/256）、
+    /// I 组：**分块纹理的倍率**（200% 必须 2×/512、300% 3×/768、100% 回 1×/256）、
     /// 连滚多档只换一次（防抖计数）、预取环的字节上限。
     /// </summary>
     private void ZoomTestTiles(Action<string, bool, string> check)
     {
-        Console.WriteLine("  -- I 分块倍率：200% 烘 2×/512、100% 回 1×/256、连滚只换一次、环 ≤16MB --");
+        Console.WriteLine("  -- I 分块倍率：200% 烘 2×/512、300% 3×/768、100% 回 1×/256、连滚只换一次、环 ≤16MB --");
         var w0 = _windows[0];
 
         SetDocZoomFromUi(2f);
@@ -139,6 +214,19 @@ internal sealed partial class App
         check("200%：预取环 ≤16MB（块数 × 块字节自洽）",
               ringB200 <= 16L * 1024 * 1024 && ringB200 == (long)ring200 * w0.LastTileBytes,
               $"{ring200} 块 / {ringB200 / 1048576.0:F1} MB");
+
+        SetDocZoomFromUi(3f);
+        SettleFrames(520);
+        check("300%：分块 RenderScale = 3、纹理 768、每块 2.25MB",
+              MathF.Abs(w0.LastTileRenderScale - 3f) < 1e-3f && w0.LastTileTextureSize == 768
+              && w0.LastTileBytes == 768 * 768 * 4,
+              $"scale={w0.LastTileRenderScale:F2} tex={w0.LastTileTextureSize} 块/字节={w0.LastTileBytes}"
+              + $" 块数={w0.LastTileCount}/{w0.LastTileBudget}"
+              + $" 总={w0.LastTileCount * (long)w0.LastTileBytes / 1048576.0:F1}MB");
+        check("300%：预取环仍 ≤16MB（按字节夹住）",
+              w0.LastTileRingBytes <= 16L * 1024 * 1024
+              && w0.LastTileRingBytes == (long)w0.LastTileRing * w0.LastTileBytes,
+              $"{w0.LastTileRing} 块 / {w0.LastTileRingBytes / 1048576.0:F1} MB");
 
         SetDocZoomFromUi(1f);
         SettleFrames(520);
@@ -643,5 +731,46 @@ internal sealed partial class App
               why.Length > 0 ? why
                   : $"完成 {done} 轮（{queued} 轮确实排出了新请求），"
                     + $"DocPatch={(DocPatch == null ? "已释放" : "还挂着")}");
+    }
+
+    /// <summary>
+    /// J4：**缩回 100% 后的一次性空闲清理**（2026-11-16）。
+    ///
+    /// 判据：打开 / 停在 100% 不排；200%→100% 800ms 后执行**一次**；再等不重复
+    /// （不是每帧 / 每次出帧都收）；下一次跨档才再收一次。
+    /// 计数口径 = <see cref="DocPatchCache.TrimCount"/>（状态归补丁对象，ADR-005 D3）。
+    /// </summary>
+    private void ZoomTestIdleTrim(Action<string, bool, string> check)
+    {
+        int Trims() => DocPatch?.TrimCount ?? 0;
+
+        Console.WriteLine("  -- J4 空闲内存清理：回 100% 排一次 / 800ms 后执行一次 / 不重复 --");
+        SetDocZoomFromUi(1f);
+        ZoomTestResetCamera();
+        SettleFrames(1500);                   // 先吃掉前面各组可能留下的待办
+        int trims0 = Trims();
+
+        SettleFrames(1200);                   // 停在 100%：不该排
+        check("停在 100% 1.2s：不排空闲清理", Trims() == trims0,
+              $"计数 {trims0} → {Trims()}");
+
+        SetDocZoomFromUi(2f);
+        SettleFrames(240);
+        SetDocZoomFromUi(1f);
+        SettleFrames(1200);                   // 800ms 到点 + 收尾
+        int trims1 = Trims();
+        check("200% → 100%：约 800ms 后执行一次", trims1 == trims0 + 1,
+              $"计数 {trims0} → {trims1}");
+
+        SettleFrames(1200);
+        check("再等 1.2s：不重复执行", Trims() == trims1,
+              $"计数 {trims1} → {Trims()}");
+
+        SetDocZoomFromUi(2f);
+        SettleFrames(120);
+        SetDocZoomFromUi(1f);
+        SettleFrames(1200);
+        check("第二次 200% → 100%：再执行一次（每次跨档只一次）",
+              Trims() == trims1 + 1, $"计数 {trims1} → {Trims()}");
     }
 }

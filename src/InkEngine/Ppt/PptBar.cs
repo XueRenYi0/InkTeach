@@ -105,6 +105,12 @@ internal static class PptBar
     public const float ZoomMenuGap = 8f;
     public const float ZoomMenuPad = 6f;
     /// <summary>锚在百分比格上：横向以它为中心，纵向**优先开在条上方**（和菜单 / 页号面板同方向）。</summary>
+    /// <remarks>
+    /// 2026-11-16 档位表扩到 **9 行**（适合×2 + 50/75/100/125/150/200/300）：
+    /// 高度 = 9×32 + 12 = 300 逻辑像素。1366×768 屏上条顶约在 704，
+    /// 上方还有 396 ≥ 300，仍然开得下；下方只在"上方真放不下"时才翻下去，
+    /// 两边都放不下就贴顶——`maxY` 已经夹过 `h`，所以整块永远落在屏内、行不裁。
+    /// </remarks>
     public static RectF ZoomMenuRect(in RectF bar, int itemCount, float dpi, in RectF screen)
     {
         float w = ZoomMenuW * dpi;
@@ -122,7 +128,12 @@ internal static class PptBar
         float minY = screen.MinY + m, maxY = screen.MaxY - m - h;
         if (maxY < minY) maxY = minY;
         float top = bar.MinY - gap - h;
-        if (top < minY) top = bar.MaxY + gap;
+        if (top < minY)
+        {
+            // 上方放不下：**只有下面真的装得下**才翻下去；两边都紧就贴顶（不裁行）。
+            float below = bar.MaxY + gap;
+            top = below + h <= maxY ? below : minY;
+        }
         top = Math.Clamp(top, minY, maxY);
         return new RectF { MinX = x, MinY = top, MaxX = x + w, MaxY = top + h };
     }

@@ -117,14 +117,14 @@ public partial class InkEngine
             }
             if ((PptBarZone)PptBarHover == PptBarZone.ZoomIn)
             {
-                EngineTooltipHover(15, "放大", "Ctrl+滚轮", "下一档（最大 200%）",
+                EngineTooltipHover(15, "放大", "Ctrl+滚轮", "下一档（最大 300%）",
                     PptBar.ZoomInCell(DocZoomBarRect(), DpiScale));
                 return;
             }
             if ((PptBarZone)PptBarHover == PptBarZone.ZoomPct)
             {
                 EngineTooltipHover(16, "缩放", null,
-                    "点 = 档位表（适合宽度 / 适合整页 / 50%~200%）；按住拖可挪条",
+                    "点 = 档位表（适合宽度 / 适合整页 / 50%~300%）；按住拖可挪条",
                     PptBar.ZoomPctCell(DocZoomBarRect(), DpiScale));
                 return;
             }

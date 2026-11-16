@@ -22,17 +22,17 @@ internal sealed partial class App
     }
 
     /// <summary>
-    /// `--zoomtest`：文档缩放 50/75/100/125/150/200。
+    /// `--zoomtest`：文档缩放 50/75/100/125/150/200/300。
     ///
     /// 验五件事：
     ///   ① **100% 的原行为不变**（页位图 = 档位宽、倍率 1、页矩形不动）；
-    ///   ② **放大 200%**：视口中心压着的画布点不动、页矩形不变、页位图仍 1×（高清靠补丁）；
+    ///   ② **放大 200% / 300%**：视口中心压着的画布点不动、页矩形不变、页位图仍 1×（高清靠补丁）；
     ///   ③ **页和墨一起缩**：页角 → 墨点的屏幕距离 = 画布距离 × ViewScale；
-    ///   ④ 六个档位都能来回切、不崩、不越界（含 X/Y 夹取）；
+    ///   ④ 七个档位都能来回切、不崩、不越界（含 X/Y 夹取）；
     ///   ⑤ **回到 100%** 一切复位（横向偏移 0、页位图倍率 1）。
     ///
     /// 另外验两件事：**高清补丁**（区域渲染逐像素一致 / 一块屏 / 平移不灰闪 / 翻页回收），
-    /// 以及 worker 在 200% 下**不再重渲整页**（底图恒 1×、补丁由后台线程渲）。
+    /// 以及 worker 在 200%/300% 下**不再重渲整页**（底图恒 1×、补丁由后台线程渲）。
     /// </summary>
     private void ZoomTest()
     {
@@ -78,6 +78,7 @@ internal sealed partial class App
             ZoomTestTiles(Check);           // I：分块倍率 / 防抖 / 预取环字节上限
             ZoomTestPatches(Check);         // J：高清补丁（区域渲染一致 / 一块屏 / 平移不灰闪 / 翻页回收）
             ZoomTestPatchBufferPool(Check); // J3：补丁缓冲复用（三轮回基线 / 第二轮起命中单槽）
+            ZoomTestIdleTrim(Check);        // J4：缩回 100% 后的一次性空闲清理
             ZoomTestBarAndPan(Check);       // G：文档条缩放组 / 档位浮层 / 横向拖页 / Ctrl+滚轮
             ZoomTestSelectionFurniture(Check, pdf);   // H：选中家具在 200% 下保持屏幕尺寸
             ZoomTestWorker(Check, pdf);     // F：worker 代次
@@ -252,20 +253,20 @@ internal sealed partial class App
               page0.Image != null, page0.Image == null ? "旧图被放了" : "原图还在");
     }
 
-    /// <summary>C–D 组：六个档位来回切 + 回到 100% 的复位。</summary>
+    /// <summary>C–D 组：七个档位来回切 + 回到 100% 的复位。</summary>
     private void ZoomTestSteps(Action<string, bool, string> check, int baseW, int baseH)
     {
         // ------------------------------------------------------------------
-        Console.WriteLine("  -- C 六档来回切：不崩、不越界、底图恒 1×（缩放只换相机）--");
+        Console.WriteLine("  -- C 七档来回切：不崩、不越界、底图恒 1×（缩放只换相机）--");
         // ------------------------------------------------------------------
-        float[] steps = { 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f };
+        float[] steps = { 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 3f };
         bool stepsOk = true;
         var stepDetail = new System.Text.StringBuilder();
         foreach (var z in steps)
         {
             SetDocZoomFromUi(z);
             bool ok = MathF.Abs(ViewScale - z) < 1e-4f && MathF.Abs(DocZoom - z) < 1e-4f;
-            ok &= DocZoom >= 0.5f - 1e-4f && DocZoom <= 2f + 1e-4f;
+            ok &= DocZoom >= 0.5f - 1e-4f && DocZoom <= 3f + 1e-4f;
             ok &= ViewportCanvas.MaxY > ViewportCanvas.MinY;   // 没被夹成空视口
             ok &= MathF.Abs(DocView.PageRenderScale - 1f) < 1e-3f;   // 页位图恒 1×（补丁负责高清）
             ok &= DocView.At(0).Spec.BitmapW == baseW && DocView.At(0).Spec.BitmapH == baseH;
@@ -273,7 +274,7 @@ internal sealed partial class App
             stepsOk &= ok;
             stepDetail.Append($"{z * 100:F0}%:{(ok ? "ok" : "BAD")} ");
         }
-        check("六档全部通过（50/75/100/125/150/200）", stepsOk, stepDetail.ToString().Trim());
+        check("七档全部通过（50/75/100/125/150/200/300）", stepsOk, stepDetail.ToString().Trim());
 
         SetDocZoomFromUi(0.5f);
         check("50%：页位图仍是 1× 基准（只缩不合，不重渲）",
@@ -281,9 +282,9 @@ internal sealed partial class App
               && DocView.At(0).Spec.BitmapW == baseW,
               $"倍率={DocView.At(0).Spec.RenderScale:F2} 宽={DocView.At(0).Spec.BitmapW}");
 
-        // 越界：传 5 和 0.1 都要被夹进 [0.5, 2]。
+        // 越界：传 5 和 0.1 都要被夹进 [0.5, 3]。
         SetDocZoomFromUi(5f);
-        check("传 5.0：夹到 200%", MathF.Abs(DocZoom - 2f) < 1e-4f, $"{DocZoom:F2}");
+        check("传 5.0：夹到 300%", MathF.Abs(DocZoom - 3f) < 1e-4f, $"{DocZoom:F2}");
         SetDocZoomFromUi(0.1f);
         check("传 0.1：夹到 50%", MathF.Abs(DocZoom - 0.5f) < 1e-4f, $"{DocZoom:F2}");
         SetDocZoomFromUi(1f);
@@ -452,25 +453,32 @@ internal sealed partial class App
         DocZoomBarRect();
     }
 
-    /// <summary>G2：百分比格弹出档位浮层（8 项、无 300%、锚在缩放条上）。</summary>
+    /// <summary>G2：百分比格弹出档位浮层（9 项、含 300%、锚在缩放条上、768 屏也装得下）。</summary>
     private void ZoomTestZoomMenu(Action<string, bool, string> check)
     {
         var bar = DocZoomBarRect();
         var zp = PptBar.ZoomPctCell(bar, DpiScale);
         // ------------------------------------------------------------------
-        Console.WriteLine("  -- G2 档位浮层：8 项、无 300%、锚在缩放条百分比格上方、点外面关 --");
+        Console.WriteLine("  -- G2 档位浮层：9 项、含 300%、锚在缩放条百分比格上方、点外面关 --");
         // ------------------------------------------------------------------
-        check("档位表：8 项、没有 300%",
-              DocZoomPresetCount == 8
+        check("档位表：9 项、含 300%",
+              DocZoomPresetCount == 9
               && DocZoomPresetText(0) == "适合宽度（100%）"
               && DocZoomPresetText(1) == "适合整页"
-              && DocZoomPresetText(7) == "200%",
-              $"共 {DocZoomPresetCount} 项；首项「{DocZoomPresetText(0)}」末项「{DocZoomPresetText(7)}」");
-        bool has300 = false;
-        for (int i = 0; i < DocZoomPresetCount; i++)
-            if (DocZoomPresetText(i).Contains("300")) has300 = true;
-        check("档位表里没有 300%", !has300, has300 ? "出现 300%" : "50/75/100/125/150/200 + 适合×2");
-
+              && DocZoomPresetText(8) == "300%",
+              $"共 {DocZoomPresetCount} 项；首项「{DocZoomPresetText(0)}」末项「{DocZoomPresetText(8)}」");
+        check("档位表顺序：适合×2 + 50/75/100/125/150/200/300",
+              DocZoomPresetText(2) == "50%" && DocZoomPresetText(7) == "200%"
+              && DocZoomPresetText(8) == "300%",
+              $"{DocZoomPresetText(2)} … {DocZoomPresetText(7)} / {DocZoomPresetText(8)}");
+        var screen768 = new RectF { MinX = 0f, MinY = 0f, MaxX = 1366f, MaxY = 768f };
+        var bar768 = PptBar.RectAt(16f, 768f - 16f - PptBar.BarH, 1f);
+        var m768 = PptBar.ZoomMenuRect(bar768, DocZoomPresetCount, 1f, screen768);
+        float need768 = DocZoomPresetCount * PptBar.ZoomMenuItemH + PptBar.ZoomMenuPad * 2f;
+        check("768 高屏：9 行浮层开在条上方、完整在屏内、末行不裁",
+              m768.MaxY <= bar768.MinY - 1f && m768.MinY >= 11.5f
+              && m768.MaxY <= 768f - 11.5f && (m768.MaxY - m768.MinY) >= need768,
+              $"y {m768.MinY:F0}..{m768.MaxY:F0}（条顶 {bar768.MinY:F0}，需要 {need768:F0}）");
         ClickZoomPct();
         check("点百分比：浮层打开（菜单 / 面板不开）",
               PptZoomMenuOpen && !PptMenuOpen && !PptPagePanelOpen,
@@ -486,10 +494,10 @@ internal sealed partial class App
               $"宽 {(zm.MaxX - zm.MinX):F0}，中心差 {MathF.Abs(zmCx - zpCx):F1}，"
               + $"y {zm.MinY:F0}..{zm.MaxY:F0}，条顶 {bar.MinY:F0}");
         PptZoomMenuItemRectAt(0, out var item0);
-        PptZoomMenuItemRectAt(7, out var item7);
-        check("浮层 8 行都在浮层矩形里",
-              zm.Contains(item0.MinX, item0.MinY) && zm.Contains(item7.MaxX, item7.MaxY),
-              $"首行 y {item0.MinY:F0}，末行 y {item7.MaxY:F0}，浮层底 {zm.MaxY:F0}");
+        PptZoomMenuItemRectAt(8, out var item8);
+        check("浮层 9 行都在浮层矩形里",
+              zm.Contains(item0.MinX, item0.MinY) && zm.Contains(item8.MaxX, item8.MaxY),
+              $"首行 y {item0.MinY:F0}，末行 y {item8.MaxY:F0}，浮层底 {zm.MaxY:F0}");
 
         // 悬停：第 3 项（50%）→ hover = 300+2
         PptZoomMenuItemRectAt(2, out var item2);
@@ -567,9 +575,15 @@ internal sealed partial class App
                   $"勾={DocZoomPresetChecked(1)}（fit={fit:F3}）");
 
         RunDocZoomPreset(7);                       // 200%
-        check("档位 200%：生效、读数 200%、＋ 置灰",
-              MathF.Abs(DocZoom - 2f) < 1e-4f && DocZoomPercentText == "200%" && !DocZoomInEnabled,
+        check("档位 200%：生效、读数 200%、＋ 仍可点（还有 300%）",
+              MathF.Abs(DocZoom - 2f) < 1e-4f && DocZoomPercentText == "200%" && DocZoomInEnabled,
               $"DocZoom={DocZoom:F2} 读数={DocZoomPercentText} ＋={DocZoomInEnabled}");
+        ZoomTest300Step(check);                    // 300%：＋ − Ctrl+滚轮 补丁倍率
+        RunDocZoomPreset(8);                       // 300%
+        check("档位 300%：生效、读数 300%、对勾只在 300%",
+              MathF.Abs(DocZoom - 3f) < 1e-4f && DocZoomPercentText == "300%"
+              && DocZoomPresetChecked(8) && !DocZoomPresetChecked(7),
+              $"DocZoom={DocZoom:F2} 读数={DocZoomPercentText} 勾8={DocZoomPresetChecked(8)}");
         RunDocZoomPreset(2);                       // 50%
         check("档位 50%：生效、读数 50%、− 置灰",
               MathF.Abs(DocZoom - 0.5f) < 1e-4f && DocZoomPercentText == "50%" && !DocZoomOutEnabled,
@@ -710,6 +724,17 @@ internal sealed partial class App
         Shot("docbar-left", 1f, PptBarRect());
         Shot("docbar-right", 1f, DocZoomBarRect());
         Shot("docbar-right-200", 2f, DocZoomBarRect());
+        Shot("docbar-right-300", 3f, DocZoomBarRect());
+
+        // 报告要求的 bmp 版：300% 的缩放条（＋ 已置灰、读数 300%）
+        var zb300 = DocZoomBarRect();
+        float p300 = 18f * DpiScale;
+        bool bmp300 = ScreenProbe.SaveBmp(System.IO.Path.Combine(shotDir, "docbar-300.bmp"),
+            (int)MathF.Max(_virtualX, zb300.MinX - p300), (int)MathF.Max(_virtualY, zb300.MinY - p300),
+            (int)(zb300.MaxX - zb300.MinX + p300 * 2f), (int)(zb300.MaxY - zb300.MinY + p300 * 2f));
+        Console.WriteLine($"    {"docbar-300.bmp",-22} {(bmp300 ? "已出图" : "出图失败（不影响判据）")}");
+        check("300%：＋ 置灰、读数 300%", !DocZoomInEnabled && DocZoomPercentText == "300%",
+              $"读数={DocZoomPercentText} ＋={DocZoomInEnabled}");
 
         SetDocZoomFromUi(1f);
         SettleFrames(200);

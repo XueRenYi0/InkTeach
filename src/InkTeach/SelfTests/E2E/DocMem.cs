@@ -176,9 +176,17 @@ internal sealed partial class App
                 DocMemZoom(rows, sampler, "50%", 0.5f);
                 DocMemZoom(rows, sampler, "50->200%", 2f);
 
+                // 300%（2026-11-16 加回）：判据是"补丁字节 ≈ 200% 同一量级"，
+                // 也就是放大到 300% 不会让页底图或补丁跟着倍率膨胀。
+                DocMemZoom(rows, sampler, "300%", 3f);
+
                 // 1GB 假设里最值得验的一刀：200% 且视口跨页缝 → **两页同时驻留**。
                 // 真实阅读就常常停在这个位置（一页底 + 下一页顶）。
                 DocMemSeamProbe(rows, sampler);
+
+                // 缩回 100% 之后的一次性空闲清理：先量"刚回 100%"，再等到点 GC/Trim 后量一次。
+                // 只等产品自己的 800ms 待办，不额外做 Aggressive GC / EmptyWorkingSet。
+                DocMemIdleTrim(rows, sampler);
             }
             catch (Exception ex)
             {
@@ -229,6 +237,31 @@ internal sealed partial class App
         DocMemAdd(rows, sampler, "seam 200% settle");
         DocMemTrim();
         DocMemAdd(rows, sampler, "seam 200% trim");
+    }
+
+    /// <summary>
+    /// 回 100% 后的**产品空闲清理**（补丁对象的 800ms 待办 → GC(2) + DXGI Trim）：
+    /// 刚回 100% 量一次，等到点执行后再量一次。不做 EmptyWorkingSet、不动补丁单槽，
+    /// 所以两条快照之间唯一的差别就是"垃圾 LOH / 驱动缓存被还回去多少"。
+    /// </summary>
+    private void DocMemIdleTrim(List<DocMemSample> rows, DocMemPeakSampler sampler)
+    {
+        int Trims() => DocPatch?.TrimCount ?? 0;
+
+        SetDocZoomFromUi(1f);
+        // 350ms：等这一档自己的收尾先落稳（补丁整层放掉 + 分块倍率 120ms 防抖换回 1×），
+        // 但仍在 800ms 待办之前——两拍之间只差产品自己的那次 GC / DXGI Trim。
+        SettleFrames(350);
+        DocMemAdd(rows, sampler, "idle 100% pre");
+
+        int before = Trims();
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 5000 && Trims() == before)
+            SettleFrames(50);                   // 照常出帧：到点由 SyncDocPatch 执行
+        SettleFrames(600);                      // 非阻塞 GC：给回收收尾留时间
+        DocMemAdd(rows, sampler, "idle 100% post");
+        if (Trims() == before)
+            Console.WriteLine("  n/a：空闲清理 5s 内没执行（计数未涨），本次按「没有可回收量」解释");
     }
 
     /// <summary>
@@ -481,6 +514,7 @@ internal sealed partial class App
         var baseline = rows.Count > 0 ? rows[0] : null;
         var steady100 = DocMemFind(rows, "c3 100% settle") ?? DocMemFind(rows, "100% settle");
         var steady200 = DocMemFind(rows, "c3 200% settle") ?? DocMemFind(rows, "200% settle");
+        var steady300 = DocMemFind(rows, "300% settle");
         var trim200 = DocMemFind(rows, "c3 200% trim") ?? DocMemFind(rows, "200% trim");
         var seam200 = DocMemFind(rows, "seam 200% settle");
         double peakWs = sampler.TotalWsMb, peakPriv = sampler.TotalPrivMb, peakGpu = sampler.TotalGpuLocalMb;
@@ -496,6 +530,7 @@ internal sealed partial class App
         sb.AppendLine("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
         DocMemAppendSummaryRow(sb, "100% 基线（打开后）", baseline);
         DocMemAppendSummaryRow(sb, "200% 稳态", steady200);
+        DocMemAppendSummaryRow(sb, "300% 稳态（补丁仍一块屏）", steady300);
         DocMemAppendSummaryRow(sb, "200% 跨页缝（2 页驻留）", seam200);
         DocMemAppendSummaryRow(sb, "100% 稳态（第 3 轮回落）", steady100);
         sb.Append("| 全程峰值（100ms 采样） | ").Append(DocMemMb(peakWs))
@@ -505,6 +540,51 @@ internal sealed partial class App
         DocMemAppendSummaryRow(sb, "200% 回收后（GC+Trim）", trim200);
         sb.AppendLine();
         DocMemAppendCycleReturn(sb, rows);
+        DocMemAppendIdleTrim(sb, rows);
+    }
+
+    /// <summary>
+    /// 回 100% 后的空闲清理验收（2026-11-16）：清理后**私有字节**应比刚回 100% 时
+    /// 低一截（判据 ≥8MB；GPU 只作参考，驱动不保证 Trim 后立刻掉）。
+    /// 没到 8MB 不算代码失败：前面刚做过 Aggressive GC 时本来就没有可回收量。
+    /// </summary>
+    private static void DocMemAppendIdleTrim(StringBuilder sb, List<DocMemSample> rows)
+    {
+        var pre = DocMemFind(rows, "idle 100% pre");
+        var post = DocMemFind(rows, "idle 100% post");
+        if (pre == null || post == null) return;
+
+        double dPriv = pre.PrivMb - post.PrivMb;
+        double dGpu = pre.GpuLocalMb - post.GpuLocalMb;
+        bool pass = !double.IsNaN(dPriv) && dPriv >= 8.0;
+
+        sb.AppendLine("### 回 100% 后的空闲清理（一次性 GC(2) + DXGI Trim）");
+        sb.AppendLine();
+        sb.AppendLine("| 时点 | WS | 私有 | GPU L | LOH | 托管 | 补丁 |");
+        sb.AppendLine("| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
+        DocMemAppendIdleRow(sb, "刚回 100%", pre);
+        DocMemAppendIdleRow(sb, "空闲清理后", post);
+        sb.AppendLine();
+        sb.AppendLine(pass
+            ? $"- **PASS**：私有 {DocMemMb(pre.PrivMb)} → {DocMemMb(post.PrivMb)} MB"
+              + $"（回收 {dPriv:F1} MB；GPU {dGpu:+0.0;-0.0} MB）。补丁单槽照留，所以不会清零。"
+            : $"- **FAIL**：私有只从 {DocMemMb(pre.PrivMb)} 降到 {DocMemMb(post.PrivMb)} MB"
+              + $"（{dPriv:F1} MB，判据 ≥8MB）。若前一拍的 `trim` 行刚做过 Aggressive GC +"
+              + " EmptyWorkingSet，这里本来就没有可回收量（不是清理没跑）；"
+              + "先看 `LOH` / `托管` 是否已经很低，再看控制台的清理执行计数。");
+        sb.AppendLine();
+    }
+
+    private static void DocMemAppendIdleRow(StringBuilder sb, string name, DocMemSample s)
+    {
+        sb.Append("| ").Append(name)
+          .Append(" | ").Append(DocMemMb(s.WsMb))
+          .Append(" | ").Append(DocMemMb(s.PrivMb))
+          .Append(" | ").Append(DocMemMb(s.GpuLocalMb))
+          .Append(" | ").Append(DocMemMb(s.LohMb))
+          .Append(" | ").Append(DocMemMb(s.ManagedMb))
+          .Append(" | ").Append(s.PatchCount + "块/" + DocMemMb(s.PatchMb) + "MB")
+          .AppendLine(" |");
     }
 
     /// <summary>
@@ -641,6 +721,7 @@ internal sealed partial class App
     {
         var baseline = rows.Count > 0 ? rows[0] : null;
         var steady200 = DocMemFind(rows, "c3 200% settle") ?? DocMemFind(rows, "200% settle");
+        var steady300 = DocMemFind(rows, "300% settle");
         var trim200 = DocMemFind(rows, "c3 200% trim") ?? DocMemFind(rows, "200% trim");
         var seam200 = DocMemFind(rows, "seam 200% settle");
 
@@ -657,6 +738,12 @@ internal sealed partial class App
                 + $" / ImageData {DocMemMb(steady200.ImageMb)} / 底图 {steady200.Pages}页/{DocMemMb(steady200.PageMb)}MB"
                 + $" / 补丁 {steady200.PatchCount}块/{DocMemMb(steady200.PatchMb)}MB"
                 + $" / 分块 {steady200.TileCount}×{steady200.TileTexture}²={DocMemMb(steady200.TileMb)}MB");
+        if (steady300 != null)
+            Console.WriteLine($"    300% 稳态 : WS {DocMemMb(steady300.WsMb)} / 私有 {DocMemMb(steady300.PrivMb)}"
+                + $" / GPU {DocMemMb(steady300.GpuLocalMb)}"
+                + $" / 底图 {steady300.Pages}页/{DocMemMb(steady300.PageMb)}MB@{steady300.RenderScale:F2}x"
+                + $" / 补丁 {steady300.PatchCount}块/{DocMemMb(steady300.PatchMb)}MB@{steady300.PatchScale:F2}x"
+                + $" / 分块 {steady300.TileCount}×{steady300.TileTexture}²={DocMemMb(steady300.TileMb)}MB");
         Console.WriteLine($"    全程峰值 : WS {DocMemMb(sampler.TotalWsMb)} / 私有 {DocMemMb(sampler.TotalPrivMb)}"
             + $" / GPU {DocMemMb(sampler.TotalGpuLocalMb)}");
         if (seam200 != null)
@@ -673,6 +760,15 @@ internal sealed partial class App
         if (c1 != null && c3 != null)
             Console.WriteLine($"    每轮100% : c1 私有 {DocMemMb(c1.PrivMb)}MB → c3 {DocMemMb(c3.PrivMb)}MB"
                 + $"（Δ {DocMemMb(c3.PrivMb - c1.PrivMb)}MB；补丁缓冲复用 {c3.PatchReuse} 次）");
+        var idlePre = DocMemFind(rows, "idle 100% pre");
+        var idlePost = DocMemFind(rows, "idle 100% post");
+        if (idlePre != null && idlePost != null)
+        {
+            bool ok = idlePre.PrivMb - idlePost.PrivMb >= 8.0;
+            Console.WriteLine($"    空闲清理 : 私有 {DocMemMb(idlePre.PrivMb)} → {DocMemMb(idlePost.PrivMb)}MB"
+                + $" / GPU {DocMemMb(idlePre.GpuLocalMb)} → {DocMemMb(idlePost.GpuLocalMb)}MB"
+                + $" / 执行 {DocPatch?.TrimCount ?? 0} 次（{(ok ? "PASS" : "未达 8MB")}）");
+        }
         Console.WriteLine($"  报告：{path}");
     }
 

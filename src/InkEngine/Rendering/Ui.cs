@@ -510,7 +510,7 @@ public interface IEngineCommands
     /// </summary>
     void ToggleDocPan();
     /// <summary>
-    /// 文档缩放到指定倍数（1 = 100%，范围 50%~200%；围绕视口中心）。
+    /// 文档缩放到指定倍数（1 = 100%，范围 50%~300%；围绕视口中心）。
     /// 文档没开时是空操作。底部条上的百分比档位 / 快捷键走它。
     /// </summary>
     void SetDocZoom(float zoom);
@@ -1196,7 +1196,7 @@ public readonly struct UiState
     /// </summary>
     public bool DocPanMode { get; init; }
     /// <summary>
-    /// 文档缩放档（1 = 100%，范围 50%~200%；"适合整页"可到 40%）。**只在文档开着时有意义**，关文档回到 1。
+    /// 文档缩放档（1 = 100%，范围 50%~300%；"适合整页"可到 40%）。**只在文档开着时有意义**，关文档回到 1。
     ///
     /// 界面 / 文档条用它显示当前百分比（条上的 `[−] [100% ▾] [+]`，2026-11-16）。
     /// </summary>

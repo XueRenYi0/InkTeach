@@ -45,6 +45,12 @@ internal sealed class DocPatchCache : IDisposable
     /// <summary>可见区外再留多少**设备像素**（按 scale 折回画布）。</summary>
     public const float MarginDevicePx = 256f;
 
+    /// <summary>缩回 100% 后等多久做一次空闲内存清理（毫秒）。</summary>
+    public const double IdleTrimDelayMs = 800;
+
+    /// <summary>到点时正在书写 / 编辑 / 翻页：推后再等多久（毫秒）。</summary>
+    public const double IdleTrimBusyRetryMs = 500;
+
     /// <summary>一块已就绪的补丁（位图 + 它盖住的画布矩形）。</summary>
     internal sealed class Patch
     {
@@ -100,6 +106,19 @@ internal sealed class DocPatchCache : IDisposable
     private int _frozenPage = -1;
 
     /// <summary>
+    /// 空闲内存清理的到点时刻（毫秒，0 = 没有待办）。**只在 UI 线程读写**；
+    /// 只在 **&gt;100% → ≤100%** 那一下排（`InkEngine.SetDocZoomCore` 调 <see cref="ScheduleIdleTrim"/>）。
+    /// 缩回 100% 时补丁位图整层放掉，但那一块 ~25MB 的 LOH 和 D2D/DXGI 驱动缓存不会立刻
+    /// 还给系统；停手 800ms 后再收一次，回到**稳定但不清零**（单槽照留，见 <see cref="_spare"/>）。
+    /// 归这个组合对象管（ADR-005 D3）；文档关掉 / 页让位时由 <see cref="ReleaseAll"/> /
+    /// <see cref="Dispose"/> 一并清掉。
+    /// </summary>
+    private double _trimAtMs;
+
+    /// <summary>空闲清理执行次数（诊断口径，`--zoomtest` / `--docmem` 断言用）。</summary>
+    private int _trimCount;
+
+    /// <summary>
     /// 补丁位图的**单槽复用缓冲**（2026-11-16 内存抖动修复）。
     ///
     /// 为什么：每块补丁是一块 ~25MB 的 `byte[]`（2520×1680×4），走 LOH；缩放来回一轮就
@@ -130,6 +149,9 @@ internal sealed class DocPatchCache : IDisposable
     /// 第二次 100→200 起就该一直涨；不涨说明池子没接上（`--zoomtest` 会断言）。
     /// </summary>
     public int PatchBufferReuseCount => Volatile.Read(ref _reuseCount);
+
+    /// <summary>诊断口径：空闲内存清理实际执行了几次（每次 `&gt;100% → ≤100%` 的跨档最多 1 次）。</summary>
+    public int TrimCount => Volatile.Read(ref _trimCount);
 
     public DocPatchCache(PdfiumDoc pdf, Func<int, RectF?> pageRect, Func<int> pageCount, Action wake)
     {
@@ -206,7 +228,11 @@ internal sealed class DocPatchCache : IDisposable
     {
         get
         {
-            if (_disposed || _suspended || _scale <= 1.0001f) return false;
+            if (_disposed) return false;
+            // 空闲清理待办：**哪怕 100% 也要出帧**，否则界面不置脏时主循环会睡在
+            // WaitMessage 上，到点也没人去 GC / Trim。
+            if (_trimAtMs > 0) return true;
+            if (_suspended || _scale <= 1.0001f) return false;
             lock (_gate) if (_ready != null) return true;
             if (HasWork()) return false;
             return !_settled && _needsMore;
@@ -251,6 +277,7 @@ internal sealed class DocPatchCache : IDisposable
         _suspended = true;
         _needsMore = false;
         _hasLastVisible = false;
+        _trimAtMs = 0;                 // 页让位：待办作废（不在关/让位的路上跑 GC）
         if (_patches.Count > 0 || HasWork()) InvalidateAll();
     }
 
@@ -267,6 +294,7 @@ internal sealed class DocPatchCache : IDisposable
         if (_disposed) return;
         _disposed = true;
         _stop = true;
+        _trimAtMs = 0;                 // 关闭：待办作废（关文档的路上不跑 GC）
         _signal.Set();
 
         bool joined = true;
@@ -340,22 +368,64 @@ internal sealed class DocPatchCache : IDisposable
     // ======================================================================
 
     /// <summary>
+    /// 排一次空闲内存清理（<see cref="IdleTrimDelayMs"/> 后）。
+    ///
+    /// 由 `InkEngine.SetDocZoomCore` 在 **&gt;100% → ≤100%** 那一下调；**已经在排队就不重排**：
+    /// 截止时间不会因为连续滚轮 / 反复缩放越推越远，一次跨档只收一次。
+    /// 关着 / 已经 Dispose 的补丁对象直接忽略。
+    /// </summary>
+    public void ScheduleIdleTrim(double nowMs)
+    {
+        if (_disposed || _trimAtMs > 0) return;
+        _trimAtMs = nowMs + IdleTrimDelayMs;
+    }
+
+    /// <summary>
+    /// 到点就做一次空闲内存清理（每帧一次；0 = 没有待办）。`busy` = 正在书写 / 文本框编辑 /
+    /// 翻页动画 → **推后 500ms**（GC / Trim 会让下一拍重新分配缓存，不能插在一笔或动画中间）。
+    /// 只做两件事：后台 Gen2 GC（不阻塞、不压 LOH——单槽要继续复用）+ DXGI Trim；
+    /// 不调 `EmptyWorkingSet`（诊断口径，会把热页赶出内存），也不置脏（像素没变）。
+    /// </summary>
+    private void RunIdleTrimIfDue(double nowMs, bool busy)
+    {
+        double at = _trimAtMs;
+        if (at <= 0 || nowMs < at) return;
+        if (busy)
+        {
+            _trimAtMs = nowMs + IdleTrimBusyRetryMs;   // 忙：再等 500ms，别打断这一笔 / 这段动画
+            return;
+        }
+
+        _trimAtMs = 0;
+        GC.Collect(2, GCCollectionMode.Forced, blocking: false, compacting: false);
+        Gfx.TrimVideoMemory();
+        Interlocked.Increment(ref _trimCount);
+        Console.WriteLine("[文档] 空闲内存清理：GC(2) + DXGI Trim（补丁单槽保留）");
+    }
+
+    /// <summary>
     /// 视口同步（每帧渲染前由**引擎**调一次，见 <c>InkEngine.SyncDocPatch</c>）。
     ///
-    /// 顺序固定：**先采纳**（ready → 装/丢）→ 收掉离视口的补丁 → 判断还缺什么 →
-    /// 落稳了才排一个请求。返回 true = 下一拍还需要出帧（见 <see cref="WantsFrame"/>）。
+    /// 顺序固定：**先查空闲清理**（在所有早退之前）→ **先采纳**（ready → 装/丢）→
+    /// 收掉离视口的补丁 → 判断还缺什么 → 落稳了才排一个请求。
+    /// 返回 true = 下一拍还需要出帧（见 <see cref="WantsFrame"/>）。
     ///
     /// ⚠ `settled` 由本类自己算（可见矩形/倍率连续 120ms 没变），不是由覆盖窗口传：
     /// ADR-005 不允许给 Overlay 加私有字段，相机落稳属于补丁这个组合对象的状态。
     ///
     /// <paramref name="frozenPage"/>：白板冻结的那一页（-1 = 没有）。它只画 1× 底图，
     /// 补丁按"当前视口"算完再硬贴会留接缝，所以有冻结页时整层都不建补丁。
+    /// <paramref name="busy"/>：正在书写 / 文本框编辑 / 翻页动画——空闲清理推后，
+    /// 别让 GC / Trim 插在一笔或动画中间。
     /// </summary>
-    public bool Sync(RectF visibleCanvas, double nowMs, int frozenPage = -1)
+    public bool Sync(RectF visibleCanvas, double nowMs, int frozenPage = -1, bool busy = false)
     {
         if (_disposed) return false;
         _suspended = false;
         _frozenPage = frozenPage;
+
+        // 待办必须**在 ≤100% / 冻结页这些早退之前**落地（到点那一刻可能正好是 100%）。
+        RunIdleTrimIfDue(nowMs, busy);
 
         AdoptReady(visibleCanvas);
 

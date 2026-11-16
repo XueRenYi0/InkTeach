@@ -1722,28 +1722,33 @@ public partial class InkEngine
     }
 
     // =====================================================================
-    //  文档缩放（v1：只缩文档，50/75/100/125/150/200）
+    //  文档缩放（只缩文档，50/75/100/125/150/200/300）
     //
     //  参考：Acrobat / 浏览器 PDF 阅读器的"以视口中心缩放"——缩放前后
     //  **中心压着的那个画布点不动**，用户不会"点一下放大就找不到刚才看的地方"。
-    //  只缩文档（白板 / 桌面批注不缩）：页和墨一起缩，页位图按新倍率重渲。
+    //  只缩文档（白板 / 桌面批注不缩）：页和墨一起缩；页位图恒 1×，
+    //  放大后的高清由可见区补丁提供（见 DocPatchCache，补丁大小与倍率无关）。
     // =====================================================================
 
     /// <summary>文档缩放档（1 = 100%）。只在文档开着时有效，关文档 / 打开新文档回到 1。</summary>
     internal float DocZoom = 1f;
 
-    /// <summary>固定档位的下限（`−` / `+` / 百分比档位只走 50~200）。</summary>
+    /// <summary>固定档位的下限（`−` / `+` / 百分比档位只走 50~300）。</summary>
     internal const float DocZoomMin = 0.5f;
-    internal const float DocZoomMax = 2f;
+    /// <summary>
+    /// 固定档位的上限 = 300%（2026-11-16 加回）：页位图恒 1× + 视口补丁的架构下，
+    /// 补丁只占一块屏（与倍率无关），所以 300% 不再有整页重渲的内存代价。
+    /// </summary>
+    internal const float DocZoomMax = 3f;
     /// <summary>
     /// **"适合整页"的硬下限**（2026-11-16）：A4 竖页在 16:9 屏上要缩到 ~40% 才装得下。
-    /// 只有 <see cref="FitDocPageToView"/> 用这个下限；`−` / `+` 和百分比档位仍然 50~200
+    /// 只有 <see cref="FitDocPageToView"/> 用这个下限；`−` / `+` 和百分比档位仍然 50~300
     /// （否则用户点一次"适合整页"就再也回不到 50% 这一档的语义了）。
     /// </summary>
     internal const float DocZoomFitMin = 0.4f;
 
-    /// <summary>缩放档位（v1 只有这六档；不做 300%）。</summary>
-    internal static readonly float[] DocZoomSteps = { 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f };
+    /// <summary>缩放档位（七档：50/75/100/125/150/200/300；Ctrl+滚轮与 `+` 共用这张表）。</summary>
+    internal static readonly float[] DocZoomSteps = { 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 3f };
 
     /// <summary>
     /// 文档缩放（界面 / 自检共用）。**只有文档开着才有意义**，其它情况是空操作。
@@ -1770,6 +1775,7 @@ public partial class InkEngine
         if (float.IsNaN(zoom) || float.IsInfinity(zoom)) return;
         zoom = Math.Clamp(zoom, minZoom, DocZoomMax);
         if (MathF.Abs(zoom - ViewScale) < 0.0005f) { DocZoom = zoom; return; }
+        float prevScale = ViewScale;           // 跨档判断：>100% → ≤100% 才排空闲清理
         DismissDocResume("缩放");              // 缩放 = 换观察位置，提示先收（不跳）
 
         float cx = ScreenToCanvasX(anchorScreenX);
@@ -1783,6 +1789,11 @@ public partial class InkEngine
         ClampViewOffset();
 
         DocZoom = zoom;
+        // 从放大档回到 100% 及以下：补丁会整层放掉（一块 ~25MB 的 LOH + D2D/DXGI 缓存），
+        // 但这些内存不会马上还给系统。排一次 800ms 后的空闲清理，别让它一直挂在进程里。
+        // **只在这一下跨档时排**：打开文档停在 100% / 100%↔50% 都不排，也不每帧排。
+        // 待办状态归 DocPatchCache（ADR-005 D3：引擎不为它持有私有字段）。
+        if (prevScale > 1.0001f && zoom <= 1.0001f) DocPatch?.ScheduleIdleTrim(NowMs);
         DocView.SetViewScale(ViewScale);       // 只记倍率（页位图恒 1×）
         DocPatch?.SetScale(ViewScale);         // 可见区高清补丁按新倍率重做（旧补丁先留着，不灰闪）
         _dirty = true;
@@ -1816,7 +1827,7 @@ public partial class InkEngine
         ViewOffsetX = ClampOffsetX(ViewOffsetX);
     }
 
-    /// <summary>放大一档（到头就停在 200%）。</summary>
+    /// <summary>放大一档（到头就停在 300%）。</summary>
     internal void DocZoomIn() => SetDocZoomFromUi(NextDocZoomStep(+1));
 
     /// <summary>缩小一档（到 50% 就停；"适合整页"缩到 40% 时这一下不动）。</summary>

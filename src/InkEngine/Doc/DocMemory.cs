@@ -51,7 +51,8 @@ internal static class DocMemory
     /// <summary>
     /// 文档缩放时页位图的**重渲染倍率上限**（历史口径：≤100% 时一律 1，只缩不合，不重渲）。
     /// 2026-11-16 起页位图不再按缩放重渲（见 <see cref="DocPatchCache"/>），
-    /// 这一位只留给 `--docmem` 报告和旧自检读数，不再参与任何渲染决定。
+    /// 这一位只留给 `--docmem` 报告和旧自检读数，不再参与任何渲染决定；
+    /// 300% 档同样与它无关（补丁大小只跟可见区走，不跟倍率走）。
     /// </summary>
     public static float PageRenderScaleCap => Low ? 1.5f : 2.0f;
 

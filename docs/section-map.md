@@ -94,7 +94,7 @@
 | 537 | 底行：名单 / 学号范围 |
 | 563 | 绘制小工具 |
 
-## src/InkEngine/Core/Engine.cs（2,867 行）
+## src/InkEngine/Core/Engine.cs（2,878 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -102,11 +102,11 @@
 | 28 | `internal enum PassThroughMode` |
 | 45 | `public partial class InkEngine` |
 | 576 | `internal enum CaptureDrag { None, Move, L, R, T, B, TL, TR, BL, BR }` |
-| 2202 | `internal enum VertexReadoutKind` |
-| 2332 | `internal enum AlignSnapKind` |
-| 2341 | `private enum AlignLineRole` |
-| 2348 | `private struct AlignAxisCandidate` |
-| 2450 | `private enum FrameDrive` |
+| 2213 | `internal enum VertexReadoutKind` |
+| 2343 | `internal enum AlignSnapKind` |
+| 2352 | `private enum AlignLineRole` |
+| 2359 | `private struct AlignAxisCandidate` |
+| 2461 | `private enum FrameDrive` |
 
 | 行 | 段落 |
 | --- | --- |
@@ -123,20 +123,20 @@
 | 1332 | 湿墨档位（2026-10-13 新增；2026-10-15 精简为两档：应用湿墨层撤除） |
 | 1401 | 自绘预测尾（2026-10-15 接入：线性预测，Chromium 同族） |
 | 1481 | 长度限速（在"像素"上做，治"跳跃的笔头"） |
-| 1724 | 文档缩放（v1：只缩文档，50/75/100/125/150/200） |
-| 2015 | 交互矢量图的参数滑杆（v2.1） |
-| 2063 | 图形定义元素编辑（直线 / 箭头 / 圆 / 椭圆）：和"拖对象"同一条快路 |
-| 2321 | 对象吸附（2026-10-18） |
-| 2475 | 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictorLinear.cs） |
-| 2498 | 书写期间的分配 / GC 仪表（低配机排查用） |
-| 2581 | perf accounting |
-| 2594 | 界面接入口 |
-| 2602 | 工具带色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成 8 个可改色位） |
-| 2631 | 荧光笔的 5 个色位 / 5 档浓度（2026-10-28） |
-| 2655 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
-| 2713 | 延时探针（见 Latency.cs） |
+| 1724 | 文档缩放（只缩文档，50/75/100/125/150/200/300） |
+| 2026 | 交互矢量图的参数滑杆（v2.1） |
+| 2074 | 图形定义元素编辑（直线 / 箭头 / 圆 / 椭圆）：和"拖对象"同一条快路 |
+| 2332 | 对象吸附（2026-10-18） |
+| 2486 | 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictorLinear.cs） |
+| 2509 | 书写期间的分配 / GC 仪表（低配机排查用） |
+| 2592 | perf accounting |
+| 2605 | 界面接入口 |
+| 2613 | 工具带色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成 8 个可改色位） |
+| 2642 | 荧光笔的 5 个色位 / 5 档浓度（2026-10-28） |
+| 2666 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
+| 2724 | 延时探针（见 Latency.cs） |
 
-## src/InkEngine/Core/Engine.Host.cs（2,335 行）
+## src/InkEngine/Core/Engine.Host.cs（2,337 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -163,7 +163,7 @@
 | 1209 | 放映期间的"临时全局热键"（2026-09-30 用户定方案①） |
 | 1288 | Message loop |
 | 1446 | 文档高清补丁：每帧同步一次（由引擎挑驱动窗口） |
-| 1921 | Window procedure |
+| 1922 | Window procedure |
 
 ## src/InkEngine/Core/Engine.Selection.Gesture.cs（1,466 行）
 
@@ -397,21 +397,21 @@
 | 334 | 视口窗口：生成与回收 |
 | 545 | 查询（翻页 / 相机范围 / 渲染） |
 
-## src/InkEngine/Doc/DocPatch.cs（730 行）
+## src/InkEngine/Doc/DocPatch.cs（800 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 40 | `internal sealed class DocPatchCache : IDisposable` |
-| 49 | `internal sealed class Patch` |
-| 63 | `private sealed class Request` |
+| 55 | `internal sealed class Patch` |
+| 69 | `private sealed class Request` |
 
 | 行 | 段落 |
 | --- | --- |
-| 150 | 查询 |
-| 216 | 倍率 / 让开 / 关闭 |
-| 338 | 每帧同步（UI 线程） |
-| 576 | 后台渲染线程 |
-| 701 | 几何小工具 |
+| 172 | 查询 |
+| 242 | 倍率 / 让开 / 关闭 |
+| 366 | 每帧同步（UI 线程） |
+| 646 | 后台渲染线程 |
+| 771 | 几何小工具 |
 
 ## src/InkEngine/Export/Export.cs（1,178 行）
 
@@ -1156,7 +1156,7 @@
 | 2691 | ⑥ 存档：v9 往返 + 真·v8 老文件 |
 | 3113 | ⑥ 运行日志（2026-10-16 用户定） |
 
-## src/InkTeach/SelfTests/E2E/DocMem.cs（696 行）
+## src/InkTeach/SelfTests/E2E/DocMem.cs（792 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -1168,9 +1168,9 @@
 | --- | --- |
 | 19 | 数据结构 |
 | 116 | 主流程 |
-| 267 | 读数 |
-| 391 | 报告 |
-| 679 | 小工具 |
+| 300 | 读数 |
+| 424 | 报告 |
+| 775 | 小工具 |
 
 ## src/InkTeach/SelfTests/E2E/Documents.cs（1,463 行）
 
@@ -1669,13 +1669,13 @@
 | 1226 | ④ 第二根手指按下：正在写的那一笔不许被换掉 |
 | 1251 | 收尾：两根一起抬，交进文档 |
 
-## src/InkTeach/SelfTests/E2E/Zoom.cs（772 行）
+## src/InkTeach/SelfTests/E2E/Zoom.cs（797 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 15 | `internal sealed partial class App` |
 
-## src/InkTeach/SelfTests/E2E/ZoomShots.cs（647 行）
+## src/InkTeach/SelfTests/E2E/ZoomShots.cs（776 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -1683,8 +1683,8 @@
 
 | 行 | 段落 |
 | --- | --- |
-| 222 | J 组：高清补丁（PDF >100% 的可见区设备分辨率小图） |
-| 468 | J2 组：驱动窗口 / 换倍率不闪 / 渲到一半关文档（2026-11-16 评审 P0/P1） |
+| 310 | J 组：高清补丁（PDF >100% 的可见区设备分辨率小图） |
+| 556 | J2 组：驱动窗口 / 换倍率不闪 / 渲到一半关文档（2026-11-16 评审 P0/P1） |
 
 ## src/InkUi/Ai/FullUi.ApiSettings.cs（757 行）
 

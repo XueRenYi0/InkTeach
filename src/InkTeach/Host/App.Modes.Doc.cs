@@ -30,14 +30,14 @@ internal sealed partial class App
             DocumentTest();
             return null;
         }),
-        new("--zoomtest", "文档缩放自检（50~200%：中心不动、页矩形不变、底图恒 1×＋高清补丁、页+墨一起缩、回到 100%）", args =>
+        new("--zoomtest", "文档缩放自检（50~300%：中心不动、页矩形不变、底图恒 1×＋高清补丁、页+墨一起缩、回到 100%）", args =>
         {
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
             ZoomTest();
             return null;
         }),
-        new("--docmem", "文档缩放内存归因（100→200→100 ×3 ＋ 50→200；WS/私有/托管/LOH/GPU/底图/补丁/分块，含 100ms 峰值与回收后快照）", args =>
+        new("--docmem", "文档缩放内存归因（100→200→100 ×3 ＋ 50→200 ＋ 300；WS/私有/托管/LOH/GPU/底图/补丁/分块，含 100ms 峰值与回收后快照）", args =>
         {
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
