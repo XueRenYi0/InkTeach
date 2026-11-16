@@ -1,6 +1,6 @@
 # 状态地图（自动生成，勿手改）
 
-> 生成：2026-11-16 17:18 ／ 脚本：`tools/gen-state-map.ps1` ／ ADR-005 D4
+> 生成：2026-11-16 18:36 ／ 脚本：`tools/gen-state-map.ps1` ／ ADR-005 D4
 > 用法：改一个私有字段前，先在这里查它被哪些同族文件读写；只列被 >=2 个文件引用的字段。
 > 它降低定位成本，不降低验证成本；拆不拆类看 ADR-005 D4 的触发条件，不按行数。
 
@@ -29,15 +29,15 @@
 | `_capturePressHandled` | 5 | Engine.cs, Engine.Capture.cs, Engine.Input.cs, Engine.Library.Pair.cs, Engine.ShapeTools.cs | 5 |
 | `_stepIndex` | 5 | Engine.cs, Engine.Input.cs, Engine.Hotkey.cs, Engine.Library.Pair.cs, Engine.ShapeTools.cs | 5 |
 
-## App（28 文件 / 19 字段 / 8 个跨文件字段）
+## App（28 文件 / 21 字段 / 8 个跨文件字段）
 
 | 字段 | 引用文件 | 主要文件 | 写入点 |
 | --- | --- | --- | --- |
 | `_clickTargetHwnd` | 2 | App.Dev.ClickTarget.cs, App.cs | 3 |
-| `_benchSpread` | 2 | App.Dev.Render.cs, App.Modes.Shape.cs | 1 |
-| `_benchPressure` | 2 | App.Dev.Render.cs, App.Modes.Shape.cs | 1 |
-| `_panelShowMore` | 2 | App.Dev.PageShow.cs, App.cs | 1 |
 | `_benchPts` | 2 | App.Dev.Render.cs, App.Modes.Shape.cs | 1 |
+| `_benchPressure` | 2 | App.Dev.Render.cs, App.Modes.Shape.cs | 1 |
+| `_benchSpread` | 2 | App.Dev.Render.cs, App.Modes.Shape.cs | 1 |
+| `_panelShowMore` | 2 | App.Dev.PageShow.cs, App.cs | 1 |
 | `_panelShowBand` | 2 | App.Dev.PageShow.cs, App.cs | 1 |
 | `_clickLogFile` | 2 | App.Dev.ClickTarget.cs, App.cs | 1 |
 | `_panelShowMini` | 2 | App.Dev.PageShow.cs, App.cs | 1 |
@@ -76,15 +76,15 @@
 | `_moreOpen` | 7 | FullUi.Ai.cs, FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.cs …+1 | 9 |
 | `_dark` | 7 | FullUi.Ai.cs, FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.cs …+1 | 3 |
 | `_screen` | 6 | FullUi.Ai.cs, FullUi.AiMenu.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 2 |
-| `_more` | 6 | FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 1 |
 | `_moreH` | 6 | FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 1 |
-| `_moreHover` | 5 | FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.Interaction.cs | 38 |
+| `_more` | 6 | FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 1 |
+| `_moreHover` | 5 | FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.Interaction.cs | 39 |
 | `_actionFlashUntil` | 5 | FullUi.AiMenu.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 6 |
 | `_penPickerOpen` | 5 | FullUi.Ai.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 3 |
-| `_work` | 5 | FullUi.Ai.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 2 |
 | `_aiMenuOpen` | 5 | FullUi.Ai.cs, FullUi.AiMenu.cs, FullUi.MorePanel.cs, FullUi.cs, FullUi.Interaction.cs | 2 |
+| `_work` | 5 | FullUi.Ai.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 2 |
 | `_bandCell` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 28 |
-| `_morePress` | 4 | FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.Interaction.cs | 20 |
+| `_morePress` | 4 | FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.Interaction.cs | 21 |
 | `_morePage` | 4 | FullUi.Ai.cs, FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.Interaction.cs | 19 |
 | `_press` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 16 |
 | `_railHover` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 15 |

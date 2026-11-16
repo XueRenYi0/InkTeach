@@ -749,6 +749,18 @@ public interface IEngineCommands
     void OpenInkHistory();
 
     /// <summary>
+    /// 最新的 <paramref name="max"/> 份**板书历史**（最新在前；目录不存在 = 空列表）。
+    /// 「最近文档」页的「板书」组用它（每组最多 4 条）；界面不再自己扫盘。
+    /// </summary>
+    List<(string Path, DateTime LocalTime, long Bytes)> GetBoardHistory(int max);
+
+    /// <summary>
+    /// 打开**一条**板书历史（不弹对话框；走"打开墨迹"同一条路：先备份当前白板 → 校验 → 替换）。
+    /// 文件已经不在了只写 <see cref="UiState.InkStatus"/>，不崩、不动当前板书。
+    /// </summary>
+    void OpenBoardHistoryEntry(string path);
+
+    /// <summary>
     /// **保存图片**（2026-10-02「更多 → 墨迹 → 保存图片」）：把**整块板书**渲染成图片
     /// 存盘（默认 JPEG 白底，好发微信/邮件），走系统"另存为"（透明 PNG / JPEG 白底 /
     /// PNG 白底 / BMP 四种照旧）。
@@ -1386,8 +1398,8 @@ public readonly struct UiState
     public int WetMode { get; init; }
 
     /// <summary>
-    /// **板书历史有几份**（「更多 → 墨迹 → 历史板书」那一格据此亮 / 灰；2026-10-14 加）。
-    /// 只有份数，不列文件名——界面不需要知道目录在哪（那是引擎的事）。
+    /// **板书历史有几份**（2026-10-14 加；2026-11-16 起只作统计，格子本身始终可用）。
+    /// 要列文件名走 <see cref="IEngineCommands.GetBoardHistory"/>——界面不需要知道目录在哪。
     /// </summary>
     public int HistoryCount { get; init; }
     /// <summary>

@@ -136,6 +136,20 @@ internal static class BoardHistory
         catch (Exception ex) { Console.WriteLine("板书历史轮转失败（不影响使用）：" + ex.Message); }
     }
 
+    /// <summary>
+    /// 最新的 <paramref name="max"/> 份（最新的在前；目录不存在 / 读不出 = 空列表）。
+    /// 「最近文档」页的「板书」组用它，每组最多 4 条（见 2026-11-16 合并入口）。
+    /// </summary>
+    public static List<(string Path, DateTime LocalTime, long Bytes)> ListRecent(int max)
+    {
+        var list = new List<(string Path, DateTime LocalTime, long Bytes)>();
+        if (max <= 0) return list;
+        var all = List();
+        int n = Math.Min(max, all.Count);
+        for (int i = 0; i < n; i++) list.Add((all[i].Path, all[i].Time, all[i].Bytes));
+        return list;
+    }
+
     /// <summary>列出现有的快照（最新的在前；界面 / 自检用）。</summary>
     public static List<(string Path, DateTime Time, long Bytes)> List()
     {

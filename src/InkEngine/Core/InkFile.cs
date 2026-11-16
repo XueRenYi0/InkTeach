@@ -114,6 +114,21 @@ public partial class InkEngine
         OpenInkFile(null, BoardHistory.Dir);
     }
 
+    /// <summary>
+    /// **打开一条板书历史**（2026-11-16「最近文档」页）：不弹对话框，直接走
+    /// <see cref="OpenInkFile(string, string)"/> 那条老路（先备份当前白板 → 校验 → 替换）。
+    /// 文件已经不在了（刚被历史清理删掉 / 目录被挪走）只写状态行，不崩、不动板书。
+    /// </summary>
+    internal void OpenBoardHistoryEntryFromUi(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            SetInkStatus("这份历史板书已经不在了（可能被历史清理删掉）");
+            return;
+        }
+        OpenInkFile(path, BoardHistory.Dir);
+    }
+
     /// <summary>「保存图片」入口（更多 → 墨迹 → 保存图片，2026-10-02）。</summary>
     internal void SaveBoardImageFromUi()
     {

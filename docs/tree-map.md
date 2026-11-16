@@ -16,21 +16,21 @@
       - `OcrText.cs` 148 行
 
     **InkEngine/Classroom/**
-      - `Classroom.cs` 2,238 行 — 计时/点名窗：状态、名单、窗口交互。
+      - `Classroom.cs` 2,259 行 — 计时/点名窗：状态、名单、窗口交互。
       - `ClassroomDraw.cs` 717 行 — 课堂窗绘制：卡片/按钮/名牌/环/分段表。
 
     **InkEngine/Core/**
       - `BackgroundSaver.cs` 157 行
-      - `BoardHistory.cs` 156 行
+      - `BoardHistory.cs` 170 行
       - `Engine.cs` 2,881 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
-      - `Engine.Host.cs` 2,338 行 — 启动、消息循环、窗口过程（WndProc）。
+      - `Engine.Host.cs` 2,349 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
       - `Engine.Selection.Gesture.cs` 1,466 行 — 框选/套索/拖动/对齐吸附/美化入口。
       - `Engine.Selection.Vertex.cs` 1,052 行 — 图形端点编辑：起手/拖动/吸附/读数/提交。
       - `Engine.SelectionBar.Actions.cs` 180 行 — 操作条按钮动作分发（RunBarAction / RunBarButton）。
       - `Engine.SelectionBar.cs` 731 行 — 选中操作条的状态与动作：颜色/粗细/线型/锁定/层级/取色器/菜单。
-      - `InkFile.cs` 347 行
+      - `InkFile.cs` 362 行
       - `InkHistory.cs` 97 行
       - `InkSerializer.cs` 882 行 — .inkb 序列化：笔画/图像/块格式。
       - `Model.EditActions.cs` 920 行 — 撤销/重做动作（Add/Remove/Erase/Transform/SetProp 等）。
@@ -49,8 +49,8 @@
 
     **InkEngine/Doc/**
       - `DocImageSource.cs` 292 行
-      - `DocImport.cs` 718 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
-      - `DocImport.Pan.cs` 342 行 — 文档「手掌」拖页 + 双指捏合缩放 / 放大后平移（文档相机）。
+      - `DocImport.cs` 729 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
+      - `DocImport.Pan.cs` 478 行 — 文档「手掌」拖页 + 双指捏合缩放 / 放大后平移 / 触控板捏合缩放（文档相机）。
       - `DocMemory.cs` 86 行
       - `DocPages.cs` 602 行 — 文档页底层：页配方、惰性生成、视口窗口回收；缩放只记相机倍率（页位图恒 1×）。
       - `DocPatch.cs` 800 行 — PDF 页的**视口高清补丁**：1× 整页底图之上，只为可见区域渲一块设备分辨率小图（单 worker、单在飞、落稳 120ms）。
@@ -107,7 +107,7 @@
       - `KeyBindings.cs` 577 行 — 键位表、作用域、冲突检测、解析。
       - `Latency.cs` 216 行
       - `LogFeedback.cs` 93 行
-      - `Native.cs` 1,451 行 — Win32 P/Invoke 集合。
+      - `Native.cs` 1,570 行 — Win32 P/Invoke 集合。
       - `Privacy.cs` 62 行
       - `SelfTestCancel.cs` 140 行
       - `Toast.cs` 40 行
@@ -137,7 +137,7 @@
       - `LegacyOverlayLayer.cs` 74 行
       - `Overlay.Capture.cs` 789 行 — 截图取景框绘制：遮罩/准线/读数/手柄。
       - `Overlay.Content.cs` 756 行 — 内容层合成：分块光栅、相机变换、缩放合成、滚动条。
-      - `Overlay.cs` 1,417 行 — 覆盖层主文件：窗口/初始化/生命周期。
+      - `Overlay.cs` 1,419 行 — 覆盖层主文件：窗口/初始化/生命周期。
       - `Overlay.Frame.cs` 1,662 行 — 覆盖层帧渲染：内容/界面/装饰合成。
       - `Overlay.PptBar.cs` 785 行 — PPT 条/回放条/滚动条绘制。
       - `Overlay.Radial.cs` 669 行 — 呼出盘绘制。
@@ -148,8 +148,8 @@
       - `OverlayLayerManager.cs` 192 行
       - `OverlayLayerRegistration.cs` 215 行
       - `SvgPath.cs` 271 行
-      - `Ui.cs` 1,678 行 — 界面接入契约：IOverlayUi / IEngineCommands / UiState。
-      - `UiHost.cs` 262 行
+      - `Ui.cs` 1,690 行 — 界面接入契约：IOverlayUi / IEngineCommands / UiState。
+      - `UiHost.cs` 265 行
       - `UiImageBytes.cs` 40 行
 
     **InkEngine/Replay/**
@@ -201,13 +201,13 @@
       - `App.Dev.Bench.cs` 578 行
       - `App.Dev.ClickTarget.cs` 79 行
       - `App.Dev.Erase.cs` 81 行
-      - `App.Dev.Geometry.cs` 470 行
+      - `App.Dev.Geometry.cs` 561 行
       - `App.Dev.Input.cs` 76 行
       - `App.Dev.Metrics.cs` 590 行
-      - `App.Dev.PageShow.cs` 757 行 — 界面出图 / 状态探针：--panelshow 离屏截图、--pageshow 画布截图。
+      - `App.Dev.PageShow.cs` 763 行 — 界面出图 / 状态探针：--panelshow 离屏截图、--pageshow 画布截图。
       - `App.Dev.Render.cs` 484 行
       - `App.Dev.Sheets.cs` 382 行
-      - `App.Dev.Showcase.cs` 449 行
+      - `App.Dev.Showcase.cs` 500 行
       - `App.Dev.Smooth.cs` 624 行 — 平滑/运动模型展示工具（开发期）。
       - `App.Dev.TextShow.cs` 488 行
       - `AppIconUi.cs` 199 行
@@ -243,7 +243,7 @@
       **InkTeach/SelfTests/E2E/**
         - `AiApiShow.cs` 44 行
         - `ApiConfigTest.cs` 103 行
-        - `AppClassroomTests.cs` 791 行 — 课堂窗 E2E（计时/点名）。
+        - `AppClassroomTests.cs` 794 行 — 课堂窗 E2E（计时/点名）。
         - `ArrowClearTest.cs` 94 行
         - `AutoStart.cs` 106 行
         - `Backup.cs` 210 行
@@ -252,7 +252,7 @@
         - `Diagnostics.cs` 3,295 行 — 诊断/环境/性能 E2E。
         - `DocMem.cs` 792 行 — PDF 缩放内存归因诊断（--docmem）：WS/私有/托管/LOH/GPU/页位图/分块，含 100ms 峰值与回收后快照。
         - `DocResume.cs` 194 行 — 文档「上次看到第 N 页」恢复提示 E2E（挂在 --doctest 末尾的 F 组）。
-        - `Documents.cs` 1,463 行 — 文档导入 E2E。
+        - `Documents.cs` 1,521 行 — 文档导入 E2E。
         - `Erasers.cs` 1,003 行 — 橡皮擦 E2E（整笔/像素/动态）。
         - `FacesProbe.cs` 282 行
         - `GlyphEraseTest.cs` 59 行
@@ -274,7 +274,7 @@
         - `Navigation.cs` 1,154 行 — 滚动/翻页/相机 E2E。
         - `OverlayAudit.cs` 218 行
         - `PageAudit.cs` 153 行
-        - `PanelAndKeys.cs` 6,643 行 — 产品界面/键位/穿透 E2E。
+        - `PanelAndKeys.cs` 6,704 行 — 产品界面/键位/穿透 E2E。
         - `PhotoBeautifyShow.cs` 80 行
         - `PlotFromCard.cs` 174 行
         - `PlotSuiteTest.cs` 205 行
@@ -295,8 +295,9 @@
         - `TextColorTest.cs` 96 行
         - `TextInputAudit.cs` 100 行
         - `TextStyleShow.cs` 125 行
+        - `TimerDocTest.cs` 263 行 — 计时器 / 点名 × 文档 E2E（PDF 不被穿透吞掉 / 关文档补穿透）。
         - `ToastTest.cs` 43 行
-        - `Touch.cs` 1,459 行 — 触摸手势 E2E。
+        - `Touch.cs` 1,671 行 — 触摸手势 E2E。
         - `Zoom.cs` 797 行 — 文档缩放 E2E（阶段 2：渲染核心 + 引擎缩放 API）。
         - `ZoomSelection.cs` 211 行 — 文档缩放 E2E（选中家具：手柄 / 操作条 / 面板 / 旋转柄在缩放下的屏幕恒定性）。
         - `ZoomShots.cs` 776 行 — 文档缩放 E2E：出图（50/100/200/300 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
@@ -329,12 +330,12 @@
       - `UiActionTable.cs` 45 行
 
     **InkUi/Panels/**
-      - `FullUi.MorePanel.cs` 2,381 行 — 更多面板：首页/设置/说明/日志/AI 服务入口。
-      - `FullUi.Pages.cs` 704 行 — 更多面板的各页（启动器 / 设置 / 说明 / 日志 / AI 服务）：绘制与命中；
-      - `FullUi.Settings.cs` 3,046 行 — 设置页：工具条/通用/书写/墨迹/AI/备份。
+      - `FullUi.MorePanel.cs` 2,806 行 — 更多面板：首页/设置/说明/日志/AI 服务入口。
+      - `FullUi.Pages.cs` 478 行 — 更多面板的各页（启动器 / 设置 / 说明 / 日志 / AI 服务 / 最近文档）：绘制与命中。
+      - `FullUi.Settings.cs` 3,047 行 — 设置页：工具条/通用/书写/墨迹/AI/备份。
       - `HelpUi.cs` 500 行
 
     **InkUi/Shell/**
       - `Anim.cs` 89 行
       - `FullUi.cs` 1,883 行 — 工具条/球/上带/色带的主体布局与绘制。
-      - `FullUi.Interaction.cs` 2,308 行 — 界面命中、开合、换页、贴边隐藏。
+      - `FullUi.Interaction.cs` 2,301 行 — 界面命中、开合、换页、贴边隐藏。

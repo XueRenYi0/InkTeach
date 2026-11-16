@@ -1,6 +1,7 @@
 // [职责] 更多面板：首页/设置/说明/日志/AI 服务入口。
 // [测试] --paneltest
 
+using System.Globalization;
 using System.IO;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -1509,22 +1510,19 @@ public sealed partial class FullUi
                 // 版本号是运行时拼进去的；模板留在表里，提示出口再格式化。
                 return (t.Label, "", Loc.T(t.Hint, ProductInfo.Version));
             }
-            // 最近文档：全名 + 完整路径（列表里名字被省略号截过，这里给全）
-            if (hit >= MoreHitRecent && hit < MoreHitRecent + MoreRecentMax)
+            // 「最近文档」页的行：全名 + 完整路径（名字被省略号截过，这里给全）
+            if (hit >= MoreHitRecentPageRow && hit < MoreHitRecentPageRow + RecentPageMax * RecentPageGroups)
             {
-                var live = RecentDocsVisible();
-                int i = hit - MoreHitRecent;
-                if (i >= live.Count || live[i].Paths.Length == 0) return default;
-                var doc = live[i];
-                string title = RecentDocTitle(doc);
-                return (title, "", string.Join("；", doc.Paths));
+                int slot = hit - MoreHitRecentPageRow;
+                var rowView = RecentPageRow(slot / RecentPageMax, slot % RecentPageMax);
+                if (!rowView.Clickable) return default;
+                return (rowView.Title, "", rowView.Note);
             }
             if (hit >= MoreHitRow && hit < MoreHitRow + Rows.Length)
             {
                 int i = hit - MoreHitRow;
                 return (Rows[i].Label, "", Rows[i].Hint);
-            }
-            if (hit >= MoreHitChip && hit < MoreHitChip + Cells.Length)
+            }            if (hit >= MoreHitChip && hit < MoreHitChip + Cells.Length)
             {
                 int cell = hit - MoreHitChip;
                 return (Cells[cell].Tip, "",
@@ -1630,8 +1628,12 @@ public sealed partial class FullUi
     private RectF TipAnchor(int id)
     {
         if (id == -2) return BallRect();
-        if (id >= 1000 + MoreHitRecent && id < 1000 + MoreHitRecent + MoreRecentMax)
-            return RecentRowRect(id - 1000 - MoreHitRecent);      // 「最近文档」的行
+        if (id >= 1000 + MoreHitRecentPageRow
+            && id < 1000 + MoreHitRecentPageRow + RecentPageMax * RecentPageGroups)
+        {
+            int slot = id - 1000 - MoreHitRecentPageRow;
+            return RecentPageRowRect(slot / RecentPageMax, slot % RecentPageMax);
+        }
         if (id >= 0 && id < Cells.Length)
         {
             int pos = PosOf(id);
@@ -1999,10 +2001,10 @@ public sealed partial class FullUi
     /// <summary>自检用：关掉「更多」面板（产品里是点面板外 / 点 ✕）。</summary>
     internal void CloseMoreForTest() { CloseMore(); _more.Jump(0f); }
 
-    /// <summary>自检/出图用：切到启动器（0）/ 设置子页（1）。</summary>
+    /// <summary>自检/出图用：切到启动器（0）/ 设置子页（1）/ 最近文档（5）。</summary>
     internal void SetMorePageForTest(int i)
     {
-        SetMorePage((MorePage)Math.Clamp(i, 0, 3), push: true);
+        SetMorePage((MorePage)Math.Clamp(i, 0, (int)MorePage.Recent), push: true);
         _moreHover = MoreHitNone;
         _moreH.Jump(MoreTargetH());
         Invalidate();
@@ -2378,4 +2380,427 @@ public sealed partial class FullUi
 
     /// <summary>自检用：上带这一刻多高（6 = 色线，34 = 完整设置条）。</summary>
     internal float BandHeightForTest => BandRect().MaxY - BandRect().MinY;
+
+    // =====================================================================
+    //  「最近文档」页（2026-11-16：原主页那一条 ＋ 「历史板书」格合并成一个有名字的页）
+    //
+    //  位置：第 7 格（保存/打开/回放/关文档 之后、位置不变）→ 面板内换页，标题「最近文档」，
+    //  返回箭头回主页；**不弹系统对话框**（这是"看一个列表"的入口，不是"打开文件"）。
+    //
+    //  三组：PDF / 图片、PPT、板书；每组最多 4 条（最新的在前）。
+    //  空组**不隐藏**，画一行灰字「暂无」；三组全空 = 居中一句空态。
+    //  行：类型徽标 + 单行省略的名字 + 右对齐相对时间；悬停有高亮 + 提示（全名 + 完整路径）。
+    //
+    //  数据来源：
+    //    · PDF / 图片 / PPT ← `RecentDocs` 偏好（引擎写、界面读，唯一一份）；
+    //    · 板书 ← 新增引擎命令 `GetBoardHistory(4)`（BoardHistory.ListRecent，扫盘在引擎里）。
+    //  扫盘 + File.Exists 有 2 秒缓存：绘制/命中每帧都问，但不会每帧都碰磁盘。
+    // =====================================================================
+
+    private const float RecentPageRowH = 34f;
+    private const float RecentPageRowGap = 4f;
+    private const int RecentPageMax = 4;            // 每组最多几条
+    private const int RecentPageGroups = 3;         // 0 PDF/图片、1 PPT、2 板书
+    private const float RecentPageGroupGap = 14f;
+    private static readonly string[] RecentPageHeadNames = { "PDF / 图片", "PPT", "板书" };
+
+    private static readonly (Color4 Fill, Color4 Ink, string Label) BoardBadge =
+        (new Color4(0.16f, 0.55f, 0.42f, 0.16f), new Color4(0.12f, 0.48f, 0.36f, 1f), "板");
+
+    /// <summary>一行的显示内容（绘制、命中、提示、自检读同一份）。</summary>
+    private readonly struct RecentRowView
+    {
+        public RecentRowView(string badge, Color4 badgeFill, Color4 badgeInk,
+                             string title, string time, string note, bool clickable)
+        {
+            Badge = badge;
+            BadgeFill = badgeFill;
+            BadgeInk = badgeInk;
+            Title = title;
+            Time = time;
+            Note = note;
+            Clickable = clickable;
+        }
+
+        public string Badge { get; }
+        public Color4 BadgeFill { get; }
+        public Color4 BadgeInk { get; }
+        public string Title { get; }
+        public string Time { get; }
+        public string Note { get; }
+        public bool Clickable { get; }
+    }
+
+    private readonly List<RecentDoc>[] _recentPageDocs = { new(), new() };
+    private List<(string Path, DateTime LocalTime, long Bytes)> _recentPageBoards = new();
+    private string _recentPageRaw;
+    private double _recentPageAtMs;
+
+    /// <summary>读一遍两份列表（2 秒缓存；条目里的文件不存在就跳过，不显示、不报错）。</summary>
+    private void RefreshRecentPage()
+    {
+        string raw = _host?.GetPref(RecentDocs.PrefKey) ?? "";
+        double now = _host?.NowMs ?? 0;
+        if (string.Equals(raw, _recentPageRaw, StringComparison.Ordinal)
+            && now - _recentPageAtMs < 2000)
+            return;
+
+        _recentPageRaw = raw;
+        _recentPageAtMs = now;
+        _recentPageDocs[0].Clear();
+        _recentPageDocs[1].Clear();
+        foreach (var d in RecentDocs.Parse(raw))
+        {
+            if (d == null || d.Paths.Length == 0) continue;
+            string p = d.PrimaryPath;
+            if (string.IsNullOrEmpty(p) || !File.Exists(p)) continue;
+            int group = RecentIsPpt(p) ? 1 : RecentIsPdfOrImage(p) ? 0 : -1;
+            if (group < 0) continue;
+            if (_recentPageDocs[group].Count < RecentPageMax) _recentPageDocs[group].Add(d);
+        }
+
+        var boards = _host?.Commands.GetBoardHistory(RecentPageMax);
+        _recentPageBoards = boards ?? new List<(string Path, DateTime LocalTime, long Bytes)>();
+    }
+
+    private static bool RecentIsPpt(string path)
+    {
+        var ext = Path.GetExtension(path ?? "");
+        return string.Equals(ext, ".ppt", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".pptx", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".pps", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".ppsx", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool RecentIsPdfOrImage(string path)
+    {
+        var ext = Path.GetExtension(path ?? "");
+        if (string.Equals(ext, ".pdf", StringComparison.OrdinalIgnoreCase)) return true;
+        return string.Equals(ext, ".png", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".jpg", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".jpeg", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".bmp", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".gif", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".webp", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".tif", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".tiff", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private int RecentPageCount(int section)
+    {
+        RefreshRecentPage();
+        return section switch
+        {
+            0 => _recentPageDocs[0].Count,
+            1 => _recentPageDocs[1].Count,
+            _ => Math.Min(RecentPageMax, _recentPageBoards.Count),
+        };
+    }
+
+    /// <summary>
+    /// 矮屏上每组最多显示几行（≤4）：先保证面板不把最后一行切掉（AGENTS §2「窄屏先减行」）。
+    /// 条数仍以 <see cref="RecentPageCount"/> 为准，这里只决定"这一刻画几行、哪几行可点"。
+    /// </summary>
+    private int RecentPageFitRows()
+    {
+        float avail = (_work.MaxY - _work.MinY) - 24f
+                      - (MorePad * 2 + MoreHeaderH + 10f)
+                      - RecentPageGroups * MoreGroupHeadH
+                      - (RecentPageGroups - 1) * RecentPageGroupGap;
+        int fit = (int)MathF.Floor(avail / (RecentPageRowH + RecentPageRowGap));
+        return Math.Clamp(fit / RecentPageGroups, 1, RecentPageMax);
+    }
+
+    /// <summary>这一组真画几行：有内容 = 内容条数（矮屏上截到能放下的行数）；空组 = 1 行「暂无」。</summary>
+    private int RecentPageShownCount(int section)
+        => Math.Max(1, Math.Min(RecentPageCount(section), RecentPageFitRows()));
+
+    /// <summary>可点的行数（「暂无」和矮屏上没画出来的行都不算）。</summary>
+    private int RecentPageClickableCount(int section)
+        => Math.Min(RecentPageCount(section), RecentPageFitRows());
+
+    private bool RecentPageAllEmpty
+        => RecentPageCount(0) == 0 && RecentPageCount(1) == 0 && RecentPageCount(2) == 0;
+
+    /// <summary>「最近文档」页高：按各组真显示几行算；三组全空 = 一句空态的高度。</summary>
+    private float MoreRecentPageH()
+    {
+        if (RecentPageAllEmpty) return MorePad * 2 + MoreHeaderH + 8f + 112f;
+        float h = MorePad * 2 + MoreHeaderH + 10f;
+        for (int s = 0; s < RecentPageGroups; s++)
+        {
+            h += MoreGroupHeadH + RecentPageShownCount(s) * (RecentPageRowH + RecentPageRowGap);
+            if (s < RecentPageGroups - 1) h += RecentPageGroupGap;
+        }
+        return h;
+    }
+
+    private RectF RecentPageHeadRect(int section)
+    {
+        float y = MoreHeaderRect().MaxY + 10f;
+        for (int s = 0; s < section; s++)
+            y += MoreGroupHeadH + RecentPageShownCount(s) * (RecentPageRowH + RecentPageRowGap)
+                 + RecentPageGroupGap;
+        return new RectF
+        {
+            MinX = MoreLeftX(), MinY = y,
+            MaxX = MoreLeftX() + MoreContentW(), MaxY = y + MoreGroupHeadH,
+        };
+    }
+
+    private RectF RecentPageRowRect(int section, int i)
+    {
+        var head = RecentPageHeadRect(section);
+        float y = head.MaxY + i * (RecentPageRowH + RecentPageRowGap);
+        return new RectF
+        {
+            MinX = MoreLeftX(), MinY = y,
+            MaxX = MoreLeftX() + MoreContentW(), MaxY = y + RecentPageRowH,
+        };
+    }
+
+    /// <summary>第 section 组第 i 行显示什么。<paramref name="i"/> 越界（空组）= 灰字「暂无」。</summary>
+    private RecentRowView RecentPageRow(int section, int i)
+    {
+        if (i >= RecentPageCount(section))
+            return new RecentRowView("", default, default, "暂无", "", "", false);
+
+        if (section == 2)
+        {
+            var b = _recentPageBoards[i];
+            string stamp = b.LocalTime.ToString("MM-dd HH:mm", CultureInfo.InvariantCulture);
+            return new RecentRowView(BoardBadge.Label, BoardBadge.Fill, BoardBadge.Ink,
+                $"板书 · {stamp}", RecentTimeText(b.LocalTime), b.Path, true);
+        }
+
+        var doc = _recentPageDocs[section][i];
+        var style = RecentBadgeStyle(doc.PrimaryPath);
+        return new RecentRowView(style.Label, style.Fill, style.Ink,
+            RecentDocTitle(doc), RecentTimeText(doc.OpenedAtUnixSeconds),
+            string.Join("；", doc.Paths), true);
+    }
+
+    private void DrawRecentPage(ID2D1DeviceContext ctx)
+    {
+        if (RecentPageAllEmpty)
+        {
+            _widgets.Text(ctx, "还没有最近使用的文件或板书",
+                new RectF
+                {
+                    MinX = MoreLeftX(), MinY = MoreHeaderRect().MaxY + 8f,
+                    MaxX = MoreLeftX() + MoreContentW(), MaxY = MoreRect().MaxY - MorePad,
+                },
+                13f, Brush(ctx, MutedCol));
+            return;
+        }
+
+        for (int s = 0; s < RecentPageGroups; s++)
+        {
+            DrawMoreGroupHead(ctx, RecentPageHeadRect(s), RecentPageHeadNames[s]);
+            int shown = RecentPageShownCount(s);
+            for (int i = 0; i < shown; i++) DrawRecentPageRow(ctx, s, i);
+        }
+    }
+
+    private void DrawRecentPageRow(ID2D1DeviceContext ctx, int section, int i)
+    {
+        var row = RecentPageRowRect(section, i);
+        var view = RecentPageRow(section, i);
+
+        if (!view.Clickable)
+        {
+            // 空组：一行灰字，组头照旧——"这里现在没有"必须看得见，不能整组消失。
+            _widgets.TextLeftMiddle(ctx, view.Title,
+                new RectF { MinX = row.MinX + 12f, MinY = row.MinY, MaxX = row.MaxX - 10f, MaxY = row.MaxY },
+                12f, Brush(ctx, MutedCol));
+            return;
+        }
+
+        int code = MoreHitRecentPageRow + section * RecentPageMax + i;
+        var rr = new RoundedRectangle(
+            new Vortice.RawRectF(row.MinX, row.MinY, row.MaxX, row.MaxY), 8f, 8f);
+        // 每行垫一层很轻的槽底（和滑条/设置页同一个语言），不开悬停也看得出是一行。
+        ctx.FillRoundedRectangle(rr, Brush(ctx, _dark ? Tokens.TroughDark : Tokens.TroughLight));
+        if (_moreHover == code)
+        {
+            ctx.FillRoundedRectangle(rr, Brush(ctx, HoverCol));
+            ctx.DrawRoundedRectangle(rr,
+                Brush(ctx, new Color4(Tokens.Accent.R, Tokens.Accent.G, Tokens.Accent.B, 0.55f)), 1f);
+        }
+
+        // 类型徽标：24×18，垂直居中。
+        var badge = new RectF
+        {
+            MinX = row.MinX + 8f,
+            MinY = row.MinY + (RecentPageRowH - 18f) * 0.5f,
+            MaxX = row.MinX + 32f,
+            MaxY = row.MinY + (RecentPageRowH - 18f) * 0.5f + 18f,
+        };
+        ctx.FillRoundedRectangle(
+            new RoundedRectangle(new Vortice.RawRectF(badge.MinX, badge.MinY, badge.MaxX, badge.MaxY), 5f, 5f),
+            Brush(ctx, view.BadgeFill));
+        _widgets.Text(ctx, view.Badge, badge, 9.5f, Brush(ctx, view.BadgeInk));
+
+        // 右侧时间：右对齐；名字拿剩下的宽度，放不下就省略号（提示里有全名）。
+        float timeW = view.Time.Length == 0 ? 0f : MathF.Min(96f, _widgets.Measure(view.Time, 11f) + 2f);
+        float nameLeft = badge.MaxX + 8f;
+        float nameRight = row.MaxX - 10f - (timeW > 0f ? timeW + 8f : 0f);
+        if (nameRight < nameLeft + 40f) nameRight = nameLeft + 40f;
+
+        string name = Ellipsize(view.Title, nameRight - nameLeft, 12.5f);
+        _widgets.TextLeftMiddle(ctx, name,
+            new RectF { MinX = nameLeft, MinY = row.MinY, MaxX = nameRight, MaxY = row.MaxY },
+            12.5f, Brush(ctx, InkCol));
+
+        if (timeW > 0f)
+            _widgets.Text(ctx, view.Time,
+                new RectF { MinX = row.MaxX - 10f - timeW, MinY = row.MinY, MaxX = row.MaxX - 8f, MaxY = row.MaxY },
+                11f, Brush(ctx, MutedCol));
+    }
+
+    /// <summary>点「最近文档」页某一行：关面板 → 真正打开（文件没了由引擎兜底成状态行）。</summary>
+    private void ActivateRecentPageRow(int slot)
+    {
+        int section = slot / RecentPageMax;
+        int i = slot % RecentPageMax;
+        if (section < 0 || section >= RecentPageGroups || i >= RecentPageClickableCount(section)) return;
+
+        if (section == 2)
+        {
+            string path = _recentPageBoards[i].Path;
+            CloseMore();
+            _host?.Commands.OpenBoardHistoryEntry(path);
+        }
+        else
+        {
+            var paths = _recentPageDocs[section][i].Paths;
+            CloseMore();
+            _host?.Commands.OpenRecentDocument(paths);
+        }
+        Invalidate();
+    }
+
+    private static string RecentDocTitle(RecentDoc d)
+    {
+        if (d == null || d.Paths.Length == 0) return "";
+        string name = Path.GetFileName(d.PrimaryPath);
+        return d.Paths.Length > 1 ? $"{name} 等 {d.Paths.Length} 个文件" : name;
+    }
+
+    /// <summary>相对时间：今天 HH:mm / 昨天 / MM-dd（跨年补年份）。</summary>
+    private static string RecentTimeText(DateTime local)
+    {
+        if (local == default) return "";
+        var now = DateTime.Now;
+        if (local.Date == now.Date) return $"今天 {local:HH:mm}";
+        if (local.Date == now.Date.AddDays(-1)) return "昨天";
+        return local.Year == now.Year
+            ? local.ToString("MM-dd", CultureInfo.InvariantCulture)
+            : local.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    }
+
+    private static string RecentTimeText(long unixSeconds)
+    {
+        if (unixSeconds <= 0) return "";
+        DateTimeOffset at;
+        try { at = DateTimeOffset.FromUnixTimeSeconds(unixSeconds).ToLocalTime(); }
+        catch { return ""; }
+        return RecentTimeText(at.LocalDateTime);
+    }
+
+    /// <summary>文件类型小徽标：PDF 红 / PPT 橙 / 图片蓝 / 板书绿（跟主色一套，不引新颜色）。</summary>
+    private static (Color4 Fill, Color4 Ink, string Label) RecentBadgeStyle(string path)
+    {
+        var ext = Path.GetExtension(path ?? "");
+        if (string.Equals(ext, ".pdf", StringComparison.OrdinalIgnoreCase))
+            return (new Color4(0.85f, 0.22f, 0.22f, 0.16f), new Color4(0.80f, 0.17f, 0.17f, 1f), "PDF");
+        if (RecentIsPpt(path))
+            return (new Color4(0.92f, 0.48f, 0.12f, 0.16f), new Color4(0.86f, 0.42f, 0.08f, 1f), "PPT");
+        if (RecentIsPdfOrImage(path))
+            return (new Color4(Tokens.Accent.R, Tokens.Accent.G, Tokens.Accent.B, 0.14f), Tokens.Accent, "图");
+        return BoardBadge;
+    }
+
+    /// <summary>单行省略（中文按字截）：放不下就二分找最长的可显示前缀 + "…"。</summary>
+    private readonly Dictionary<(string Text, int Width, int Size), string> _ellipsisCache = new();
+
+    private string Ellipsize(string text, float width, float size)
+    {
+        if (string.IsNullOrEmpty(text) || width <= 4f) return "";
+        int wKey = (int)MathF.Round(width);
+        int sKey = (int)MathF.Round(size * 100f);
+        var key = (text, wKey, sKey);
+        if (_ellipsisCache.TryGetValue(key, out var cached)) return cached;
+
+        string fitted = text;
+        if (_widgets.Measure(text, size) > width)
+        {
+            const string tail = "…";
+            int lo = 0, hi = text.Length;
+            while (lo < hi)
+            {
+                int mid = (lo + hi + 1) / 2;
+                int cut = mid;
+                // 别把 emoji / 生僻字（代理对）劈成两半
+                if (cut > 0 && cut < text.Length && char.IsHighSurrogate(text[cut - 1])) cut--;
+                if (_widgets.Measure(text[..cut] + tail, size) <= width) lo = mid;
+                else hi = mid - 1;
+            }
+            int take = lo;
+            if (take > 0 && take < text.Length && char.IsHighSurrogate(text[take - 1])) take--;
+            fitted = take <= 0 ? tail : text[..take] + tail;
+        }
+
+        if (_ellipsisCache.Count > 256) _ellipsisCache.Clear();
+        _ellipsisCache[key] = fitted;
+        return fitted;
+    }
+
+    // ---- 「最近文档」页自检 / 出图钩子 ---------------------------------------
+
+    internal int RecentPageGroupCountForTest(int section) => RecentPageCount(section);
+    internal bool RecentPageEmptyForTest => RecentPageAllEmpty;
+    internal float MoreHomeHForTest => MoreHomeH();
+    internal float MoreRecentPageHForTest => MoreRecentPageH();
+    internal RectF RecentPageRowRectForTest(int section, int i) => RecentPageRowRect(section, i);
+    internal RectF RecentPageHeadRectForTest(int section) => RecentPageHeadRect(section);
+    internal string RecentPageRowTitleForTest(int section, int i) => RecentPageRow(section, i).Title;
+    internal bool RecentPageRowClickableForTest(int section, int i) => RecentPageRow(section, i).Clickable;
+    internal int MoreHitRecentPageRowBaseForTest => MoreHitRecentPageRow;
+    internal string HubTileLabelForTest(int code) => HubTileInfo(code).Label;
+    internal string HubTileHintForTest(int code) => HubTileInfo(code).Hint;
+
+    /// <summary>自检用：单行省略的结果（长中文文件名不许溢出）。</summary>
+    internal string EllipsizeForTest(string text, float width, float size) => Ellipsize(text, width, size);
+
+    /// <summary>
+    /// 自检/出图用：直接写一条「最近文档」偏好（不真打开文件）。每条 path 算一份，
+    /// 时间依次往前推一天——出图能同时看到"今天 / 昨天 / 日期"三种写法。
+    /// 不传 = 清空（回到 0 条）。
+    /// </summary>
+    internal void SeedRecentDocsForTest(params string[] paths)
+    {
+        if (_host == null) return;
+        if (paths == null || paths.Length == 0)
+        {
+            _host.SetPref(RecentDocs.PrefKey, null);
+            Invalidate();
+            return;
+        }
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var list = new List<RecentDoc>(paths.Length);
+        for (int i = 0; i < paths.Length; i++)
+            list.Add(new RecentDoc(now - i * 86400L, new[] { paths[i] }));
+        _host.SetPref(RecentDocs.PrefKey, RecentDocs.Format(list));
+        Invalidate();
+    }
+
+    /// <summary>自检/出图用：清掉 2 秒缓存，立刻重读（种完假数据不用干等）。</summary>
+    internal void RefreshRecentPageForTest()
+    {
+        _recentPageRaw = null;
+        _recentPageAtMs = 0;
+        RefreshRecentPage();
+        Invalidate();
+    }
 }

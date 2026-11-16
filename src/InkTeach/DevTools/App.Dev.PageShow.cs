@@ -347,6 +347,10 @@ internal sealed partial class App
                     Console.WriteLine($"  [panelshow] recent={take}");
                 }
             }
+            // --recentpage：出「最近文档」页（2 份 PDF + 2 份 PPT + 3 份板书历史）。
+            // 产品里没有这个入口；文件真的建在临时目录（列表会跳过不存在的条目）。
+            bool recentPageShow = Environment.GetCommandLineArgs().Contains("--recentpage");
+            if (recentPageShow) SeedRecentPageShowcase(ui);
             // --more [--page N]：出**中央「更多」面板**（0 课堂 / 1 墨迹 / 2 设置）。
             // 面板打开时 QueryBounds 是整块屏幕，截图范围在下面单独裁（见 shot 那一段）。
             if (_panelShowMore)
@@ -356,6 +360,8 @@ internal sealed partial class App
                 int pi2 = Array.IndexOf(argvMore, "--page");
                 if (pi2 >= 0 && pi2 + 1 < argvMore.Length && int.TryParse(argvMore[pi2 + 1], out int pageArg))
                     ui.SetMorePageForTest(pageArg);
+                else if (recentPageShow)
+                    ui.SetMorePageForTest(5);            // 最近文档页（2 PDF / 2 PPT / 3 板书）
                 // --settingscat N：先把设置页滚到第 N 个分类（0 工具条 / 1 常规 / 2 书写 …）。
                 int si2 = Array.IndexOf(argvMore, "--settingscat");
                 if (si2 >= 0 && si2 + 1 < argvMore.Length && int.TryParse(argvMore[si2 + 1], out int catArg))

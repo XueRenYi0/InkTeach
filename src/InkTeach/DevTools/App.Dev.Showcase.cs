@@ -446,4 +446,55 @@ internal sealed partial class App
     ///   ④ 锯齿：连续尖角，一个都不许被磨圆。
     /// 好不好看只能靠眼睛，所以单开一条出图命令（判据交给下一轮真人对比）。
     /// </summary>
+    /// <summary>
+    /// `--panelshow ... --more --recentpage`：给「最近文档」页种一份演示数据——
+    /// 2 份 PDF ＋ 2 份 PPT（真文件，列表只认扩展名和存在）＋ 3 份板书历史
+    /// （时间摆成"今天 / 昨天 / 几天前"，图上能同时看到三种相对时间写法）。
+    /// 产品里没有这个入口；全程只写临时目录。
+    /// </summary>
+    private void SeedRecentPageShowcase(InkUi.FullUi ui)
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "InkTeach-recent-page-demo");
+        Directory.CreateDirectory(dir);
+        var demo = new[]
+        {
+            "二次函数与图像 第 3 课时 课堂练习（学生版）.pdf",
+            "期中试卷讲解 学生版.pdf",
+            "光的折射 第 2 课时.pptx",
+            "课堂练习答案 复习课.ppsx",
+        };
+        var seeded = new string[demo.Length];
+        for (int i = 0; i < demo.Length; i++)
+        {
+            seeded[i] = Path.Combine(dir, demo[i]);
+            try { if (!File.Exists(seeded[i])) File.WriteAllBytes(seeded[i], Array.Empty<byte>()); }
+            catch { /* 出图用途：建不出来就少一条，不影响其它 */ }
+        }
+        ui.SeedRecentDocsForTest(seeded);
+
+        string hdir = Path.Combine(Path.GetTempPath(), "InkTeach-recent-page-history");
+        try
+        {
+            if (Directory.Exists(hdir)) Directory.Delete(hdir, true);
+            Directory.CreateDirectory(hdir);
+            BoardHistory.CloseSession();          // 别让本轮快照覆盖演示文件
+            BoardHistory.DirOverride = hdir;
+            var hist = new[]
+            {
+                ("板书-20261116-151500.inkb", 0),
+                ("板书-20261115-101000.inkb", -1),
+                ("板书-20261112-083000.inkb", -4),
+            };
+            foreach (var (name, days) in hist)
+            {
+                string p = Path.Combine(hdir, name);
+                File.WriteAllBytes(p, Array.Empty<byte>());
+                File.SetLastWriteTime(p, DateTime.Now.AddDays(days));
+            }
+        }
+        catch (Exception ex) { Console.WriteLine("  [panelshow] 板书历史种数据失败：" + ex.Message); }
+
+        ui.RefreshRecentPageForTest();
+        Console.WriteLine("  [panelshow] recentpage=2+2+3");
+    }
 }

@@ -226,7 +226,7 @@ public partial class InkEngine
         FineStrokeOn = RawInputCapture,          // 「设置 → 书写 → 精细笔迹」（原始输入补点）总开关
         PredictTailOn = PredictTailEnabled,      // 「设置 → 书写 → 墨迹预测」（自绘预测尾）总开关（默认关，2026-10-16 起）
         WetMode = WetMode,                       // 「设置 → 墨迹 → 湿墨档位」（0..3；界面显示当前档）
-        HistoryCount = BoardHistory.Count,       // 「更多 → 墨迹 → 历史板书」那一格的亮/灰
+        HistoryCount = BoardHistory.Count,       // 「最近文档」页的板书组有几份（2026-11-16 起格子本身始终可用）
         TouchGesturesOn = _touch.Enabled,        // 触摸模式：true=手势；false=单指书写（默认手势）
         PrivacyConsentOn = PrivacyConsentGranted, // 设备与性能统计的同意状态
         // [删除 2026-10-05] PredictOn（墨迹预测）：随老预测系统移除。

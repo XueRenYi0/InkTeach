@@ -2383,8 +2383,9 @@ internal sealed partial class App
             }
             Check("启动器：底栏每一格都进命中表（含第 5 格「退出」）", hitOk, hitDetail);
 
-            // ---- 「最近文档」：0 / 1 / 3 / 5+ 四种状态、命中、跳过缺失、点一行打开 ----
-            // 判据只用"数得出来的东西"：显示行数、面板增高量、命中码、状态位。
+            // ---- 「最近文档」：主页那条已删除，改成第 7 格的独立页 ----
+            // 判据只用"数得出来的东西"：格子文案/可用/位置、主页高度、页内分组条数、
+            // 行命中码、面板开关、状态位。写盘类结论尽量放在 --doctest（那边是纯函数）。
             {
                 string rdir = Path.Combine(Path.GetTempPath(), "inkprobe_recent");
                 static string TinyPng(string p)
@@ -2408,101 +2409,122 @@ internal sealed partial class App
                     TinyPng(Path.Combine(rdir, "第四课.png")),
                     TinyPng(Path.Combine(rdir, "作业讲评.png")),
                 };
-                string rGone = Path.Combine(rdir, "已删除的课件.png");
-                if (File.Exists(rGone)) File.Delete(rGone);
+                string[] rpdf =
+                {
+                    TinyPng(Path.Combine(rdir, "pdf-0 二次函数.pdf")),
+                    TinyPng(Path.Combine(rdir, "pdf-1 期中卷.pdf")),
+                    TinyPng(Path.Combine(rdir, "pdf-2 第四课.pdf")),
+                    TinyPng(Path.Combine(rdir, "pdf-3 作业讲评.pdf")),
+                    TinyPng(Path.Combine(rdir, "pdf-4 光的折射.pdf")),
+                };
+                string[] rppt =
+                {
+                    TinyPng(Path.Combine(rdir, "slide-0 开学第一课.pptx")),
+                    TinyPng(Path.Combine(rdir, "slide-1 复习课.ppsx")),
+                };
+
+                // 板书历史指到空临时目录：这一段要能确定地摆出「全空 / 3 份」两种状态
+                // （自检模式下本来也在临时目录里，这里只是保证它此刻是空的）。
+                string prevHistDir = BoardHistory.DirOverride;
+                string histDir = Path.Combine(Path.GetTempPath(), "inkprobe_recent_history");
+                try { if (Directory.Exists(histDir)) Directory.Delete(histDir, true); } catch { /* 有意忽略：清理失败不影响主流程 */ }
+                BoardHistory.DirOverride = histDir;
 
                 ui.SeedRecentDocsForTest();
+                ui.RefreshRecentPageForTest();
                 SettleFrames(260);
                 float h0 = ui.MoreHomeHForTest;
-                Check("最近文档：0 条时整条不出现（面板高度不变）",
-                      ui.RecentDocsShownForTest == 0,
-                      $"显示 {ui.RecentDocsShownForTest} 行，面板高 {h0:F0}");
+                Check("最近文档：两份列表都空 = 全空态（一句话、页高最小）",
+                      ui.RecentPageEmptyForTest && ui.MoreRecentPageHForTest < 260f,
+                      $"空态={ui.RecentPageEmptyForTest}，页高 {ui.MoreRecentPageHForTest:F0}");
+                var t7 = ui.HubTileRectForTest(7);
+                var t6 = ui.HubTileRectForTest(6);
 
-                ui.SeedRecentDocsForTest(rp[0]);
-                SettleFrames(260);
-                float h1 = ui.MoreHomeHForTest;
-                var rrow0 = ui.RecentRowRectForTest(0);
-                var rbot0 = ui.HubBottomRectForTest(0);
-                var rpanel = ui.MoreRectForTest;
-                int rhit0 = ui.MoreHitAtForTest((rrow0.MinX + rrow0.MaxX) * 0.5f,
-                                                (rrow0.MinY + rrow0.MaxY) * 0.5f);
-                Check("最近文档：1 条 = 一行、面板只高 38",
-                      ui.RecentDocsShownForTest == 1 && MathF.Abs((h1 - h0) - 38f) < 1.5f,
-                      $"显示 {ui.RecentDocsShownForTest} 行，高 {h0:F0} → {h1:F0}");
-                Check("最近文档：那一行在墨迹组和底栏之间、命中码 210",
-                      rhit0 == ui.MoreHitRecentBaseForTest
-                      && rrow0.MinY < rbot0.MinY && rrow0.MaxY <= rbot0.MinY,
-                      $"命中 {rhit0}（应 {ui.MoreHitRecentBaseForTest}）；行 {rrow0.MinY:F0}-{rrow0.MaxY:F0}，底栏顶 {rbot0.MinY:F0}");
-                Check("最近文档：行在面板矩形内（不被切）",
-                      rrow0.MinX >= rpanel.MinX && rrow0.MaxX <= rpanel.MaxX
-                      && rrow0.MinY >= rpanel.MinY && rrow0.MaxY <= rpanel.MaxY,
-                      $"行 {rrow0}，面板 {rpanel}");
+                Check("最近文档：第 7 格改名「最近文档」、提示含 PDF / PPT / 板书",
+                      ui.HubTileLabelForTest(7) == "最近文档"
+                      && ui.HubTileHintForTest(7).Contains("PDF")
+                      && ui.HubTileHintForTest(7).Contains("PPT")
+                      && ui.HubTileHintForTest(7).Contains("板书"),
+                      $"文案={ui.HubTileLabelForTest(7)}，提示={ui.HubTileHintForTest(7)}");
+                Check("最近文档：第 7 格始终可用（两份列表都空也亮）",
+                      ui.HubTileEnabledForTest(7), "空列表 → 仍可点");
+                Check("最近文档：第 7 格位置没变（墨迹组最后一格、同一行）",
+                      !t7.IsEmpty && t7.MinX > t6.MinX && MathF.Abs(t7.MinY - t6.MinY) < 1f,
+                      $"第 6 格 {t6.MinX:F0},{t6.MinY:F0}；第 7 格 {t7.MinX:F0},{t7.MinY:F0}");
 
+                // 主页那条已经删掉：墨迹组下方的空白不返回任何「行」命中（旧 210 段）
                 ui.SeedRecentDocsForTest(rp[0], rp[1], rp[2]);
                 SettleFrames(260);
-                float h3 = ui.MoreHomeHForTest;
-                bool rHits = true;
-                string rHitDetail = "3/3";
-                bool rInside = true;
-                for (int i = 0; i < 3; i++)
-                {
-                    var r = ui.RecentRowRectForTest(i);
-                    int c = ui.MoreHitAtForTest((r.MinX + r.MaxX) * 0.5f, (r.MinY + r.MaxY) * 0.5f);
-                    if (c != ui.MoreHitRecentBaseForTest + i)
-                    {
-                        rHits = false;
-                        rHitDetail = $"第 {i} 行命中 {c}（应 {ui.MoreHitRecentBaseForTest + i}）";
-                    }
-                    if (r.MinX < rpanel.MinX || r.MaxX > rpanel.MaxX
-                        || r.MinY < rpanel.MinY || r.MaxY > rpanel.MaxY) rInside = false;
-                    if (r.MaxY > ui.HubBottomRectForTest(0).MinY) rInside = false;
-                }
-                Check("最近文档：3 条 = 三行、面板只高 114",
-                      ui.RecentDocsShownForTest == 3 && MathF.Abs((h3 - h0) - 114f) < 1.5f,
-                      $"显示 {ui.RecentDocsShownForTest} 行，高 {h0:F0} → {h3:F0}");
-                Check("最近文档：三行命中码 210..212、全在面板内且不压底栏",
-                      rHits && rInside, rHitDetail);
+                int probeHit = ui.MoreHitAtForTest((t7.MinX + t7.MaxX) * 0.5f, t7.MaxY + 20f);
+                Check("最近文档：主页那条已经删掉（墨迹组下方没有可点的行）",
+                      probeHit == 0, $"旧位置命中码 {probeHit}（应 0 = 空白）");
+                Check("最近文档：种 3 条后主页高度完全不变（固定高度）",
+                      MathF.Abs(ui.MoreHomeHForTest - h0) < 0.01f && h0 > 100f,
+                      $"0 条 {h0:F0} → 3 条 {ui.MoreHomeHForTest:F0}");
 
-                ui.SeedRecentDocsForTest(rp[0], rp[1], rp[2], rp[3], rp[4]);
+                // 点第 7 格 = 面板内换页（不是系统对话框）
+                var t7c = ui.HubTileRectForTest(7);
+                ClickPhysical((t7c.MinX + t7c.MaxX) * 0.5f * DpiScale,
+                              (t7c.MinY + t7c.MaxY) * 0.5f * DpiScale);
+                SettleFrames(320);
+                Check("最近文档：点第 7 格 → 打开「最近文档」页",
+                      ui.MoreOpenForTest && ui.MorePageForTest == 5 && ui.MorePageIdForTest == "more.recent",
+                      $"page={ui.MorePageForTest} id={ui.MorePageIdForTest} open={ui.MoreOpenForTest}");
+                Check("最近文档：3 张图 = 图片组 3 条、PPT / 板书组 0 条",
+                      ui.RecentPageGroupCountForTest(0) == 3
+                      && ui.RecentPageGroupCountForTest(1) == 0
+                      && ui.RecentPageGroupCountForTest(2) == 0,
+                      $"{ui.RecentPageGroupCountForTest(0)} / {ui.RecentPageGroupCountForTest(1)} / {ui.RecentPageGroupCountForTest(2)}");
+                Check("最近文档：空组保留组头 + 一行「暂无」（不隐藏、不可点）",
+                      ui.RecentPageRowTitleForTest(1, 0) == "暂无"
+                      && !ui.RecentPageRowClickableForTest(1, 0)
+                      && !ui.RecentPageHeadRectForTest(1).IsEmpty,
+                      $"PPT 组首行={ui.RecentPageRowTitleForTest(1, 0)}，组头={ui.RecentPageHeadRectForTest(1)}");
+
+                var rback = ui.MoreBackRectForTest;
+                ClickPhysical((rback.MinX + rback.MaxX) * 0.5f * DpiScale,
+                              (rback.MinY + rback.MaxY) * 0.5f * DpiScale);
+                SettleFrames(220);
+                Check("最近文档：返回箭头回启动器", ui.MorePageForTest == 0 && ui.MoreOpenForTest,
+                      $"page={ui.MorePageForTest} open={ui.MoreOpenForTest}");
+
+                // ---- 分类 + 每组最多 4 条 + 行命中 ----
+                ui.SeedRecentDocsForTest(rpdf[0], rpdf[1], rpdf[2], rpdf[3], rpdf[4], rppt[0], rppt[1]);
                 SettleFrames(260);
-                Check("最近文档：多于 3 条只显示最新 3 条（没有内部滚动）",
-                      ui.RecentDocsShownForTest == 3
-                      && MathF.Abs(ui.MoreHomeHForTest - h3) < 1.5f,
-                      $"显示 {ui.RecentDocsShownForTest} 行，高 {ui.MoreHomeHForTest:F0}");
+                var t7d = ui.HubTileRectForTest(7);
+                ClickPhysical((t7d.MinX + t7d.MaxX) * 0.5f * DpiScale,
+                              (t7d.MinY + t7d.MaxY) * 0.5f * DpiScale);
+                SettleFrames(320);
+                Check("最近文档：PDF 5 条 / PPT 2 条 → 每组最多 4 条",
+                      ui.RecentPageGroupCountForTest(0) == 4
+                      && ui.RecentPageGroupCountForTest(1) == 2,
+                      $"PDF {ui.RecentPageGroupCountForTest(0)} 条，PPT {ui.RecentPageGroupCountForTest(1)} 条");
+                Check("最近文档：分组按最新在前（第一行 = 最新种下的那份）",
+                      ui.RecentPageRowTitleForTest(0, 0).Contains("pdf-0", StringComparison.Ordinal)
+                      && ui.RecentPageRowTitleForTest(1, 0).Contains("slide-0", StringComparison.Ordinal),
+                      $"{ui.RecentPageRowTitleForTest(0, 0)} / {ui.RecentPageRowTitleForTest(1, 0)}");
 
-                // 长中文文件名：只截成一行 + 省略号（不溢出、不换行）
-                {
-                    string longName = new string('长', 60) + ".pdf";
-                    string fitted = ui.EllipsizeForTest(longName, 120f, 12.5f);
-                    Check("最近文档：长中文文件名截成一行 + 省略号",
-                          fitted.EndsWith("…", StringComparison.Ordinal)
-                          && fitted.Length < longName.Length,
-                          $"截后 {fitted.Length} 字：{fitted}");
-                    var rtip = ui.TipContentForTest(1000 + ui.MoreHitRecentBaseForTest);
-                    Check("最近文档：提示里给全名 + 完整路径",
-                          rtip.Title != null && rtip.Note.Contains("inkprobe_recent", StringComparison.OrdinalIgnoreCase),
-                          $"标题={rtip.Title}，说明={rtip.Note}");
-                }
+                var rr1 = ui.RecentPageRowRectForTest(0, 1);
+                int code1 = ui.MoreHitAtForTest((rr1.MinX + rr1.MaxX) * 0.5f, (rr1.MinY + rr1.MaxY) * 0.5f);
+                var rrPpt = ui.RecentPageRowRectForTest(1, 0);
+                int codePpt = ui.MoreHitAtForTest((rrPpt.MinX + rrPpt.MaxX) * 0.5f, (rrPpt.MinY + rrPpt.MaxY) * 0.5f);
+                Check("最近文档：页内每一行都进命中表（220 + 组*4 + 行）",
+                      code1 == ui.MoreHitRecentPageRowBaseForTest + 1
+                      && codePpt == ui.MoreHitRecentPageRowBaseForTest + 4,
+                      $"图片组第 2 行={code1}（应 {ui.MoreHitRecentPageRowBaseForTest + 1}），PPT 第 1 行={codePpt}（应 {ui.MoreHitRecentPageRowBaseForTest + 4}）");
+                Check("最近文档：最后一行在面板内（不被切、不压底边）",
+                      ui.MoreRecentPageHForTest > 420f
+                      && ui.RecentPageRowRectForTest(2, 0).MaxY <= ui.MoreRectForTest.MaxY - 8f,
+                      $"页高 {ui.MoreRecentPageHForTest:F0}，最后一行底 {ui.RecentPageRowRectForTest(2, 0).MaxY:F0}，面板底 {ui.MoreRectForTest.MaxY:F0}");
 
-                ui.SeedRecentDocsForTest(rp[0], rGone);
-                SettleFrames(260);
-                Check("最近文档：文件已经不在的那条直接跳过",
-                      ui.RecentDocsShownForTest == 1,
-                      $"显示 {ui.RecentDocsShownForTest} 行");
-
-                ui.SeedRecentDocsForTest(rGone);
-                SettleFrames(260);
-                Check("最近文档：只剩缺失文件 = 整条不出现",
-                      ui.RecentDocsShownForTest == 0,
-                      $"显示 {ui.RecentDocsShownForTest} 行");
-
-                // 点第二行（rp[0]）→ 关面板、真的打开、并提到最前
+                // 点第二行（rp[0]）→ 关面板、真的打开、并提到最前。
+                // 只种两份真图片：PDF/PPT 只是"列表里显示"用的假文件，点开会被引擎判成坏文件。
                 ui.SeedRecentDocsForTest(rp[1], rp[0]);
-                SettleFrames(280);
-                var rclick = ui.RecentRowRectForTest(1);
+                SettleFrames(320);
+                var rclick = ui.RecentPageRowRectForTest(0, 1);
                 ClickPhysical((rclick.MinX + rclick.MaxX) * 0.5f * DpiScale,
                               (rclick.MinY + rclick.MaxY) * 0.5f * DpiScale);
-                SettleFrames(450);
+                SettleFrames(500);
                 var rrec = RecentDocs.Parse(Host.GetPref(RecentDocs.PrefKey));
                 Check("最近文档：点一行 = 关面板并打开这份文档",
                       !ui.MoreOpenForTest && Host.State.DocOpen,
@@ -2512,15 +2534,54 @@ internal sealed partial class App
                       && string.Equals(System.IO.Path.GetFullPath(rrec[0].PrimaryPath),
                                        System.IO.Path.GetFullPath(rp[0]), StringComparison.OrdinalIgnoreCase),
                       rrec.Count == 0 ? "(空)" : rrec[0].PrimaryPath);
-
                 Host.Commands.CloseDocument();
                 SettleFrames(200);
-                ui.SeedRecentDocsForTest();          // 清掉测试数据，后面的用例不受影响
+
+                // ---- 板书组：点一行 = 关面板并打开那份 .inkb ----
+                Directory.CreateDirectory(histDir);
+                var hpaths = new string[3];
+                for (int i = 0; i < hpaths.Length; i++)
+                {
+                    hpaths[i] = Path.Combine(histDir, $"板书-2026010{i + 1}-090000.inkb");
+                    InkFileStore.WriteAtomic(hpaths[i], InkSerializer.SaveStrokes(new List<Stroke>()));
+                    File.SetLastWriteTime(hpaths[i], DateTime.Now.AddMinutes(-(i + 1) * 30));
+                }
+                ui.SeedRecentDocsForTest();          // 只留板书组，便于看清条数
+                ui.RefreshRecentPageForTest();
+                ui.OpenMoreForTest();
+                var t7e = ui.HubTileRectForTest(7);
+                ClickPhysical((t7e.MinX + t7e.MaxX) * 0.5f * DpiScale,
+                              (t7e.MinY + t7e.MaxY) * 0.5f * DpiScale);
+                SettleFrames(320);
+                Check("最近文档：板书组读历史目录（3 份 → 3 行）",
+                      ui.RecentPageGroupCountForTest(2) >= 3,
+                      $"板书 {ui.RecentPageGroupCountForTest(2)} 条");
+                Check("最近文档：板书行标题 = 板书 · MM-dd HH:mm",
+                      ui.RecentPageRowTitleForTest(2, 0).StartsWith("板书 · ", StringComparison.Ordinal),
+                      ui.RecentPageRowTitleForTest(2, 0));
+
+                var hrow = ui.RecentPageRowRectForTest(2, 0);
+                ClickPhysical((hrow.MinX + hrow.MaxX) * 0.5f * DpiScale,
+                              (hrow.MinY + hrow.MaxY) * 0.5f * DpiScale);
+                SettleFrames(500);
+                Check("最近文档：点板书记录 = 关面板并打开那份 .inkb",
+                      !ui.MoreOpenForTest && InkStatus.Contains("已打开", StringComparison.Ordinal),
+                      $"面板={ui.MoreOpenForTest} 状态={InkStatus}");
+
+                // 清场：假历史文件 + 假最近文档都删掉，后面的用例不受影响
+                for (int i = 0; i < hpaths.Length; i++)
+                {
+                    try { File.Delete(hpaths[i]); } catch { /* 有意忽略：清理失败不影响主流程 */ }
+                }
+                try { Directory.Delete(histDir, true); } catch { /* 有意忽略：清理失败不影响主流程 */ }
+                BoardHistory.DirOverride = prevHistDir;
+                ui.SeedRecentDocsForTest();
+                ui.RefreshRecentPageForTest();
                 var moreAgain = ui.CellRectForTest(14);
                 ClickPhysical((moreAgain.MinX + moreAgain.MaxX) * 0.5f * DpiScale,
                               (moreAgain.MinY + moreAgain.MaxY) * 0.5f * DpiScale);
                 SettleFrames(300);
-                Check("最近文档：关文档后「更多」还能正常打开",
+                Check("最近文档：清场后「更多」还能正常打开",
                       ui.MoreOpenForTest && ui.MorePageForTest == 0,
                       $"面板={ui.MoreOpenForTest} 页={ui.MorePageForTest}");
             }

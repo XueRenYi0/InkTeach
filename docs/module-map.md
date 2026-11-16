@@ -34,7 +34,7 @@
 | 截图取景框/读数 | `InkEngine/Rendering/Overlay.Capture.cs` | 同文件 `DrawCaptureOverlay` 段 | `--capturetest` |
 | 截图确认/数据 | `InkEngine/Input/Engine.Capture.cs` | `InkEngine/Export/ScreenCapture.cs` | `--capturetest` |
 | 停顿成型 | `InkEngine/Input/Engine.Input.cs` | `InkEngine/Input/DwellAssist.cs` | `--dwelltest` |
-| 触摸手势 | `InkEngine/Input/Engine.TouchGestures.cs` | `InkEngine/Input/Touch.cs` · `InkEngine/Doc/DocImport.Pan.cs`（文档捏合缩放 / 放大后两轴平移） | `--touchtest` |
+| 触摸手势 | `InkEngine/Input/Engine.TouchGestures.cs` | `InkEngine/Input/Touch.cs` · `InkEngine/Doc/DocImport.Pan.cs`（文档捏合缩放 / 放大后两轴平移 / 触控板 GID_ZOOM 缩放；手势开关在 `Platform/Native.cs::DisableSystemPressAndHold` + `Core/Engine.Host.cs` 的 `WM_GESTURE`） | `--touchtest` |
 | 指针输入/橡皮 | `InkEngine/Input/Engine.Input.cs` | `InkEngine/Input/PenInput.cs` · `PointerInput.cs` | `--inputtest` / `--erasertest` |
 | 导出/剪贴板 | `InkEngine/Input/Engine.Clipboard.cs` | `InkEngine/Export/Export.cs` · `Clipboard*.cs` | `--iotest` |
 | 自动存档/恢复 | `InkEngine/Core/Recovery.cs` | `InkEngine/Core/Engine.cs` 自动存档段 | `--recoverytest` |

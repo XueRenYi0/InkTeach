@@ -1290,6 +1290,64 @@ internal sealed partial class App
         // ------------------------------------------------------------------
         DocResumeTestGroup(Check);          // F 组（方法内部自己打组标题）
 
+        // ------------------------------------------------------------------
+        Console.WriteLine("  -- G 「最近文档」页：板书历史列表 / 打开缺失文件 --");
+        // ------------------------------------------------------------------
+        {
+            // 全套指到临时目录，别碰用户历史；结束后恢复（自检模式本来也指向临时目录）。
+            string prevHist = BoardHistory.DirOverride;
+            string hdir = Path.Combine(Path.GetTempPath(), "inkteach-doc-recent");
+            try { if (Directory.Exists(hdir)) Directory.Delete(hdir, true); }
+            catch { /* 有意忽略：清理失败不影响主流程（ADR-005 D5） */ }
+            BoardHistory.DirOverride = hdir;
+
+            Check("板书历史：目录不存在 = 空列表（不抛）",
+                  BoardHistory.ListRecent(4).Count == 0, "目录不存在 → 0 条");
+
+            Directory.CreateDirectory(hdir);
+            var stamps = new[]
+            {
+                new DateTime(2026, 1, 5, 9, 0, 0),
+                new DateTime(2026, 1, 4, 9, 0, 0),
+                new DateTime(2026, 1, 3, 9, 0, 0),
+                new DateTime(2026, 1, 2, 9, 0, 0),
+                new DateTime(2026, 1, 1, 9, 0, 0),
+            };
+            var paths = new string[stamps.Length];
+            for (int i = 0; i < stamps.Length; i++)
+            {
+                paths[i] = Path.Combine(hdir,
+                    $"板书-{stamps[i].ToString("yyyyMMdd")}-090000.inkb");
+                File.WriteAllBytes(paths[i], Array.Empty<byte>());
+                File.SetLastWriteTime(paths[i], stamps[i]);
+            }
+
+            var recent = BoardHistory.ListRecent(4);
+            bool descending = true;
+            for (int i = 1; i < recent.Count; i++)
+                if (recent[i - 1].LocalTime < recent[i].LocalTime) descending = false;
+            Check("板书历史：最多 4 条、最新在前",
+                  recent.Count == 4 && descending
+                  && string.Equals(Path.GetFileName(recent[0].Path), "板书-20260105-090000.inkb", StringComparison.Ordinal),
+                  $"{recent.Count} 条，首条 {(recent.Count > 0 ? Path.GetFileName(recent[0].Path) : "(空)")}");
+            Check("板书历史：ListRecent(0) = 空（边界）", BoardHistory.ListRecent(0).Count == 0,
+                  $"{BoardHistory.ListRecent(0).Count} 条");
+
+            string missing = Path.Combine(hdir, "radi-没有这份.inkb");
+            Host.Commands.OpenBoardHistoryEntry(missing);
+            Check("打开缺失的板书历史：只写状态、不崩",
+                  InkStatus.Contains("不在", StringComparison.Ordinal), InkStatus);
+
+            for (int i = 0; i < paths.Length; i++)
+            {
+                try { File.Delete(paths[i]); }
+                catch { /* 有意忽略：清理失败不影响主流程（ADR-005 D5） */ }
+            }
+            try { Directory.Delete(hdir, true); }
+            catch { /* 有意忽略：清理失败不影响主流程（ADR-005 D5） */ }
+            BoardHistory.DirOverride = prevHist;
+        }
+
         Console.WriteLine();
         Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：文档页底层 {pass} 项通过 / {fail} 项失败");
         Console.WriteLine($"合计：通过 {pass} 项，失败 {fail} 项");

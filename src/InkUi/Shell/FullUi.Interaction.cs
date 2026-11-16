@@ -38,7 +38,7 @@ public sealed partial class FullUi
 
     /// <summary>
     /// 每个分组的格子数：课堂 5 个（计时 / 点名 / 随机一人 / AI 出题 / 使用说明）；
-    /// 墨迹 **5 个**（保存… / 打开… / 墨迹回放 / 关闭文档 / 历史板书）。
+    /// 墨迹 **5 个**（保存… / 打开… / 墨迹回放 / 关闭文档 / 最近文档）。
     /// 收藏只留在主工具条那一格，更多里不再放重复入口。
     /// </summary>
     private int HubCount(int section) => 5;
@@ -67,14 +67,14 @@ public sealed partial class FullUi
     private int HubTileCode(int section, int index)
     {
         // 课堂组第 4 格是「使用说明」，但**编号故意仍用 8**：它原来没有占 3..7，
-        // 这样保存/打开/回放/关闭文档/历史板书那五格的编号和既有自检全部不变。
+        // 这样保存/打开/回放/关闭文档/最近文档那五格的编号和既有自检全部不变。
         if (section == 0)
         {
             if (index < 3) return index;
             if (index == 3) return AiTileCode;
             return HelpTileCode;
         }
-        // 3..7 = 保存/打开/回放/关文档/历史板书；8 留给「使用说明」。
+        // 3..7 = 保存/打开/回放/关文档/最近文档（原「历史板书」）；8 留给「使用说明」。
         return 3 + index;
     }
 
@@ -94,31 +94,13 @@ public sealed partial class FullUi
         MaxX = MoreLeftX() + MoreContentW(), MinY = HubBottomRect(0).MinY - 8f - MoreStatusH,
     };
 
-    /// <summary>「最近文档」实际显示几条：最多 3 条；**矮屏放不下就少显示几行**，
-    /// 宁可不显示也不让底栏被面板切掉（0 条 = 整条不出现）。
-    ///
-    /// 放这里（不是 Pages.cs）：它读 `_work`，而 ADR-005 要求这个字段的引用面收住
-    ///（state-map 会报"新字段被 >5 个文件引用"）。绘制、命中、高度都读这一份判据。</summary>
-    private int RecentDocsShown
-    {
-        get
-        {
-            int want = Math.Min(RecentDocsVisible().Count, MoreRecentMax);
-            if (want <= 0) return 0;
-            // 与 PageHost.MaxHeightMargin 同源：面板最高 = 工作高 - 24。
-            float avail = (_work.MaxY - _work.MinY) - 24f - MoreHomeFixedH();
-            if (avail < MoreRecentRowH) return 0;
-            int fit = (int)MathF.Floor((avail + MoreRecentRowGap) / (MoreRecentRowH + MoreRecentRowGap));
-            return Math.Clamp(fit, 0, want);
-        }
-    }
-
+    /// <summary>「最近文档」旧主页那一小条已在 2026-11-16 删掉：墨迹组下面是「状态行 → 底栏」。
+    /// 最近文档改到第 7 格的独立页（见 MorePage.Recent），主页高度固定、不再随条目变。</summary>
     private RectF HubBottomRect(int i)
     {
         var head = HubHeadRect(1);
-        // 墨迹组 → 「最近文档」（标题借组距那条缝；0 条时高度 0）→ 状态行 → 底栏。
         float y = head.MaxY + HubRows(1) * (MoreTile + MoreTileGap)
-                  + MoreGroupGap + RecentDocsBlockH() + RecentDocsBottomGap + MoreStatusH + 8f;
+                  + MoreGroupGap + MoreStatusH + 8f;
         // **五格也要放得下**（2026-10-17 加「日志」）：窄面板上按内容宽均分，不超出。
         float tw = MathF.Min(MoreTile,
             (MoreContentW() - (MoreBottomTiles.Length - 1) * MoreTileGap) / MoreBottomTiles.Length);
@@ -412,10 +394,11 @@ public sealed partial class FullUi
             return new HitTarget(HitKind.HubTile, HubActionId(code), code);
         }
 
-        if (hit >= MoreHitRecent && hit < MoreHitRecent + MoreRecentMax)
+        if (hit >= MoreHitRecentPageRow && hit < MoreHitRecentPageRow + RecentPageMax * RecentPageGroups)
         {
-            int i = hit - MoreHitRecent;
-            return new HitTarget(HitKind.RecentDoc, $"more.recent.doc{i}", i);
+            int slot = hit - MoreHitRecentPageRow;
+            return new HitTarget(HitKind.RecentDoc,
+                $"more.recent.slot{slot / RecentPageMax}.{slot % RecentPageMax}", slot);
         }
 
         if (hit >= MoreHitBottom && hit < MoreHitBottom + MoreBottomTiles.Length)
@@ -482,7 +465,7 @@ public sealed partial class FullUi
             case 4: return "more.home.open";
             case 5: return "more.home.replay";
             case 6: return "more.home.closeDocument";
-            case 7: return "more.home.history";
+            case 7: return "more.home.recent";
         }
         if (code == AiTileCode) return "more.home.ai";
         if (code == HelpTileCode) return "more.home.help";
@@ -622,6 +605,7 @@ public sealed partial class FullUi
             MorePage.Settings => "设置",
             MorePage.Log => "日志与反馈",
             MorePage.Api => "AI 服务",
+            MorePage.Recent => "最近文档",
             _ => "使用说明",
         };
         bool showBack = _morePage != MorePage.Home;
@@ -753,7 +737,7 @@ public sealed partial class FullUi
     /// 启动器格子的表：`Hint` **不再画在格子里**（2026-10-02 第二批：搬进悬停/长按提示），
     /// 但它是提示的**唯一文案来源**——绘制、命中、提示都读这一份。
     /// 格子编号：课堂 0..2（计时 / 点名 / 随机一人）、AI 9（AI 出题）、墨迹 3..7（保存… / 打开… /
-    /// 墨迹回放 / 关闭文档 / 历史板书——2026-10-16 合并后）。
+    /// 墨迹回放 / 关闭文档 / 最近文档——2026-11-16 合并成独立页）。
     /// </summary>
     private (string Label, string Hint, bool Enabled, bool Danger) HubTileInfo(int code) => code switch
     {
@@ -768,10 +752,12 @@ public sealed partial class FullUi
                   ? $"关掉《{_host.State.DocInfo}》；批注留在画布上"
                   : "关掉当前文档；批注留在画布上",
               _host != null && _host.State.DocOpen, false),
-        // 历史板书（2026-10-14 加）：引擎自动留的板书画布快照（不含截图），这里是找回入口。
-        7 => ("历史板书",
-              "找回以前写在**白板**上的墨迹（自动留存，停手时写；不含截图）",
-              _host != null && !_host.State.PptMode && _host.State.HistoryCount > 0, false),
+        // 最近文档（2026-11-16 合并入口）：原来的「历史板书」格改名，点开一个独立页
+        // （PDF/图片 / PPT / 板书 三组），不再直接弹系统对话框。**始终可用**：
+        // 两份列表都空时页里给空态；置灰会让用户以为功能没了。
+        7 => ("最近文档",
+              "PDF / PPT / 板书历史；最近用过的都在这儿",
+              true, false),
         AiTileCode => ("AI 出题",
               AiEntryEnabled
                   ? "语音/文字出题；1A 先出示例题卡（不联网）"
@@ -1006,9 +992,14 @@ public sealed partial class FullUi
                 CloseMore();
                 _host.Commands.CloseDocument();
                 break;
-            case 7:                                   // 历史板书（2026-10-14）
-                CloseMore();
-                _host.Commands.OpenInkHistory();
+            case 7:                                   // 最近文档（2026-11-16：原「历史板书」格）
+                // 和其他 More 子页一样留在面板里换页：DPI、遮罩、命中、返回都沿用一套。
+                // ⚠ 不要在这里弹系统对话框——"点开一个列表"才是这个入口的语义。
+                SetMorePage(MorePage.Recent, push: true);
+                _moreHover = MoreHitNone;
+                _morePress = -1;
+                _moreH.To(MoreRecentPageH(), Tokens.MoreOpenMs);
+                Invalidate();
                 break;
             case AiTileCode:                          // AI 出题（开发中，入口置灰）
                 if (!AiEntryEnabled)
@@ -1425,7 +1416,7 @@ public sealed partial class FullUi
             { _morePress = hit; pressRow = true; }
             if (hit >= MoreHitTile && hit <= MoreHitTile + HubTileTotal - 1)
             { _morePress = hit; pressRow = true; }
-            if (hit >= MoreHitRecent && hit <= MoreHitRecent + MoreRecentMax - 1)
+            if (hit >= MoreHitRecentPageRow && hit <= MoreHitRecentPageRow + RecentPageMax * RecentPageGroups - 1)
             { _morePress = hit; pressRow = true; }
             if (hit >= MoreHitBottom && hit <= MoreHitBottom + MoreBottomTiles.Length - 1)
             { _morePress = hit; pressRow = true; }
@@ -1883,8 +1874,10 @@ public sealed partial class FullUi
                 ActivateRow(pressed - MoreHitRow);
             else if (pressed >= MoreHitTile && pressed <= MoreHitTile + HubTileTotal - 1 && hit == pressed)
                 ActivateHub(pressed - MoreHitTile);
-            else if (pressed >= MoreHitRecent && pressed <= MoreHitRecent + MoreRecentMax - 1 && hit == pressed)
-                ActivateRecent(pressed - MoreHitRecent);
+            else if (pressed >= MoreHitRecentPageRow
+                     && pressed <= MoreHitRecentPageRow + RecentPageMax * RecentPageGroups - 1
+                     && hit == pressed)
+                ActivateRecentPageRow(pressed - MoreHitRecentPageRow);
             else if (pressed >= MoreHitBottom && pressed <= MoreHitBottom + MoreBottomTiles.Length - 1 && hit == pressed)
                 ActivateBottom(pressed - MoreHitBottom);
             Invalidate();

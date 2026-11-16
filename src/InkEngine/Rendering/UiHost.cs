@@ -220,6 +220,9 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void OpenInkFile() => _engine.OpenInkFileFromUi();
     /// <summary>「历史板书」：起始目录落在历史目录里的"打开墨迹"。</summary>
     public void OpenInkHistory() => _engine.OpenInkHistoryFromUi();
+    public List<(string Path, DateTime LocalTime, long Bytes)> GetBoardHistory(int max)
+        => BoardHistory.ListRecent(max);
+    public void OpenBoardHistoryEntry(string path) => _engine.OpenBoardHistoryEntryFromUi(path);
     public void SaveBoardImage() => _engine.SaveBoardImageFromUi();
     public void SaveBoardAny() => _engine.SaveBoardAnyFromUi();
     public void OpenDocument() => _engine.OpenDocumentFromUi();
