@@ -6,12 +6,12 @@
 它不是"又一个白板"，是一块**贴在别人软件上面的板书层**——板书写在自己的图层里，
 底下那个 PPT 一点没动，点一下就把鼠标还给 PPT。
 
-[![Release](https://img.shields.io/github/v/release/XueRenYi0/InkTeach-Releases?label=release&color=blue)](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest)
+[![Release](https://img.shields.io/github/v/release/XueRenYi0/InkTeach?label=release&color=blue)](https://github.com/XueRenYi0/InkTeach/releases/latest)
 [![License](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011%20x64-lightgrey)
-[![Downloads](https://img.shields.io/github/downloads/XueRenYi0/InkTeach-Releases/total)](https://github.com/XueRenYi0/InkTeach-Releases/releases)
+[![Downloads](https://img.shields.io/github/downloads/XueRenYi0/InkTeach/total)](https://github.com/XueRenYi0/InkTeach/releases)
 
-**下载**：[GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest)（`InkTeach-Setup-<版本>.exe` 双击下一步，
+**下载**：[GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest)（`InkTeach-Setup-<版本>.exe` 双击下一步，
 或绿色版 `InkTeach-<版本>-win-x64.zip` 解压即用）｜[GitCode 国内镜像](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 ｜**官网**：<https://xuerenyi0.github.io/InkTeach/>
 

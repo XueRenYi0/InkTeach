@@ -6,8 +6,8 @@
 
 ## 다운로드 (9.9.2)
 
-- 설치 파일: [GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest) ｜ [GitCode 미러](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
-- 포터블 zip: [GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest)
+- 설치 파일: [GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest) ｜ [GitCode 미러](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
+- 포터블 zip: [GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest)
 - Windows 10 / 11 x64, .NET 설치가 필요 없습니다.
 
 ## 언어

@@ -6,8 +6,8 @@
 
 ## ダウンロード（9.9.2）
 
-- インストーラー：[GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest) ｜ [GitCode ミラー](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
-- ポータブル zip：[GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest)
+- インストーラー：[GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest) ｜ [GitCode ミラー](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
+- ポータブル zip：[GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest)
 - Windows 10 / 11 x64、.NET のインストールは不要です。
 
 ## 言語

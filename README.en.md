@@ -6,12 +6,12 @@
 Not "one more whiteboard" — a board layer *pasted over* someone else's software. Your ink lives
 on its own layer, the slide underneath is untouched, and one click hands the mouse back.
 
-[![Release](https://img.shields.io/github/v/release/XueRenYi0/InkTeach-Releases?label=release&color=blue)](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest)
+[![Release](https://img.shields.io/github/v/release/XueRenYi0/InkTeach?label=release&color=blue)](https://github.com/XueRenYi0/InkTeach/releases/latest)
 [![License](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011%20x64-lightgrey)
-[![Downloads](https://img.shields.io/github/downloads/XueRenYi0/InkTeach-Releases/total)](https://github.com/XueRenYi0/InkTeach-Releases/releases)
+[![Downloads](https://img.shields.io/github/downloads/XueRenYi0/InkTeach/total)](https://github.com/XueRenYi0/InkTeach/releases)
 
-**Download**: [GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest) (`InkTeach-Setup-<ver>.exe`, or the portable `InkTeach-<ver>-win-x64.zip`)
+**Download**: [GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest) (`InkTeach-Setup-<ver>.exe`, or the portable `InkTeach-<ver>-win-x64.zip`)
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 

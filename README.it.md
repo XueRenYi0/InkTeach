@@ -6,8 +6,8 @@
 
 ## Download (9.9.2)
 
-- Installer: [GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest) ｜ [mirror GitCode](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
-- ZIP portabile: [GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest)
+- Installer: [GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest) ｜ [mirror GitCode](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
+- ZIP portabile: [GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest)
 - Windows 10 / 11 x64, senza .NET.
 
 ## Lingua

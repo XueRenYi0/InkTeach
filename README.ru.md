@@ -6,8 +6,8 @@
 
 ## Скачать (9.9.2)
 
-- Установщик: [GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest) ｜ [зеркало GitCode](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
-- Портативный ZIP: [GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest)
+- Установщик: [GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest) ｜ [зеркало GitCode](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
+- Портативный ZIP: [GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest)
 - Windows 10 / 11 x64, .NET не требуется.
 
 ## Язык

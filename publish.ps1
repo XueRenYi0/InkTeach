@@ -53,6 +53,18 @@ $useAot = -not $Jit
 
 $ErrorActionPreference = "Stop"
 
+# SHA-256 用 .NET 直接算（2026-11-17 加）：
+# 发 9.9.2 时 `Get-FileHash` 在 Windows PowerShell 5.1 上报"未识别"，害得 update.json 只能手工补。
+# 这段在两个 PowerShell 版本里都一样，不依赖 cmdlet，顺便避开中文路径的怪问题。
+function Get-Sha256([string]$Path) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $fs = [System.IO.File]::OpenRead($Path)
+        try { return ([System.BitConverter]::ToString($sha.ComputeHash($fs)) -replace '-', '').ToLowerInvariant() }
+        finally { $fs.Dispose() }
+    } finally { $sha.Dispose() }
+}
+
 # ADR-005 D5：发版前门禁。check-all 内部已包含 Release build + 4 个索引检查 + 结构基线。
 if (-not $SkipChecks) {
     & (Join-Path $PSScriptRoot "tools\check-all.ps1")
@@ -80,30 +92,35 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
 $root = $PSScriptRoot
 $proj = Join-Path $root "src\InkTeach\InkTeach.csproj"
 
-# ---- 自动更新的来源前缀（GitHub Releases 的恒定重定向）-----------------------------------
+# ---- GitHub 仓库（2026-11-17 起：**回到最早那个公开仓库**）---------------------------------
 #
-#   **留空 = 先不做自动更新**（打包照常，只是不发 update.json）。
-#   填法（等你把仓库建好之后）：
-#       $updateBase = "https://github.com/<账号>/<仓库>/releases/latest/download"
-#   填好之后每次打包会顺手生成 `dist\update.json`（版本 + zip 地址 + sha256），
-#   把它和 zip 一起挂到 Release 的附件里就行。App 端见 README「自动更新」。
+#   源码、tag、Release 附件、更新清单**全在 `XueRenYi0/InkTeach`**（源码公开、GPL-3.0）。
+#   私有的 `InkTeach-Source` 那套不再用；旧的 `InkTeach-Releases` 只保留一条
+#   **过渡清单**（`update.json`），让 9.7–9.9.2 的老客户端还能看到新版、换到新地址。
 #
 #   ⚠ **这台机器实测连不上 github.com**（2026-09-29；gitee.com 正常）。教室机器多半
-#     也是同一个网络环境——更稳的三条路（都只改这一行，App 不用重新编译）：
-#       Gitee：     $updateBase = "https://gitee.com/<账号>/<仓库>/raw/<分支>"
-#       局域网共享：$updateBase = "\\教室服务器\InkTeach"
-#       对象存储：   $updateBase = "https://<桶>.oss-cn-….aliyuncs.com"
-$updateBase = "https://github.com/XueRenYi0/InkTeach-Releases/releases/latest/download"
+#     也是同一个网络环境——更稳的两条路（发布脚本不用改，App 端见 README「自动更新」）：
+#       局域网共享：settings.json 里 `update.url` 填 `\\教室服务器\InkTeach`
+#       对象存储：  同上，填 `https://<桶>.oss-cn-….aliyuncs.com`
+$ghOwner = "XueRenYi0"
+$ghRepo  = "InkTeach"
 
-# 国内镜像（GitCode：**只放发行版附件，不再推源码**；2026-11-11 闭源起）。
-# 配了它：① GitHub 清单里多写一个 "cn"（App 优先从国内下 zip）；② 生成 dist\update-mirror.json 留档。
-# 留空 = 不做国内镜像。
+# 自动更新的来源前缀在下面读到版本号之后再拼（要带 tag）。
+$updateBase = ""
+
+# 国内镜像（GitCode：**只放发行版附件，不推源码**）。
+# 配了它：① 清单里多写一个 "cn"（App 优先从国内下 zip）；② 生成 dist\update-mirror.json 留档；
+#        ③ 官网的国内直链也用它。留空 = 不做国内镜像。
 $mirrorOwnerRepo  = "XueRenYI0/InkTeach-Releases"
 $mirrorReleaseBase = if ($mirrorOwnerRepo) { "https://gitcode.com/$mirrorOwnerRepo/releases/download" } else { "" }
 
 # ---- 版本号从工程里读，不在这里再写一份（写两份迟早对不上）----------------------------
 $ver = (Select-String -Path $proj -Pattern '<Version>([^<]+)</Version>').Matches[0].Groups[1].Value
 if (-not $ver) { throw "没能从 $proj 里读到 <Version>" }
+
+# 自动更新的来源前缀（读过版本号之后拼，带 tag）。留空 = 不发 update.json。
+# **按 tag 精确指向**（不是 `latest`）：刚发版时 `latest` 可能还是上一版，精确地址一上传就能下。
+$updateBase = "https://github.com/$ghOwner/$ghRepo/releases/download/v$ver"
 
 # 测试版标签（见 -Label 的说明）：包名用它，清单/固定名副本一律不碰。
 $isTest = $Label.Length -gt 0
@@ -401,12 +418,12 @@ if ($NoSetup) {
 # ---- 固定名副本（官网"永不失效"的免登录直链用）--------------------------------------
 #
 #  官网按钮用的是 **固定文件名** 的直链，这样每次发版网页不用改：
-#    https://gitcode.com/XueRenYI0/InkTeach/releases/download/latest/InkTeach-Setup.exe
-#    https://gitcode.com/XueRenYI0/InkTeach/releases/download/latest/InkTeach-win-x64.zip
-#  （`latest` 是 GitCode/GitHub 都支持的"最新发行版"别名；实测匿名 GET 可下、不要登录。）
-#  上传发行版附件时把这两个固定名文件也带上：
+#    https://github.com/XueRenYi0/InkTeach/releases/latest/download/InkTeach-Setup.exe
+#    https://gitcode.com/XueRenYI0/InkTeach-Releases/releases/download/latest/InkTeach-Setup.exe
+#  （`latest` 是 GitHub / GitCode 都支持的"最新发行版"别名；实测匿名 GET 可下、不要登录。）
+#  上传发行版附件时把这两个固定名文件也带上（tools\release.ps1 已经带）：
 #    · GitCode：tools\gitcode-release.ps1 已自动带上；
-#    · GitHub：`gh release upload <tag> dist\InkTeach-Setup.exe dist\InkTeach-win-x64.zip`
+#    · GitHub：`gh release upload <tag> dist\InkTeach-Setup.exe dist\InkTeach-win-x64.zip update.json`
 $stableZip = Join-Path $root "dist\InkTeach-win-x64.zip"
 $stableSetup = Join-Path $root "dist\InkTeach-Setup.exe"
 if ($isTest) {
@@ -442,7 +459,7 @@ elseif ($NoZip) {
     Write-Host "  （-NoZip 时无法算 zip 的 sha256：跳过 update.json）" -ForegroundColor DarkGray
 }
 else {
-    $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+    $hash = Get-Sha256 $zip
     $base = $updateBase.TrimEnd('/')
     # 更新源既可以是网址（https://…），也可以是局域网共享 / 本地目录（\\服务器\共享、D:\…）。
     # 后者是教室环境最稳的一条路（这台机器实测连不上 github.com，见 README「自动更新」）。
@@ -488,9 +505,10 @@ else {
         $rootJson = Join-Path $root "update.json"
         Set-Content -Path $rootJson -Value $body -Encoding UTF8
         # 让 jsDelivr（国内清单源之一）立刻刷新缓存；失败不影响发布。
-        try { curl.exe -s -o NUL --max-time 20 "https://purge.jsdelivr.net/gh/XueRenYi0/InkTeach-Releases@main/update.json" | Out-Null } catch { }
+        # 2026-11-17：清单在**原仓库**，三条 jsDelivr 源都要刷（它们是同一份文件的三个域名）。
+        try { curl.exe -s -o NUL --max-time 20 "https://purge.jsdelivr.net/gh/XueRenYi0/InkTeach@main/update.json" | Out-Null } catch { }
         Write-Host "  自动更新清单 dist\update.json ＋ 仓库根 update.json（sha256 $($hash.Substring(0,12))…）" -ForegroundColor Green
-        Write-Host "  ⚠ 发新版：先 git add update.json && git commit && git push（App 从 raw 地址取它），再把 zip 和 setup.exe 一起挂到 release 附件" -ForegroundColor Yellow
+        Write-Host "  ⚠ 发新版：一条命令 `.\tools\release.ps1 -Notes dist\release-notes-$ver.md`（提交清单/推送/tag/Release/GitCode/过渡清单全包）" -ForegroundColor Yellow
     }
     if ($mirrorReleaseBase) {
         Write-Host "  ⚠ 国内镜像：跑 tools\gitcode-release.ps1 -Version $ver（推源码/标签、建 GitCode 发行版、传附件）" -ForegroundColor Yellow
