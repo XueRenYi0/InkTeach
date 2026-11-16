@@ -136,7 +136,7 @@
 | 2654 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
 | 2712 | 延时探针（见 Latency.cs） |
 
-## src/InkEngine/Core/Engine.Host.cs（2,225 行）
+## src/InkEngine/Core/Engine.Host.cs（2,228 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -772,18 +772,18 @@
 | 517 | 触点诊断浮层（8.3.3，默认关） |
 | 568 | 橡皮读数浮层（8.3.7，默认关；调参用） |
 
-## src/InkEngine/Rendering/Overlay.Content.cs（688 行）
+## src/InkEngine/Rendering/Overlay.Content.cs（715 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 21 | `internal sealed partial class OverlayWindow` |
-| 553 | `private enum PillPlace` |
+| 580 | `private enum PillPlace` |
 
 | 行 | 段落 |
 | --- | --- |
 | 23 | Content layer |
 
-## src/InkEngine/Rendering/Overlay.cs（1,389 行）
+## src/InkEngine/Rendering/Overlay.cs（1,415 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -795,10 +795,10 @@
 | 行 | 段落 |
 | --- | --- |
 | 419 | 内容层（画布空间分块缓存） |
-| 440 | 界面缓存 |
-| 455 | 脏区上屏状态 |
-| 726 | 延时探针 |
-| 778 | 委托墨迹轨迹（微软的低延迟湿墨通道） |
+| 463 | 界面缓存 |
+| 478 | 脏区上屏状态 |
+| 749 | 延时探针 |
+| 804 | 委托墨迹轨迹（微软的低延迟湿墨通道） |
 
 ## src/InkEngine/Rendering/Overlay.Frame.cs（1,662 行）
 
@@ -1652,7 +1652,7 @@
 | 1226 | ④ 第二根手指按下：正在写的那一笔不许被换掉 |
 | 1251 | 收尾：两根一起抬，交进文档 |
 
-## src/InkTeach/SelfTests/E2E/Zoom.cs（781 行）
+## src/InkTeach/SelfTests/E2E/Zoom.cs（721 行）
 
 | 行 | 顶层类型 |
 | --- | --- |

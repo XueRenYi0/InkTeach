@@ -23,7 +23,7 @@
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 156 行
       - `Engine.cs` 2,866 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
-      - `Engine.Host.cs` 2,225 行 — 启动、消息循环、窗口过程（WndProc）。
+      - `Engine.Host.cs` 2,228 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
       - `Engine.Selection.Gesture.cs` 1,466 行 — 框选/套索/拖动/对齐吸附/美化入口。
@@ -127,7 +127,7 @@
       - `InkPredictorLinear.cs` 273 行
 
     **InkEngine/Rendering/**
-      - `CanvasTiles.cs` 474 行
+      - `CanvasTiles.cs` 520 行
       - `Cursors.cs` 505 行
       - `Engine.Cursor.cs` 800 行 — 光标形状与滚动条交互。
       - `Engine.UiBridge.cs` 994 行 — 引擎 ↔ 界面边界：IOverlayUi 命令转发。
@@ -135,8 +135,8 @@
       - `Icons.Paths.cs` 142 行
       - `LegacyOverlayLayer.cs` 74 行
       - `Overlay.Capture.cs` 789 行 — 截图取景框绘制：遮罩/准线/读数/手柄。
-      - `Overlay.Content.cs` 688 行 — 内容层合成：分块光栅、相机变换、缩放合成、滚动条。
-      - `Overlay.cs` 1,389 行 — 覆盖层主文件：窗口/初始化/生命周期。
+      - `Overlay.Content.cs` 715 行 — 内容层合成：分块光栅、相机变换、缩放合成、滚动条。
+      - `Overlay.cs` 1,415 行 — 覆盖层主文件：窗口/初始化/生命周期。
       - `Overlay.Frame.cs` 1,662 行 — 覆盖层帧渲染：内容/界面/装饰合成。
       - `Overlay.PptBar.cs` 785 行 — PPT 条/回放条/滚动条绘制。
       - `Overlay.Radial.cs` 657 行 — 呼出盘绘制。
@@ -296,8 +296,9 @@
         - `TextStyleShow.cs` 125 行
         - `ToastTest.cs` 43 行
         - `Touch.cs` 1,271 行 — 触摸手势 E2E。
-        - `Zoom.cs` 781 行 — 文档缩放 E2E（阶段 2：渲染核心 + 引擎缩放 API）。
+        - `Zoom.cs` 721 行 — 文档缩放 E2E（阶段 2：渲染核心 + 引擎缩放 API）。
         - `ZoomSelection.cs` 211 行 — 文档缩放 E2E（选中家具：手柄 / 操作条 / 面板 / 旋转柄在缩放下的屏幕恒定性）。
+        - `ZoomShots.cs` 212 行 — 文档缩放 E2E：出图（50/100/200 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
 
       **InkTeach/SelfTests/Unit/**
         - `UnitTestRunner.cs` 135 行

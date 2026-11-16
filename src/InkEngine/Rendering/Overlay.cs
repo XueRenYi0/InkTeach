@@ -428,8 +428,31 @@ internal sealed partial class OverlayWindow : IDisposable
     /// <summary>上一帧的相机偏移。变了 → 整屏合成位置都变了，后缓冲整块作废。</summary>
     private float _lastCamY = float.NaN;
     private float _lastCamX = float.NaN;
-    /// <summary>上一帧的相机缩放。变了 → 分块纹理倍率要换、两个后缓冲都作废。</summary>
+    /// <summary>上一帧的相机缩放。变了 → 记下"待应用倍率"，稳定后换分块纹理倍率。</summary>
     private float _lastViewScale = float.NaN;
+    /// <summary>
+    /// 分块倍率的**防抖窗口**（毫秒）。Ctrl+滚轮连过几档时，每档都重建整层分块
+    /// 等于手势期间一直在 Reset + 重烘；停手这么久才真正换一次（见 SyncTiles）。
+    /// 120ms 略大于一格滚轮的自然间隔，又短到用户松手后察觉不到。
+    /// </summary>
+    internal const double TileScaleSettleMs = 120;
+    /// <summary>待应用的分块倍率（相机最后一档；NaN = 还没有）。
+    /// 手势期间继续贴旧块（拉伸），这个值只等"稳定窗口"到点。</summary>
+    private float _pendingTileScale = float.NaN;
+    /// <summary>待应用倍率的到点时刻（<see cref="InkEngine.NowMs"/> 口径）。</summary>
+    private double _scaleSettleAtMs;
+    /// <summary>累计真正换过几次分块倍率（自检口径：连滚 6 档只算一次）。</summary>
+    public int TileScaleApplyCount;
+
+    /// <summary>
+    /// 分块倍率还有"到点要应用、但还没应用"的目标。
+    ///
+    /// 主循环据此继续出帧（见 Engine.NeedsFrame）：缩放停手后如果只剩一个"等 120ms"
+    /// 的待办，而界面又不再置脏，主循环会 WaitMessage 睡下去——倍率就永远停在旧的
+    /// 那一档，屏幕上一直是拉伸的糊图。这个属性把那个待办算进"要一帧"的理由里。
+    /// </summary>
+    public bool TileScalePending => _tiles != null && float.IsFinite(_pendingTileScale)
+        && !(MathF.Abs(_pendingTileScale - _tiles.RenderScale) <= 0.0005f);
     private bool _lastBoardOn;
     private Color4 _lastBoardColor = new(0f, 0f, 0f, -1f);
     /// <summary>上一帧"文档垫白"在不在（进/出会整层重铺，和板色同一套）。</summary>
@@ -771,6 +794,9 @@ internal sealed partial class OverlayWindow : IDisposable
     /// <summary>一块分块纹理的字节数 / 纹理边长 / 超采样倍率（诊断用；总字节 = LastTileCount × LastTileBytes）。</summary>
     public int LastTileBytes, LastTileTextureSize;
     public float LastTileRenderScale = 1f;
+    /// <summary>预取环块数 / 环字节数（按字节上限夹住；诊断与自检用）。</summary>
+    public int LastTileRing;
+    public long LastTileRingBytes;
     public string LastError;
 
     public ID2D1DeviceContext Context => _ctx;

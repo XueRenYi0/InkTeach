@@ -224,12 +224,32 @@ internal sealed partial class OverlayWindow
             _fullFramesLeft = 2;      // 相机变了：两个缓冲都要重画到新位置（见字段说明）
         }
 
-        // 缩放变了：分块纹理的倍率要跟着换（SetRenderScale 内部幂等——只有倍率真的
-        // 变了才整层重烘，不会每帧清一遍）。后缓冲里躺的是上一倍率下的画面，两个都作废。
-        if (MathF.Abs(ViewScaleSafe - _lastViewScale) > 0.0005f)
+        // 缩放变了：分块纹理的倍率跟着换，但**不是每一格滚轮都换**——
+        // Ctrl+滚轮一次手势会连过 6 档（75→100→125→150→200），每档都 SetRenderScale
+        // 就是把整层分块 Reset + 重烘 6 次，等于手势期间一直卡。
+        //
+        // 做法（和 Rnote / Xournal++ 的"停手再重排"同一套思路）：先把目标倍率记下来，
+        // 相机缩放**稳定 <see cref="TileScaleSettleMs"/> 之后**才真正换一次；手势期间
+        // 继续贴旧块（拉伸显示，糊一点但跟手），停手后一次换到目标倍率再整层重烘。
+        //
+        // ⚠ 这里必须是 NaN 安全的比较：`_lastViewScale` 初值是 NaN（"一次都没应用过"），
+        // 而 `MathF.Abs(x - NaN) > eps` 恒为 false——老写法因此永远不进这个分支，
+        // 200% 一直是 1× 位图拉伸（--docmem 里 LastTileRenderScale 恒为 1 就是它）。
+        float scaleNow = ViewScaleSafe;
+        if (!(MathF.Abs(scaleNow - _lastViewScale) <= 0.0005f))
         {
-            _lastViewScale = ViewScaleSafe;
-            _tiles.SetRenderScale(ViewScaleSafe);
+            _lastViewScale = scaleNow;
+            _pendingTileScale = scaleNow;
+            _scaleSettleAtMs = app.NowMs + TileScaleSettleMs;
+        }
+
+        if (float.IsFinite(_pendingTileScale)
+            && !(MathF.Abs(_pendingTileScale - _tiles.RenderScale) <= 0.0005f)
+            && app.NowMs >= _scaleSettleAtMs)
+        {
+            _tiles.SetRenderScale(_pendingTileScale);
+            TileScaleApplyCount++;         // 自检口径：一次手势只该 +1（见 --zoomtest）
+            _tiles.MarkAllDirty();         // 新纹理是空的，全都欠一帧
             _fullFramesLeft = 2;
         }
 
@@ -266,6 +286,8 @@ internal sealed partial class OverlayWindow
         LastTileBytes = _tiles.TileBytes;       // 每块纹理字节（随倍率变；诊断用，不影响分块行为）
         LastTileTextureSize = _tiles.TextureSize;
         LastTileRenderScale = _tiles.RenderScale;
+        LastTileRing = _tiles.RingTiles;
+        LastTileRingBytes = _tiles.RingBytesNow;
     }
 
     /// <summary>视口外一圈还有没有欠着的块（引擎据此排空闲预取拍）。</summary>
@@ -305,11 +327,16 @@ internal sealed partial class OverlayWindow
 
         _ctx.Target = target;
         _ctx.BeginDraw();
-        // **先缩放、再减块原点**：块纹理是 (TileSize × RenderScale) 像素，
-        // 画布 1 单位 = RenderScale 纹理像素；平移仍是整数画布单位，
-        // 所以同一段几何在相邻块里的像素覆盖完全一致（接缝防线不变）。
-        _ctx.Transform = Matrix3x2.CreateScale(_tiles.RenderScale)
-                       * Matrix3x2.CreateTranslation(-canvas.MinX, -canvas.MinY);
+        // **先减块原点、再缩放**：块纹理是 (TileSize × RenderScale) 像素，
+        // 合成时 `src = (画布 − 块原点) × RenderScale`（见 CompositeTiles），
+        // 所以这里必须是同一个方向：Texture = (Canvas − Origin) × Scale。
+        // System.Numerics 是行向量约定（`A * B` = 先 A 后 B），写反成
+        // `CreateScale * CreateTranslation` 就成了 `Canvas × Scale − Origin`，
+        // 整块内容平移 (Scale−1)×Origin 个纹理像素——**100% 时两条式子恰好相等**
+        // （Scale=1），所以这个错只在缩放时才露出来：200% 下墨迹被推到块外，
+        // 屏幕上只剩纯色页（用户看到的"200% 只有页、没有墨"）。
+        _ctx.Transform = Matrix3x2.CreateTranslation(-canvas.MinX, -canvas.MinY)
+                       * Matrix3x2.CreateScale(_tiles.RenderScale);
 
         // 只补画新增的笔画：不清空、不遍历块内原有的笔画。
         // 内容层"只增不减"（正在写字）时才走这条路，见 SyncTiles 里的判断。

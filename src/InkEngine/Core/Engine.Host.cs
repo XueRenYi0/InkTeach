@@ -2167,6 +2167,9 @@ public partial class InkEngine
         if (RadialPaletteActive) d |= FrameDrive.Radial;
         if (TooltipPending) d |= FrameDrive.Tooltip;
         if (_windows.Exists(w => w.TrailEndPending)) d |= FrameDrive.Trail;
+        // 缩放停手后的"换分块倍率"是一个**定时待办**（防抖 120ms）：不算进这里，
+        // 界面不再置脏时主循环会睡在 WaitMessage 上，倍率永远换不了（拉伸糊图常驻）。
+        if (_windows.Exists(w => w.TileScalePending)) d |= FrameDrive.Dirty;
         if (AlignSnapPulseActive) d |= FrameDrive.Align;
         if (_g2FlingActive) d |= FrameDrive.TouchFling;
 

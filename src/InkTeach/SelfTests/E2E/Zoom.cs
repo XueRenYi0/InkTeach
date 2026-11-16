@@ -74,6 +74,7 @@ internal sealed partial class App
 
             ZoomTestScale(Check);           // A–D：倍率 / 页矩形 / 坐标 / 六档 / 复位
             ZoomTestShots(Check);           // E：上屏 + 50/100/200 三张图
+            ZoomTestTiles(Check);           // I：分块倍率 / 防抖 / 预取环字节上限
             ZoomTestBarAndPan(Check);       // G：文档条缩放组 / 档位浮层 / 横向拖页 / Ctrl+滚轮
             ZoomTestSelectionFurniture(Check, pdf);   // H：选中家具在 200% 下保持屏幕尺寸
             ZoomTestWorker(Check, pdf);     // F：worker 代次
@@ -260,67 +261,6 @@ internal sealed partial class App
               $"UiState.DocZoom={(Host != null ? Host.State.DocZoom : float.NaN):F2}");
     }
 
-    /// <summary>E 组：真正上屏 + 50/100/200 三张出图（判据仍然是"数像素"）。</summary>
-    private void ZoomTestShots(Action<string, bool, string> check)
-    {
-        Console.WriteLine("  -- E 上屏 + 出图：50 / 100 / 200 三张 --");
-        int baseW = DocView.At(0).Spec.RenderW > 0 ? DocView.At(0).Spec.RenderW
-                                                   : DocView.At(0).Spec.OutW;
-        string shotDir = System.IO.Path.GetFullPath("reports");
-        try { Directory.CreateDirectory(shotDir); } catch { /* 有意忽略：出图失败不算自检失败 */ }
-
-        void Shot(float zoom, string name)
-        {
-            SetDocZoomFromUi(zoom);
-            SettleFrames(500);
-            string p = System.IO.Path.Combine(shotDir, name + ".bmp");
-            bool ok = ScreenProbe.SaveBmp(p, _virtualX, _virtualY, _virtualW, _virtualH);
-            Console.WriteLine($"    {name,-24} {(ok ? "已出图 " + p : "出图失败（不影响判据）")}");
-        }
-
-        SetDocZoomFromUi(1f);
-        SettleFrames(500);
-        check("100%：页位图已生成并驻留", DocView.ResidentPages >= 1,
-              $"驻留={DocView.ResidentPages} 生成={DocView.GenerateCount}");
-
-        Shot(1f, "zoom-100");
-        Shot(2f, "zoom-200");
-
-        // 200%：视口中心压着的画布点落在页里 → 中心一块必须是红的（页真的被放大了）。
-        // （不取"页中心"：放大后页中心可能在屏幕外，视口中心一定在可见范围内。）
-        float centerScreenX = _virtualX + _virtualW * 0.5f;
-        float centerScreenY = _virtualY + _virtualH * 0.5f;
-        int red200 = ScreenProbe.CountNear((int)centerScreenX - 50, (int)centerScreenY - 50,
-                                           100, 100, 255, 0, 0, 24);
-        check("200%：页在屏幕上仍是红的（页图重渲成功）", red200 > 8000,
-              $"{red200}/10000 像素");
-
-        Shot(0.5f, "zoom-50");
-        int red50 = CountVisiblePageRed();
-        check("50%：还看得见页（缩小时不空白）", red50 > 3000, $"{red50} 像素");
-
-        SetDocZoomFromUi(1f);
-        SettleFrames(300);
-        check("出图后回 100%：已生成页的位图宽 = 基准",
-              DocView.At(0).Spec.BitmapW == baseW, $"{DocView.At(0).Spec.BitmapW}");
-    }
-
-    /// <summary>把当前可见的页（按相机换算是屏幕矩形）里"红的像素"数出来。</summary>
-    private int CountVisiblePageRed()
-    {
-        int total = 0;
-        for (int i = 0; i < DocView.Count; i++)
-        {
-            var pp = DocView.At(i);
-            if (pp.Image == null) continue;
-            int x = (int)MathF.Max(_virtualX, CanvasToScreenX(pp.Rect.MinX) + 8);
-            int y = (int)MathF.Max(_virtualY, CanvasToScreenY(pp.Rect.MinY) + 8);
-            int w = (int)MathF.Min(_virtualX + _virtualW, CanvasToScreenX(pp.Rect.MaxX) - 8) - x;
-            int h = (int)MathF.Min(_virtualY + _virtualH, CanvasToScreenY(pp.Rect.MaxY) - 8) - y;
-            if (w > 4 && h > 4) total += ScreenProbe.CountNear(x, y, w, h, 255, 0, 0, 24);
-        }
-        return total;
-    }
 
     /// <summary>
     /// G 组：**文档两条（翻页条 + 缩放条）＋ 档位浮层 ＋ 横向拖页 ＋ Ctrl+滚轮**。

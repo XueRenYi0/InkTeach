@@ -85,6 +85,11 @@ internal sealed class CanvasTileCache : IDisposable
         if (MathF.Abs(scale - RenderScale) < 0.0005f) return;
         RenderScale = scale;
         Reset();          // 纹理尺寸变了：旧纹理一个都不能留（内容/显存一起放）
+        // Reset 只是把 C# 这边的引用放了；D2D 上下文里可能还挂着上一批纹理的批处理引用，
+        // 不冲一次的话显存要等下一帧 EndDraw 才真的掉下来。Flush 只是"把攒着的命令交出去"，
+        // 不阻塞 GPU（ID2D1DeviceContext::Flush 的语义）。
+        try { _ctx?.Flush(out _, out _); }
+        catch { /* 有意忽略：Flush 失败只影响显存回收时点，不影响画面 */ }
     }
 
     /// <summary>
@@ -175,10 +180,28 @@ internal sealed class CanvasTileCache : IDisposable
     public double PrefetchMsLastFrame { get; private set; }
     public bool PrefetchPending { get; private set; }
 
-    /// <summary>本帧可见块的行列数（预算里的"环"按它算）。</summary>
-    private int _visCols, _visRows;
-    /// <summary>视口外一圈的块数（上 + 下 + 左 + 右 + 四角）。</summary>
-    private int RingTiles => PrefetchEnabled ? 2 * _visCols + 2 * _visRows + 4 : 0;
+    /// <summary>
+    /// 预取环的**字节上限**：16MB。环是按"视口外一圈"的块数算的
+    /// （<see cref="RingFullTiles"/> = 2×列 + 2×行 + 4），块数和倍率的平方成正比，
+    /// 200% 时一圈就是 100% 时的 1/4 块数、但每块 4 倍字节——不夹住的话环会跟着
+    /// 倍率一起涨。**可见块和回滚余量不在这里夹**（它们是画面本身）。
+    /// </summary>
+    public const int RingBytes = 16 * 1024 * 1024;
+
+    /// <summary>按当前 <see cref="TileBytes"/> 折算，环最多允许几块。</summary>
+    public int RingCapTiles => Math.Max(0, RingBytes / Math.Max(1, TileBytes));
+
+    /// <summary>视口外一圈完整块数（上 + 下 + 左 + 右 + 四角）。</summary>
+    public int RingFullTiles => 2 * _visCols + 2 * _visRows + 4;
+
+    /// <summary>
+    /// 真正参与预取的环块数 = min(完整环, 字节上限)。
+    /// 100% 时一般在 40~60 块（&lt; 16MB，不夹）；200% 时被夹到 16 块。
+    /// </summary>
+    public int RingTiles => PrefetchEnabled ? Math.Min(RingFullTiles, RingCapTiles) : 0;
+
+    /// <summary>环占的字节数（诊断/自检口径；上界就是 <see cref="RingBytes"/>）。</summary>
+    public int RingBytesNow => RingTiles * TileBytes;
 
     /// <summary>
     /// 本帧的常驻预算（块数）：可见 ＋ 回滚余量 ＋ 预取环。
@@ -189,6 +212,33 @@ internal sealed class CanvasTileCache : IDisposable
 
     /// <summary>这一帧可见的块，按"先创建顺序"排列；合成时遍历它。</summary>
     public List<Tile> Visible => _visible;
+
+    /// <summary>本帧可见块的行列数（预算里的"环"按它算）。</summary>
+    private int _visCols, _visRows;
+
+    /// <summary>
+    /// 环的块坐标（**按字节上限截断**）：先上下两条、再左右两条，凑够
+    /// <see cref="RingTiles"/> 就停。预取和"还需不需要预取"必须走同一份清单，
+    /// 否则两边对不上就会出现"永远欠着、永远不烘"。
+    /// </summary>
+    private readonly List<(int Tx, int Ty)> _ringScratch = new();
+
+    private void BuildRing(int x0, int x1, int y0, int y1)
+    {
+        _ringScratch.Clear();
+        int limit = RingTiles;
+        if (limit <= 0) return;
+
+        void Add(int tx, int ty)
+        {
+            if (_ringScratch.Count < limit) _ringScratch.Add((tx, ty));
+        }
+
+        for (int tx = x0 - 1; tx <= x1 + 1; tx++) Add(tx, y0 - 1);   // 上
+        for (int tx = x0 - 1; tx <= x1 + 1; tx++) Add(tx, y1 + 1);   // 下
+        for (int ty = y0; ty <= y1; ty++) Add(x0 - 1, ty);           // 左
+        for (int ty = y0; ty <= y1; ty++) Add(x1 + 1, ty);           // 右
+    }
 
     public void Attach(ID2D1DeviceContext ctx) => _ctx = ctx;
 
@@ -344,12 +394,9 @@ internal sealed class CanvasTileCache : IDisposable
 
         int x0 = FirstIdx(visibleCanvas.MinX), x1 = LastIdx(visibleCanvas.MaxX);
         int y0 = FirstIdx(visibleCanvas.MinY), y1 = LastIdx(visibleCanvas.MaxY);
-        for (int ty = y0 - 1; ty <= y1 + 1; ty++)
-            for (int tx = x0 - 1; tx <= x1 + 1; tx++)
-            {
-                if (tx >= x0 && tx <= x1 && ty >= y0 && ty <= y1) continue;   // 视口内的归 Sync
-                if (!_tiles.TryGetValue(Key(tx, ty), out var t) || t.Dirty) return true;
-            }
+        BuildRing(x0, x1, y0, y1);
+        foreach (var (tx, ty) in _ringScratch)
+            if (!_tiles.TryGetValue(Key(tx, ty), out var t) || t.Dirty) return true;
         return false;
     }
 
@@ -367,35 +414,34 @@ internal sealed class CanvasTileCache : IDisposable
 
         int x0 = FirstIdx(visibleCanvas.MinX), x1 = LastIdx(visibleCanvas.MaxX);
         int y0 = FirstIdx(visibleCanvas.MinY), y1 = LastIdx(visibleCanvas.MaxY);
+        BuildRing(x0, x1, y0, y1);
 
-        for (int ty = y0 - 1; ty <= y1 + 1; ty++)
-            for (int tx = x0 - 1; tx <= x1 + 1; tx++)
+        foreach (var (tx, ty) in _ringScratch)
+        {
+            long k = Key(tx, ty);
+            if (_tiles.TryGetValue(k, out var tile) && !tile.Dirty) continue;
+
+            if (LastPrefetch >= PrefetchPerFrame) { PrefetchPending = true; continue; }
+
+            double createMs = 0;
+            if (tile == null)
             {
-                if (tx >= x0 && tx <= x1 && ty >= y0 && ty <= y1) continue;   // 视口内的归 Sync
-                long k = Key(tx, ty);
-                if (_tiles.TryGetValue(k, out var tile) && !tile.Dirty) continue;
-
-                if (LastPrefetch >= PrefetchPerFrame) { PrefetchPending = true; continue; }
-
-                double createMs = 0;
-                if (tile == null)
-                {
-                    var swc = Stopwatch.StartNew();
-                    tile = Create(tx, ty);
-                    swc.Stop();
-                    createMs = swc.Elapsed.TotalMilliseconds;
-                    _tiles[k] = tile;
-                }
-                var sw = Stopwatch.StartNew();
-                paint(tile.Target, RectOf(tx, ty), null);     // 整块重画；新块/脏块都不会有补画清单
-                sw.Stop();
-                PrefetchMsLastFrame += sw.Elapsed.TotalMilliseconds + createMs;
-                tile.Dirty = false;
-                tile.Appended.Clear();
-                tile.LastFrame = _frame;                      // 刚烘的算新，Trim 不会先淘汰它
-                LastPrefetch++;
-                PrefetchTotal++;
+                var swc = Stopwatch.StartNew();
+                tile = Create(tx, ty);
+                swc.Stop();
+                createMs = swc.Elapsed.TotalMilliseconds;
+                _tiles[k] = tile;
             }
+            var sw = Stopwatch.StartNew();
+            paint(tile.Target, RectOf(tx, ty), null);     // 整块重画；新块/脏块都不会有补画清单
+            sw.Stop();
+            PrefetchMsLastFrame += sw.Elapsed.TotalMilliseconds + createMs;
+            tile.Dirty = false;
+            tile.Appended.Clear();
+            tile.LastFrame = _frame;                      // 刚烘的算新，Trim 不会先淘汰它
+            LastPrefetch++;
+            PrefetchTotal++;
+        }
         return PrefetchPending;
     }
 
