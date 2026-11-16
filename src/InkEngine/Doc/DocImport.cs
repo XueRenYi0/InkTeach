@@ -410,12 +410,18 @@ public partial class InkEngine
         ExitDocPan("打开文档");
         if (wasPass) SetPassThrough(false, restoreBoard: false);   // 画布保持眼前所见（文档），不弹回白板
         SetToolFromUi(Tool.Pen);
+        // 文档模式里的课堂窗（计时 / 点名）**不靠穿透**：这里退掉的强制穿透标记同步失效，
+        // 关文档时由 CloseDocument 按"卡片还开着"重新补回（2026-11-16，PDF 被吞那条的孪生面）。
+        NoteClassroomPassThroughReleasedForDoc();
         if (wasPass) SetInkStatus(InkStatus + "；已在穿透里自动退出穿透并切回「笔」");
         NotifyUiStateChanged();
     }
 
     /// <summary>自检用：绕开对话框，直接按扩展名分派。</summary>
     internal void OpenBoardAnyForTest(string[] files) => OpenBoardAnyCore(files);
+
+    /// <summary>自检用：只跑"打开成功之后"的准备批（退穿透 / 切画笔），配合 StartDocViewForTest。</summary>
+    internal void PrepareAnnotateAfterOpenForTest() => PrepareAnnotateAfterOpen();
 
     /// <summary>「关闭文档」：页位图 / 解码缓存 / PDF 全放；**批注留在画布上**。</summary>
     internal void CloseDocumentFromUi()
@@ -705,6 +711,11 @@ public partial class InkEngine
         DocView.SetViewScale(1f);
 
         LeaveDocPageSpace();                // 回桌面（含相机位置恢复）
+
+        // 关文档时课堂窗（计时 / 点名）还开着（文档模式里没强制穿透）→ 补回普通穿透路径：
+        // 否则整块全屏浮层留在桌面上，下层程序谁也点不到（2026-11-16；
+        // 和"开文档时退穿透"配对，见 PrepareAnnotateAfterOpen）。
+        if ((_timerCardOpen || _rollCardOpen) && !PassThrough) ClassroomWantPassThrough(true);
 
         // **纸随文档一起收**：文档的"纸"是按 DocView.IsOpen 现判的，关文档自然就收了。
         // 白板是**另一张纸**：文档的开关不动它——打开时替你把它收过一次（好让你看见文档），

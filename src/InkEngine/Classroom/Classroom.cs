@@ -1021,7 +1021,12 @@ public partial class InkEngine
         _timerShownUnit = long.MinValue;
         SetTimerClockClosed(false);          // 手动打开 = 撤销"关过时间档"的抑制（2026-11-16）
         ClearTimerLaps();
-        ClassroomWantPassThrough(true);
+        // **文档模式里不强制穿透**（2026-11-16 用户报：PDF 开着点「更多 → 计时器」，PDF 整个消失）：
+        // 穿透会让 `Overlay.Content.DrawDocPages` 整层让开——卡片还在、页面却没了。
+        // 文档里卡片自己那块由 `OverlayLayerRegistration` 的 "timer" 层接输入（同自动挂钟），
+        // 桌面 / 放映（没文档）照旧强制穿透，靠接输入小窗点卡片。
+        // 关文档时 `CloseDocument` 会按"卡片还开着"补回穿透，桌面不会被整块浮层挡住。
+        if (!(DocView.IsOpen && !PptMode)) ClassroomWantPassThrough(true);
         RefreshTimerValue();
         SaveTimerPrefs();
         _dirty = true;
@@ -1723,7 +1728,10 @@ public partial class InkEngine
         _rollFace = "";
         _rollCloseAtMs = 0;
         ReloadNamesFromUi();       // 开窗即重读：记事本改完再开窗就能用
-        ClassroomWantPassThrough(true);
+        // **文档模式里不强制穿透**（同计时卡，2026-11-16）：穿透会让 `DrawDocPages` 整层让开——
+        // 卡片还在、PDF 却没了。文档里卡片那块由 `OverlayLayerRegistration` 的 "roll" 层接输入。
+        // 桌面 / 放映（没文档）照旧强制穿透，靠接输入小窗点卡片。
+        if (!(DocView.IsOpen && !PptMode)) ClassroomWantPassThrough(true);
         _dirty = true;
         NotifyUiStateChanged();
         Console.WriteLine("点名：打开窗口");
@@ -1740,7 +1748,8 @@ public partial class InkEngine
         _rollCloseAtMs = 0;
         ReloadNamesFromUi();
         _rollCount = 1;
-        ClassroomWantPassThrough(true);
+        // 同上：文档模式里不强制穿透（PDF 要留在屏幕上），桌面 / 放映照旧。
+        if (!(DocView.IsOpen && !PptMode)) ClassroomWantPassThrough(true);
         StartRollFromUi();
     }
 
@@ -2146,6 +2155,18 @@ public partial class InkEngine
             _classroomPassThroughForced = false;
             if (!_classroomPassThroughBefore) SetPassThroughFromUi(false);
         }
+    }
+
+    /// <summary>
+    /// 文档打开时穿透被产品路径主动退出（<c>PrepareAnnotateAfterOpen</c>）：课堂窗的"强制"标记
+    /// 同步失效——否则关文档后 <see cref="ClassroomWantPassThrough"/> 会被这条旧标记挡掉，
+    /// 整块浮层留在桌面上，下层谁也点不到。文档里的卡片不靠穿透，靠计时 / 点名浮层接输入。
+    /// </summary>
+    internal void NoteClassroomPassThroughReleasedForDoc()
+    {
+        if (!_classroomPassThroughForced) return;
+        _classroomPassThroughForced = false;
+        _classroomPassThroughBefore = false;
     }
 
     internal string[] Names { get; private set; } = Array.Empty<string>();

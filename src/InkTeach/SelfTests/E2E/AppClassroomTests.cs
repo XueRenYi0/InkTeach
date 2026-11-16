@@ -558,6 +558,9 @@ internal sealed partial class App
             StopTimerFromUi(); SettleFrames(80);
         }
 
+        // ⑮ 计时器 × 文档（2026-11-16 用户报：PDF 开着点「更多 → 计时器」，PDF 消失）
+        TimerOverDocGroup(Check);
+
         Console.WriteLine();
         Console.WriteLine($"  合计 {pass + fail} 项：通过 {pass}，失败 {fail}");
         if (fail > 0) ExitCode = 1;
