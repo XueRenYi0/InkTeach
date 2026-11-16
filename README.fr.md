@@ -4,7 +4,7 @@
 
 **InkTeach est une couche d'annotation transparente pour Windows : écrivez directement sur PPT / WPS / PDF / images / n'importe quelle application.** Le fichier en dessous reste intact. Stylo, surligneur, pointeur laser, captures d'écran, formes par pause, 41 cartes de formes mathématiques, alignement d'objets, favoris, minuteur et tirage au sort — avec **10 langues d'interface**.
 
-## Téléchargement (9.9.1)
+## Téléchargement (9.9.2)
 
 - Installateur : [GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest) ｜ [miroir GitCode](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 - ZIP portable : [GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest)

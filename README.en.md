@@ -15,11 +15,11 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 
-> **Latest 9.9.1 (2026-11-15)**: anonymous device stats are now **on by default with no modal** —
-> country/region only, **no IP, province or city**, and a single 6-second non-blocking notice.
-> Off by default in the EU / UK / Switzerland; turn it off under **Settings → About**, which also
-> deletes this device's card. Log upload stays a separate consent. 9.9.1 fixes the update badge
-> landing on the redo cell in the expanded toolbar.
+> **Latest 9.9.2 (2026-11-16)**: PDF document mode now has 300% zoom, two-finger and precision-touchpad
+> pinch, `H` / hold-`Space` hand pan; large `.inkb` files open in the background with a “opening…” notice;
+> the recent-documents page now merges PDFs, PPTs and board history; the radial palette follows the live
+> colour band and its clear cell runs on a single click (undoable); the timer gains a Clock mode and a
+> 206×48 mini frame.
 >
 > *This English README is a summary. The Chinese [README.md](README.md) is the authoritative, most
 > current version.*

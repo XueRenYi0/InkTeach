@@ -4,7 +4,7 @@
 
 **InkTeach — прозрачный слой аннотаций для Windows: пишите прямо поверх PPT / WPS / PDF / изображений / любого приложения.** Файл под ним не изменяется. Перо, маркер, лазерная указка, скриншоты, фигуры по паузе, 41 карточка математических фигур, привязка объектов, избранное, таймер и случайный выбор — с **10 языками интерфейса**.
 
-## Скачать (9.9.1)
+## Скачать (9.9.2)
 
 - Установщик: [GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest) ｜ [зеркало GitCode](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 - Портативный ZIP: [GitHub Releases](https://github.com/XueRenYi0/InkTeach-Releases/releases/latest)
