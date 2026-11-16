@@ -506,7 +506,16 @@ public partial class InkEngine
     /// </summary>
     internal string OpenPdfDocument(string path)
     {
-        if (!Pdfium.Open(path, out var doc, out string err)) return err;
+        // **先停补丁线程，再碰 PDFium**：worker 可能正拿着旧 PdfiumDoc 在原生库里渲，
+        // 而下面 `doc.Size(i)` 也要读 PDFium——两条线程同时进原生库会崩（2026-11-16 评审 P0-1）。
+        // 打开失败要把补丁**补回给还在开着的旧文档**（见 EnsureDocPatch）。
+        DisposeDocPatch();
+
+        if (!Pdfium.Open(path, out var doc, out string err))
+        {
+            EnsureDocPatch();          // 失败不动当前文档：旧文档的高清补丁照旧
+            return err;
+        }
 
         var specs = new List<DocPages.Spec>();
         try
@@ -548,11 +557,11 @@ public partial class InkEngine
         catch (Exception ex)
         {
             doc.Dispose();
+            EnsureDocPatch();          // 同上：新文档没成，旧文档的补丁补回来
             return "读取 PDF 页面尺寸失败：" + ex.Message;
         }
 
-        DisposeDocPatch();           // 补丁线程先停：它正拿着上一份 PdfiumDoc 渲
-        _pdfDoc?.Dispose();
+        _pdfDoc?.Dispose();            // 旧文档这时才放：它上面已经没有 worker 了
         _pdfDoc = doc;
 
         StartDocView(specs, System.IO.Path.GetFileName(path), DocStore.KeyOf(new[] { path }));
@@ -601,14 +610,7 @@ public partial class InkEngine
         // 高清补丁：**只有 PDF**（图片页源像素就那么多，放大重渲只是白花内存）。
         // 它在后台按"可见区 + 256 设备像素"渲一块设备分辨率小图，底图永远 1×。
         DisposeDocPatch();
-        if (_pdfDoc != null)
-        {
-            DocPatch = new DocPatchCache(_pdfDoc,
-                i => DocView.At(i)?.Rect,
-                () => DocView.Count,
-                WakeForDocPage);
-            DocPatch.SetScale(ViewScale);
-        }
+        EnsureDocPatch();
 
         LoadDocInk(storeKey);
         ClampViewOffset();
@@ -642,6 +644,23 @@ public partial class InkEngine
     {
         DocPatch?.Dispose();
         DocPatch = null;
+    }
+
+    /// <summary>
+    /// 建好高清补丁缓存（PDF 才有；图片文档 / 没有文档时什么都不做）。
+    /// **两条路都走它**：新文档成功之后（<see cref="StartDocView"/>），
+    /// 以及"新文档打不开、旧文档还开着"的失败回滚——
+    /// 打开前先 <see cref="DisposeDocPatch"/> 停掉了旧 worker，失败时不补回来，
+    /// 还开着的旧文档就再也没有高清补丁了（一次失败的打开不该让当前文档降级）。
+    /// </summary>
+    private void EnsureDocPatch()
+    {
+        if (_pdfDoc == null || DocPatch != null) return;
+        DocPatch = new DocPatchCache(_pdfDoc,
+            i => DocView.At(i)?.Rect,
+            () => DocView.Count,
+            WakeForDocPage);
+        DocPatch.SetScale(ViewScale);
     }
 
     /// <summary>

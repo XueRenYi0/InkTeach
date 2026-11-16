@@ -309,8 +309,10 @@ internal sealed partial class OverlayWindow : IDisposable
     /// **这个 bug 实测踩过**：滚到 -1800 之后写的那一笔，画布坐标是 y=2500，
     /// 而筛选用的是 [0,1800]，于是它被当成"不在视野里"跳过了，屏幕上一个像素
     /// 都没有——表现就是"滚下去写的字看不见，滚回顶部又一切正常"。
+    ///
+    /// internal：引擎每帧挑"驱动高清补丁的那个窗口"时要用（见 `InkEngine.ChooseDocPatchDriver`）。
     /// </summary>
-    private RectF VisibleCanvasRect => new()
+    internal RectF VisibleCanvasRect => new()
     {
         MinX = WindowToCanvasX(OriginX),
         MinY = WindowToCanvasY(OriginY),

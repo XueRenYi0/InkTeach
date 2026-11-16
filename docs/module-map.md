@@ -39,7 +39,7 @@
 | 导出/剪贴板 | `InkEngine/Input/Engine.Clipboard.cs` | `InkEngine/Export/Export.cs` · `Clipboard*.cs` | `--iotest` |
 | 自动存档/恢复 | `InkEngine/Core/Recovery.cs` | `InkEngine/Core/Engine.cs` 自动存档段 | `--recoverytest` |
 | 板书历史 | `InkEngine/Core/BoardHistory.cs` | `InkEngine/Core/Engine.cs` 板书历史段 | `--recoverytest` |
-| 文档页（PDF/图片） | `InkEngine/Doc/DocImport.cs` | `DocPages.cs`（1× 底图） · `DocPatch.cs`（可见区高清补丁） · `Pdfium.cs` · `DocStore.cs` · `DocResumeStore.cs`（上次看到第几页） | `--doctest` / `--zoomtest` / `--docmem` |
+| 文档页（PDF/图片） | `InkEngine/Doc/DocImport.cs` | `DocPages.cs`（1× 底图） · `DocPatch.cs`（可见区高清补丁；每帧由 `Engine.Host.cs` 的 `SyncDocPatch` 挑压着页的窗口驱动） · `Pdfium.cs` · `DocStore.cs` · `DocResumeStore.cs`（上次看到第几页） | `--doctest` / `--zoomtest` / `--docmem` |
 | PPT 批注 | `InkEngine/Ppt/Ppt.cs` | `PptLaunch.cs` · `PptLink.cs` · `PptComLate.cs` | `--ppttest` |
 | 回放 | `InkEngine/Replay/Replay.cs` | `Rendering/Overlay.Readout.cs` 回放段 | `--replaytest` |
 | AI 题卡 | `InkEngine/Ai/AiCard.cs` | `AiQuestionClient.cs` · `Shapes/FigureRenderer.cs` | `--imgcardtest` |

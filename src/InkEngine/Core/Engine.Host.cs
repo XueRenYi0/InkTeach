@@ -1443,6 +1443,100 @@ public partial class InkEngine
         return false;
     }
 
+    // ======================================================================
+    //  文档高清补丁：每帧同步一次（由引擎挑驱动窗口）
+    // ======================================================================
+
+    /// <summary>
+    /// 每帧一次的高清补丁同步。**排在相机推给各窗口之后、`RenderFrame` 之前**：
+    /// 那时每个窗口的 `VisibleCanvasRect` 才是这一帧真正要画的那块。
+    /// 关着文档 / 页让位（穿透、不透明白板）时不动——页让位的收尾由窗口那拍的
+    /// <see cref="DocPatchCache.ReleaseAll"/> 负责（补丁也一起收）。
+    /// </summary>
+    private void SyncDocPatch()
+    {
+        var patch = DocPatch;
+        if (patch == null || !DocView.IsOpen) return;
+        if (PassThrough || (BoardOn && BoardOpacity >= 0.999f)) return;
+
+        int n = _windows.Count;
+        if (n == 0) return;
+
+        // 两个小数组（每帧 ≤ 8 个窗口，走栈）——不为此加字段，也不每帧分配 List。
+        Span<RectF> canvases = n <= 8 ? stackalloc RectF[n] : new RectF[n];
+        Span<RectF> screens = n <= 8 ? stackalloc RectF[n] : new RectF[n];
+        for (int i = 0; i < n; i++)
+        {
+            var w = _windows[i];
+            canvases[i] = w.VisibleCanvasRect;
+            screens[i] = new RectF
+            {
+                MinX = w.OriginX, MinY = w.OriginY,
+                MaxX = w.OriginX + w.Width, MaxY = w.OriginY + w.Height,
+            };
+        }
+
+        int driver = ChooseDocPatchDriver(canvases, screens);
+        if (driver < 0) return;
+
+        // 冻结页（半透明白板）只画 1× 底图 → 整层不建补丁。
+        patch.Sync(canvases[driver], NowMs, BoardFrozenDocActive ? BoardFrozenDocPage : -1);
+    }
+
+    /// <summary>
+    /// 这一帧由**哪个窗口**驱动高清补丁（-1 = 没有候选）。
+    ///
+    /// 为什么不是"枚举到的第一个窗口"（2026-11-16 评审 P0-2）：`_windows` 的顺序来自
+    /// EnumDisplayMonitors，投影仪 / 副屏很可能排在第一位。它要是不压在页上
+    /// （页锚在**主屏中心**），按它算出来的可见矩形根本碰不到页 → 补丁永远排不出来，
+    /// 主屏就是一整片 1× 拉伸的糊图。
+    ///
+    /// 判据 = **与可见页重叠面积最大**；面积相同（两块屏看到的是同一页）时取
+    /// **包含主屏中心**的那一块——页锚在那里，那块才是"老师正看着的屏"。
+    /// 纯几何、不碰窗口对象，所以 `--zoomtest` 能伪造一块副屏来验它。
+    /// </summary>
+    internal int ChooseDocPatchDriver(ReadOnlySpan<RectF> canvasRects, ReadOnlySpan<RectF> screenRects)
+    {
+        int count = Math.Min(canvasRects.Length, screenRects.Length);
+        if (count == 0) return -1;
+
+        float px = (_primaryW > 0 ? _primaryW : _virtualW) * 0.5f;
+        float py = (_primaryH > 0 ? _primaryH : _virtualH) * 0.5f;
+
+        int best = -1;
+        float bestArea = -1f;
+        bool bestPrimary = false;
+        for (int i = 0; i < count; i++)
+        {
+            float area = DocPagesOverlapArea(canvasRects[i]);
+            var s = screenRects[i];
+            bool primary = s.MinX <= px && px < s.MaxX && s.MinY <= py && py < s.MaxY;
+            bool better = area > bestArea + 0.5f
+                          || (MathF.Abs(area - bestArea) <= 0.5f && primary && !bestPrimary);
+            if (!better) continue;
+            best = i;
+            bestArea = area;
+            bestPrimary = primary;
+        }
+        return best;
+    }
+
+    /// <summary>这块画布矩形压住了多少"打开着的页"（画布单位面积；0 = 完全没压在页上）。</summary>
+    private float DocPagesOverlapArea(in RectF canvas)
+    {
+        float sum = 0f;
+        int n = DocView.Count;
+        for (int i = 0; i < n; i++)
+        {
+            var page = DocView.At(i)?.Rect;
+            if (page is not { } pr) continue;
+            float w = MathF.Min(canvas.MaxX, pr.MaxX) - MathF.Max(canvas.MinX, pr.MinX);
+            float h = MathF.Min(canvas.MaxY, pr.MaxY) - MathF.Max(canvas.MinY, pr.MinY);
+            if (w > 0f && h > 0f) sum += w * h;
+        }
+        return sum;
+    }
+
     /// <summary>把消息队列里现有的消息全部处理掉，不阻塞。测试模式复用同一份，
     /// 免得"测量用的循环"和"真正的循环"因为顺序不同而量出两个结论。</summary>
     internal void DrainMessages()
@@ -1550,6 +1644,10 @@ public partial class InkEngine
             w.ViewScale = ViewScale;      // 阶段 1 = 1：渲染层先接上，不改观感
         }
 
+        // 高清补丁：**每帧一次、由引擎挑驱动窗口**（相机已经推给各窗口，所以这里算出来的
+        // 可见矩形就是这一帧真正要画的那块）。判据见 ChooseDocPatchDriver。
+        SyncDocPatch();
+
         // 面板的接输入小窗跟着界面这一刻占的地方走（方案 B）。
         // 放在渲染之前：这一帧界面画在哪，输入就该收在哪，两件事同源。
         UpdateUiInputWindow();
@@ -1567,6 +1665,12 @@ public partial class InkEngine
 
         foreach (var w in _windows)
             w.RenderFrame(this);
+
+        // 补丁脏区是**广播**的：每个窗口都要把这块分块重铺一遍，所以**所有**窗口都渲染完之后
+        // 才由引擎清（哪个窗口先清，后面的窗口就漏铺 → 副屏留着上一张高清图）。
+        // 见 `OverlayWindow.SyncDocPages` 里那段"只标记、不清单"。
+        DocPatch?.DirtyRects.Clear();
+
         foreach (var w in _windows)
             w.Present();
 

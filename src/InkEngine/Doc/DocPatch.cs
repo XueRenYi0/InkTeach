@@ -21,18 +21,21 @@ namespace InkEngine;
 ///   · **代次**：换倍率 / 收补丁 / 关文档都 +1，在途结果对不上就当场丢掉；
 ///   · **落稳 120ms**：滚动/缩放过程中不排队（否则每帧一个请求）；
 ///   · **旧补丁不撤**：新补丁就绪前一直画着旧的——否则会有一帧"既没补丁也没高清"的灰闪。
+///     换倍率也一样：旧倍率的补丁**继续拉伸着画**，只把"覆盖"判据作废（会在新倍率重渲一块），
+///     直到新补丁被采纳为止（2026-11-16 评审 P1-3）。
 ///
 /// ## 坐标
 /// 页矩形是画布坐标（100% 基准）；补丁的位图是**设备像素**：
 ///   `fullW = round(页宽 × scale)`、`rx = round((补丁.MinX − 页.MinX) × scale)`。
 /// 画的时候用的 `CanvasRect` 是**同一组取整后的设备矩形反算**回来的
 /// （`canvas = 页.Min + device / scale`），所以补丁和底图、墨迹严格对齐。
+/// `CanvasRect` 与倍率无关，所以换倍率时它仍然可以直接拿来回测算脏区。
 ///
 /// ## 归谁管
 /// - 只有 PDF 文档（`_pdfDoc != null`）才建；图片页源像素就那么多，放大重渲只是白花内存。
 /// - 穿透 / 白板不透明（页让位）时 <see cref="ReleaseAll"/>：补丁也收起来，别再问。
-/// - 多显示器只由**第一个覆盖窗口**驱动（各窗口共用同一套相机/画布坐标；
-///   每个窗口各排一份会互相踩掉对方的请求）。
+/// - 多显示器：**每帧只由引擎挑的那一个窗口驱动**（各窗口共用同一套相机/画布坐标；
+///   每个窗口各排一份会互相踩掉对方的请求）。挑谁见 `InkEngine.ChooseDocPatchDriver`。
 /// </summary>
 internal sealed class DocPatchCache : IDisposable
 {
@@ -93,8 +96,13 @@ internal sealed class DocPatchCache : IDisposable
     private bool _hasLastVisible;
     private double _settleAtMs;
     private bool _settled;
+    /// <summary>白板冻结页（-1 = 没有）：那一页只画 1× 底图，别为它排队/留补丁。</summary>
+    private int _frozenPage = -1;
 
-    /// <summary>补丁变了哪几块（画布矩形）。渲染层照单 MarkDirty，读完自己清。</summary>
+    /// <summary>
+    /// 补丁变了哪几块（画布矩形）。渲染层照单 MarkDirty，**由引擎在所有窗口都渲染完之后清**
+    /// （每个窗口都要铺一遍自己那块分块；哪个窗口先清，后面的窗口就漏铺）。
+    /// </summary>
     internal readonly List<RectF> DirtyRects = new();
 
     /// <summary>提交/撤销计数（自检口径：同一倍率不该反复重做）。</summary>
@@ -160,7 +168,15 @@ internal sealed class DocPatchCache : IDisposable
     }
 
     /// <summary>
-    /// 主循环"还需要出帧吗"：>100% 且还有页缺补丁 / 有请求在排队 / 等落稳。
+    /// 主循环"还需要出帧吗"。
+    ///
+    /// **只在三种情况下要**（2026-11-16 评审 P2-4）：
+    ///   ① 补丁已经渲好、等这一拍采纳（`_ready`）；
+    ///   ② 相机还在动、落稳窗没到（`_settled == false`）——不继续出帧，落稳计时就永远不推进，
+    ///      补丁也永远排不出来；
+    ///   ③ 上一拍的结论是"还缺补丁"，而这一拍还没把请求排出去（同一件事的收尾）。
+    /// 请求在排队 / 在渲（`_queued` / `_inFlight`）时**不返回 true**：worker 渲完会自己叫醒主循环
+    /// （见 <c>_wake</c>），那期间空转出帧只是白烧 CPU。
     ///
     /// **为什么放这里**（而不是让覆盖窗口再存一个字段）：ADR-005 禁止给 Overlay 加私有字段，
     /// 新状态归组合对象——这个类就是那个组合对象（和分块缓存的 `TileScalePending` 同一个用途：
@@ -171,8 +187,9 @@ internal sealed class DocPatchCache : IDisposable
         get
         {
             if (_disposed || _suspended || _scale <= 1.0001f) return false;
-            if (_needsMore) return true;
-            lock (_gate) return _queued != null || _inFlight != null || _ready != null;
+            lock (_gate) if (_ready != null) return true;
+            if (HasWork()) return false;
+            return !_settled && _needsMore;
         }
     }
 
@@ -181,8 +198,15 @@ internal sealed class DocPatchCache : IDisposable
     // ======================================================================
 
     /// <summary>
-    /// 换倍率：补丁全部作废（旧倍率的像素不能用），代次 +1，在途结果落地即丢。
-    /// 100%（及以下）不建补丁——绘制路径和以前逐字节一致。
+    /// 换倍率。
+    ///
+    /// **不立刻放掉当前补丁**（2026-11-16 评审 P1-3）：代次 +1（排队/在飞/等采纳的旧倍率结果
+    /// 全部作废），但已经采纳的补丁**继续画着**——`CanvasRect` 与倍率无关，旧像素被拉伸一点，
+    /// 至少不会出现"既没补丁也没高清"的灰闪。它只是**不再算作覆盖**（`Covered` 认倍率），
+    /// 所以落稳后会按新倍率另渲一块，采纳那一刻才把旧的换掉。
+    ///
+    /// 100%（及以下）仍然**全部放掉**：补丁没有意义，底图就是目标分辨率，
+    /// 绘制路径和以前逐字节一致。
     /// </summary>
     public void SetScale(float scale)
     {
@@ -190,9 +214,11 @@ internal sealed class DocPatchCache : IDisposable
         if (!(scale > 0f)) scale = 1f;
         if (MathF.Abs(scale - _scale) < 0.0005f) return;
         _scale = scale;
-        _hasLastVisible = false;
+        _hasLastVisible = false;               // 新倍率 = 新落稳窗（别拿旧窗口排请求）
+        CancelWork();                          // 代次 +1：旧倍率的在途结果落地即丢
         _needsMore = scale > 1.0001f;
-        InvalidateAll();
+        if (scale > 1.0001f) _failed.Clear();  // 换倍率后允许重试一次（失败过的块这次也许渲得出来）
+        else DropPatches();                    // ≤100%：补丁全放（脏区照记，渲染层重铺底图）
     }
 
     /// <summary>
@@ -202,19 +228,19 @@ internal sealed class DocPatchCache : IDisposable
     public void ReleaseAll()
     {
         if (_disposed) return;
-        bool hadWork;
-        lock (_gate) hadWork = _queued != null || _inFlight != null || _ready != null;
-        if (!hadWork && _patches.Count == 0) { _suspended = true; _needsMore = false; return; }
-
         _suspended = true;
         _needsMore = false;
         _hasLastVisible = false;
-        InvalidateAll();
+        if (_patches.Count > 0 || HasWork()) InvalidateAll();
     }
 
     /// <summary>
-    /// 关文档：**先停线程并等它从 PDFium 里出来**，再放位图——PDF 文档随后才 Dispose，
-    /// 反过来的话原生代码会踩到已释放的文档。
+    /// 关文档：**先停线程并等它从 PDFium 里出来**，再放位图——PDF 文档随后才 Dispose。
+    ///
+    /// 等 5 秒是"尽量等干净"（省得 worker 还拿着一块内存），但**安全性不靠它**：
+    /// 到点没停下也没关系——PDFium 的句柄在 <see cref="Pdfium.Gate"/> 里关，
+    /// 迟到的 worker 在锁里查到句柄为 0 就直接返回 null，碰不到已释放的文档
+    /// （2026-11-16 评审 P0-1）。
     /// </summary>
     public void Dispose()
     {
@@ -252,6 +278,17 @@ internal sealed class DocPatchCache : IDisposable
     /// <summary>作废全部补丁 + 请求；脏区照记（渲染层据此重铺）。</summary>
     private void InvalidateAll()
     {
+        CancelWork();
+        DropPatches();
+    }
+
+    /// <summary>
+    /// 撤掉排队 / 在飞 / 等采纳的请求（代次 +1，在途结果落地即丢）。
+    /// **不动已经采纳的补丁**——换倍率走这条路，旧的继续画着（P1-3）。
+    /// in-flight 那个不再需要额外处理：worker 落地时会拿代次对不上而直接放掉。
+    /// </summary>
+    private void CancelWork()
+    {
         _generation++;
         lock (_gate)
         {
@@ -262,6 +299,11 @@ internal sealed class DocPatchCache : IDisposable
                 _ready = null;
             }
         }
+    }
+
+    /// <summary>放掉所有**已采纳**的补丁（脏区照记）。不动代次、不碰排队（见 <see cref="CancelWork"/>）。</summary>
+    private void DropPatches()
+    {
         foreach (var p in _patches.Values)
         {
             DirtyRects.Add(p.CanvasRect);
@@ -277,23 +319,29 @@ internal sealed class DocPatchCache : IDisposable
     // ======================================================================
 
     /// <summary>
-    /// 视口同步（每帧渲染前调一次）。
+    /// 视口同步（每帧渲染前由**引擎**调一次，见 <c>InkEngine.SyncDocPatch</c>）。
     ///
     /// 顺序固定：**先采纳**（ready → 装/丢）→ 收掉离视口的补丁 → 判断还缺什么 →
     /// 落稳了才排一个请求。返回 true = 下一拍还需要出帧（见 <see cref="WantsFrame"/>）。
     ///
     /// ⚠ `settled` 由本类自己算（可见矩形/倍率连续 120ms 没变），不是由覆盖窗口传：
     /// ADR-005 不允许给 Overlay 加私有字段，相机落稳属于补丁这个组合对象的状态。
+    ///
+    /// <paramref name="frozenPage"/>：白板冻结的那一页（-1 = 没有）。它只画 1× 底图，
+    /// 补丁按"当前视口"算完再硬贴会留接缝，所以有冻结页时整层都不建补丁。
     /// </summary>
-    public bool Sync(RectF visibleCanvas, double nowMs)
+    public bool Sync(RectF visibleCanvas, double nowMs, int frozenPage = -1)
     {
         if (_disposed) return false;
         _suspended = false;
+        _frozenPage = frozenPage;
 
         AdoptReady(visibleCanvas);
 
-        if (_scale <= 1.0001f)
+        if (_scale <= 1.0001f || frozenPage >= 0)
         {
+            // ≤100%：补丁没有意义（底图就是目标分辨率）。
+            // 冻结页：整层只画那一页的 1× 底图（DrawDocPages 的 frozen 分支），补丁没有用武之地。
             if (_patches.Count > 0 || HasWork()) InvalidateAll();
             _needsMore = false;
             return false;
@@ -332,22 +380,28 @@ internal sealed class DocPatchCache : IDisposable
         _settled = nowMs >= _settleAtMs;
     }
 
-    /// <summary>补丁已经盖不住视口了（页翻走 / 页被换文档换掉）：放掉，别再画。</summary>
+    /// <summary>
+    /// 补丁已经盖不住视口了（页翻走 / 页被换文档换掉 / 这一页现在只画底图）：放掉，别再画。
+    ///
+    /// **只按"页还在不在、还看不看得见"收，不按倍率收**（2026-11-16 评审 P1-3）：
+    /// 换倍率时旧补丁要一直画着（拉伸一点没关系），直到新倍率的补丁被采纳——
+    /// 这里要是按 `Scale != _scale` 收掉，换倍率那一刻就会闪一帧糊的。
+    /// </summary>
     private void TrimPatches(RectF visible)
     {
         if (_patches.Count == 0) return;
         _scratchKeys.Clear();
         foreach (var kv in _patches)
         {
-            if (_pageRect(kv.Key) == null
-                || !Intersects(visible, kv.Value.CanvasRect)
-                || MathF.Abs(kv.Value.Scale - _scale) > 0.0005f)
+            if (kv.Key == _frozenPage
+                || _pageRect(kv.Key) == null
+                || !Intersects(visible, kv.Value.CanvasRect))
                 _scratchKeys.Add(kv.Key);
         }
         foreach (int key in _scratchKeys)
         {
             if (!_patches.TryGetValue(key, out var p)) continue;
-            // 只有"还在视口里但换了倍率/页没了"才需要重铺；翻走的页本来就不该占脏区。
+            // 只有"还在视口里但页没了 / 改成只画底图"才需要重铺；翻走的页本来就不该占脏区。
             if (Intersects(visible, p.CanvasRect)) DirtyRects.Add(p.CanvasRect);
             p.Image?.Release();
             _patches.Remove(key);
@@ -362,6 +416,7 @@ internal sealed class DocPatchCache : IDisposable
         int n = _pageCount();
         for (int i = 0; i < n; i++)
         {
+            if (i == _frozenPage) continue;       // 冻结页只画 1× 底图，别为它排队
             var page = _pageRect(i);
             if (page is not { } pr || !Intersects(visible, pr)) continue;
             var need = NeededRect(pr, visible, _scale);
@@ -391,6 +446,7 @@ internal sealed class DocPatchCache : IDisposable
         int n = _pageCount();
         for (int i = 0; i < n; i++)
         {
+            if (i == _frozenPage) continue;       // 冻结页只画 1× 底图，别为它排队
             var page = _pageRect(i);
             if (page is not { } pr || !Intersects(visible, pr)) continue;
             var need = NeededRect(pr, visible, _scale);
@@ -514,7 +570,9 @@ internal sealed class DocPatchCache : IDisposable
             }
             if (req == null)
             {
-                _signal.WaitOne(50);        // 没活就睡（有活立即醒；50ms 只是兜底轮询）
+                // 没活就**睡死等**：排请求（QueueBestRequest）和 Dispose 都会 Set 这个信号，
+                // 轮询（老写法 50ms）只会在空闲时白烧 CPU（2026-11-16 评审 P2-4）。
+                _signal.WaitOne();
                 continue;
             }
 

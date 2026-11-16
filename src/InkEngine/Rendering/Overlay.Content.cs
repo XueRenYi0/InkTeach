@@ -163,12 +163,9 @@ internal sealed partial class OverlayWindow
                     Console.WriteLine($"[文档] 页缓存 {pages.ResidentPages} 页 / "
                         + $"{pages.ResidentBytes / 1048576.0:F1} MB");
 
-                // 高清补丁（PDF >100%）：只由**第一个覆盖窗口**驱动——各窗口共用同一套
-                // 相机/画布坐标，每个窗口各排一份请求会互相踩掉对方那一块（内存还翻倍）。
-                // 其他窗口照旧在 DrawDocPages 里把同一块补丁画到同一个画布矩形上。
-                if (app.DocPatch != null
-                    && (app._windows.Count == 0 || ReferenceEquals(app._windows[0], this)))
-                    app.DocPatch.Sync(VisibleCanvasRect, app.NowMs);
+                // 高清补丁（PDF >100%）的同步**不在这里**：由引擎每帧调一次
+                // （`InkEngine.SyncDocPatch`，排在相机推给各窗口之后）——一个窗口算一次就够，
+                // 而且必须挑**压在页上**的那个窗口（2026-11-16 评审 P0-2）。
             }
         }
 
@@ -190,14 +187,17 @@ internal sealed partial class OverlayWindow
 
         // 补丁的脏区并进同一条路（装上新补丁 / 放掉旧补丁 / 换倍率都走这里）：
         // 分块里烘着补丁像素，不重铺的话 100% 会留着上一张高清图、200% 会缺边。
-        if (app.DocPatch != null && app.DocPatch.DirtyRects.Count > 0)
+        //
+        // ⚠ **只标记、不清单**：多显示器下每个窗口都要把这块分块重铺一遍，
+        // 哪个窗口先清，后面的窗口就漏铺（副屏留着上一张高清图）。
+        // 清单一律由引擎在**所有**窗口都渲染完之后清（见 `InkEngine.RenderAll`）。
+        if (app.DocPatch is { } patch)
         {
-            foreach (var r in app.DocPatch.DirtyRects)
+            foreach (var r in patch.DirtyRects)
             {
                 _tiles.MarkDirty(r);
                 _pageDirtyNow.Add(CanvasRectToWindow(r));
             }
-            app.DocPatch.DirtyRects.Clear();
         }
     }
 

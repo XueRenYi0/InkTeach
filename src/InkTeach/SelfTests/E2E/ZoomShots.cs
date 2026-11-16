@@ -386,4 +386,184 @@ internal sealed partial class App
     private static bool CoversRect(in RectF outer, in RectF inner)
         => outer.MinX <= inner.MinX + 0.5f && outer.MinY <= inner.MinY + 0.5f
         && outer.MaxX >= inner.MaxX - 0.5f && outer.MaxY >= inner.MaxY - 0.5f;
+
+    // ======================================================================
+    //  J2 组：驱动窗口 / 换倍率不闪 / 渲到一半关文档（2026-11-16 评审 P0/P1）
+    // ======================================================================
+
+    /// <summary>
+    /// J2：**多窗口驱动**（投影仪排第一也不影响主屏）、**换倍率不闪**（150→200 补丁不归零）、
+    /// **渲到一半关文档**（×20 不崩）、以及"打开失败不动当前文档"。
+    ///
+    /// 这一组会反复开关文档，所以排在 `--zoomtest` 的最后（`ZoomTestWorker` 之后）：
+    /// 前面的组都还在用同一个打开的 PDF。
+    /// </summary>
+    private void ZoomTestPatchStress(Action<string, bool, string> check, string pdf)
+    {
+        Console.WriteLine("  -- J2 驱动窗口 / 150→200 不闪 / 渲到一半关文档 ×20 / 打开失败不动当前文档 --");
+        ZoomTestPatchDriver(check);
+        ZoomTestPatchOpenFailure(check);
+        ZoomTestPatchScaleSwitch(check);
+        ZoomTestPatchCloseDuringRender(check, pdf);
+    }
+
+    /// <summary>
+    /// 驱动窗口怎么挑：**压在页上的那块屏**，不是"枚举到的第一个窗口"。
+    /// 用伪造的屏幕矩形验（真机上把投影仪插到第一位才会踩到这个 bug），
+    /// 再用真实窗口验一次"挑中的那块确实压在页上"。
+    /// </summary>
+    private void ZoomTestPatchDriver(Action<string, bool, string> check)
+    {
+        var page = DocView.At(0).Rect;
+        float halfW = (page.MaxX - page.MinX) * 0.5f;
+        int primW = Native.GetSystemMetrics(0);
+        int primH = Native.GetSystemMetrics(1);
+        if (primW <= 0) primW = _virtualW;
+        if (primH <= 0) primH = _virtualH;
+
+        // 投影仪排在 _windows[0]：它的可见矩形整块在页右边（页锚在主屏中心，投影仪上什么都没有）
+        var projCanvas = new RectF
+        {
+            MinX = page.MaxX + 200f, MinY = page.MinY,
+            MaxX = page.MaxX + 200f + 800f, MaxY = page.MinY + 800f,
+        };
+        var projScreen = new RectF
+        {
+            MinX = primW + 200f, MinY = 0f,
+            MaxX = primW + 200f + _virtualW, MaxY = _virtualH,
+        };
+        var mainScreen = new RectF { MinX = 0f, MinY = 0f, MaxX = primW, MaxY = primH };
+
+        int pick = ChooseDocPatchDriver(
+            new[] { projCanvas, page }, new[] { projScreen, mainScreen });
+        check("驱动窗口：投影仪排在第一（不压页）时选压着页的主屏", pick == 1, $"选中 #{pick}");
+
+        // 面积相同 → 取包含主屏中心的那块（页锚在主屏中心）
+        var leftHalf = new RectF { MinX = page.MinX, MinY = page.MinY, MaxX = page.MinX + halfW, MaxY = page.MaxY };
+        var rightHalf = new RectF { MinX = page.MinX + halfW, MinY = page.MinY, MaxX = page.MaxX, MaxY = page.MaxY };
+        int tie = ChooseDocPatchDriver(
+            new[] { leftHalf, rightHalf }, new[] { projScreen, mainScreen });
+        check("驱动窗口：重叠面积相同时取包含主屏中心的那个", tie == 1, $"选中 #{tie}");
+
+        // 真实窗口：挑中的那块必须真的压在页上（不然补丁永远排不出来）
+        int n = _windows.Count;
+        var canvases = new RectF[n];
+        var screens = new RectF[n];
+        for (int i = 0; i < n; i++)
+        {
+            var w = _windows[i];
+            canvases[i] = w.VisibleCanvasRect;
+            screens[i] = new RectF
+            {
+                MinX = w.OriginX, MinY = w.OriginY,
+                MaxX = w.OriginX + w.Width, MaxY = w.OriginY + w.Height,
+            };
+        }
+        int real = ChooseDocPatchDriver(canvases, screens);
+        var hit = real >= 0 ? Intersect(canvases[real], page) : RectF.Empty;
+        check("驱动窗口：本机真实窗口里挑中的那块确实压在页上",
+              real >= 0 && !hit.IsEmpty && hit.MaxX > hit.MinX && hit.MaxY > hit.MinY,
+              real < 0 ? "没有候选" : $"#{real}，与页重叠 {hit.MaxX - hit.MinX:F0}×{hit.MaxY - hit.MinY:F0}");
+    }
+
+    /// <summary>
+    /// 打开新文档失败时**不能动当前文档**（评审 P0-1 的失败回滚）：
+    /// 打开前会先停掉旧补丁 worker，失败必须把补丁缓存补回给还开着的旧文档。
+    /// </summary>
+    private void ZoomTestPatchOpenFailure(Action<string, bool, string> check)
+    {
+        int pagesBefore = DocView.Count;
+        string missing = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), "inkteach-zoomtest", "这份文件不存在.pdf");
+        try { System.IO.File.Delete(missing); } catch { /* 有意忽略：删不掉就是本来没有 */ }
+
+        string err = OpenDocuments(new[] { missing });
+        SettleFrames(120);
+        check("打开失败：仍开着原来那份（页数不变）、补丁缓存还在",
+              err != null && DocView.IsOpen && DocView.Count == pagesBefore && DocPatch != null,
+              err == null ? "竟然打开了" : $"{err}；页={DocView.Count} 补丁={(DocPatch != null)}");
+        check("打开失败：旧文档的高清补丁能被重新排出来（缓存是新建的、空的）",
+              DocPatch != null && DocPatch.PatchCount == 0 && ZoomTestWaitPatch(0, 4000),
+              $"补丁={DocPatch?.PatchCount ?? -1} / {DocPatch?.PatchBytes / 1048576.0 ?? 0:F1}MB");
+    }
+
+    /// <summary>
+    /// 换倍率**不许把当前补丁放掉**（评审 P1-3）：150% → 200% 全程 `PatchCount` 一直是 1，
+    /// 拉伸着画旧补丁，直到新倍率那块被采纳。
+    /// </summary>
+    private void ZoomTestPatchScaleSwitch(Action<string, bool, string> check)
+    {
+        SetDocZoomFromUi(1.5f);
+        SettleFrames(320);
+        bool ok150 = ZoomTestWaitPatch(0, 4000);
+        int before = DocPatch?.PatchCount ?? 0;
+
+        SetDocZoomFromUi(2f);
+        bool neverZero = true;
+        int minSeen = int.MaxValue;
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 4000)
+        {
+            SettleFrames(16);
+            int c = DocPatch?.PatchCount ?? 0;
+            if (c < minSeen) minSeen = c;
+            if (c == 0) neverZero = false;
+            if (DocPatch != null && MathF.Abs(DocPatch.Scale - 2f) < 1e-3f && DocPatch.HasPatch(0)) break;
+        }
+        check("150%→200%：过渡期旧补丁一直在（PatchCount 没归零）",
+              ok150 && before >= 1 && neverZero && minSeen >= 1,
+              $"150% 补丁={before}，过渡最少 {minSeen} 块");
+        check("150%→200%：结束时补丁已换成新倍率",
+              DocPatch != null && MathF.Abs(DocPatch.Scale - 2f) < 1e-3f && DocPatch.HasPatch(0),
+              $"倍率={DocPatch?.Scale ?? 0:F2}，补丁={DocPatch?.PatchCount ?? 0}");
+    }
+
+    /// <summary>
+    /// **渲到一半关文档**（评审 P0-1）：请求刚排出去（worker 正拿着 PdfiumDoc 在 PDFium 里渲）
+    /// 就关文档，反复 20 次。判据是"进程没死、每次都能干净收场"——
+    /// 原生踩到已释放的文档会是访问违例，自检会当场崩掉，不会悄悄通过。
+    /// </summary>
+    private void ZoomTestPatchCloseDuringRender(Action<string, bool, string> check, string pdf)
+    {
+        DocPageWorker = true;
+        DocView.UseWorker = true;
+        const int cycles = 20;
+        int done = 0, queued = 0;
+        string why = "";
+
+        for (int i = 0; i < cycles; i++)
+        {
+            var err = OpenDocuments(new[] { pdf });
+            if (err != null) { why = $"第 {i + 1} 轮打开失败：{err}"; break; }
+            SetDocZoomFromUi(2f);
+
+            // 固定起点：视口贴第 1 页页顶（不依赖上一轮把相机丢在哪）
+            float top = DocView.At(0).Rect.MinY;
+            ViewOffsetY = _virtualY - top * ViewScale;
+
+            // 先落稳、拿到这一块补丁（之后 _settled 保持 true，下一帧就能立刻排新请求）
+            var swP = Stopwatch.StartNew();
+            while (swP.ElapsedMilliseconds < 3000 && (DocPatch == null || DocPatch.PatchCount == 0))
+                SettleFrames(16);
+            if (DocPatch == null) { why = $"第 {i + 1} 轮没有补丁缓存"; break; }
+
+            // 往页里挪 400 画布像素（= 800 设备像素，超出 256 余量）：旧补丁盖不住，
+            // 落稳窗一过**必然**排一个新请求，worker 随即拿着 PdfiumDoc 进 PDFium。
+            ViewOffsetY -= 400f;
+            int req0 = DocPatch.RequestCount;
+            var swR = Stopwatch.StartNew();
+            while (swR.ElapsedMilliseconds < 1500 && DocPatch.RequestCount == req0)
+                SettleFrames(16);
+            if (DocPatch.RequestCount > req0) queued++;
+
+            done++;
+            CloseDocument();          // 请求刚排出去 / 正在渲：关文档必须不崩、不留尾巴
+        }
+
+        check($"渲染在飞时关文档 ×{cycles}：不崩、补丁与页都收干净",
+              done == cycles && queued == cycles && DocPatch == null && !DocView.IsOpen,
+              why.Length > 0 ? why
+                  : $"完成 {done} 轮（{queued} 轮确实排出了新请求），"
+                    + $"DocPatch={(DocPatch == null ? "已释放" : "还挂着")}");
+    }
 }

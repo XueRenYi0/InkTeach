@@ -136,7 +136,7 @@
 | 2655 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
 | 2713 | 延时探针（见 Latency.cs） |
 
-## src/InkEngine/Core/Engine.Host.cs（2,231 行）
+## src/InkEngine/Core/Engine.Host.cs（2,335 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -162,7 +162,8 @@
 | 998 | "到底有没有中间点可捞"的自适应判据（2026-10-07 加） |
 | 1209 | 放映期间的"临时全局热键"（2026-09-30 用户定方案①） |
 | 1288 | Message loop |
-| 1817 | Window procedure |
+| 1446 | 文档高清补丁：每帧同步一次（由引擎挑驱动窗口） |
+| 1921 | Window procedure |
 
 ## src/InkEngine/Core/Engine.Selection.Gesture.cs（1,466 行）
 
@@ -369,7 +370,7 @@
 | 2638 | 自定义取色板（8.2.0，色相条 + 饱和度/明度方块）的尺寸（逻辑像素） |
 | 3299 | 选中条弹层（AI / `⋯` 共用一套几何，2026-11-08） |
 
-## src/InkEngine/Doc/DocImport.cs（696 行）
+## src/InkEngine/Doc/DocImport.cs（715 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -396,21 +397,21 @@
 | 334 | 视口窗口：生成与回收 |
 | 545 | 查询（翻页 / 相机范围 / 渲染） |
 
-## src/InkEngine/Doc/DocPatch.cs（602 行）
+## src/InkEngine/Doc/DocPatch.cs（660 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
-| 37 | `internal sealed class DocPatchCache : IDisposable` |
-| 46 | `internal sealed class Patch` |
-| 60 | `private sealed class Request` |
+| 40 | `internal sealed class DocPatchCache : IDisposable` |
+| 49 | `internal sealed class Patch` |
+| 63 | `private sealed class Request` |
 
 | 行 | 段落 |
 | --- | --- |
-| 122 | 查询 |
-| 179 | 倍率 / 让开 / 关闭 |
-| 275 | 每帧同步（UI 线程） |
-| 499 | 后台渲染线程 |
-| 573 | 几何小工具 |
+| 130 | 查询 |
+| 196 | 倍率 / 让开 / 关闭 |
+| 317 | 每帧同步（UI 线程） |
+| 555 | 后台渲染线程 |
+| 631 | 几何小工具 |
 
 ## src/InkEngine/Export/Export.cs（1,178 行）
 
@@ -799,22 +800,22 @@
 | --- | --- |
 | 23 | Content layer |
 
-## src/InkEngine/Rendering/Overlay.cs（1,415 行）
+## src/InkEngine/Rendering/Overlay.cs（1,417 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 20 | `internal static class Mem` |
 | 52 | `internal static class Gfx` |
 | 270 | `internal sealed partial class OverlayWindow : IDisposable` |
-| 336 | `internal struct ScrollBarLayout` |
+| 338 | `internal struct ScrollBarLayout` |
 
 | 行 | 段落 |
 | --- | --- |
-| 419 | 内容层（画布空间分块缓存） |
-| 463 | 界面缓存 |
-| 478 | 脏区上屏状态 |
-| 749 | 延时探针 |
-| 804 | 委托墨迹轨迹（微软的低延迟湿墨通道） |
+| 421 | 内容层（画布空间分块缓存） |
+| 465 | 界面缓存 |
+| 480 | 脏区上屏状态 |
+| 751 | 延时探针 |
+| 806 | 委托墨迹轨迹（微软的低延迟湿墨通道） |
 
 ## src/InkEngine/Rendering/Overlay.Frame.cs（1,662 行）
 
@@ -1668,7 +1669,7 @@
 | 1226 | ④ 第二根手指按下：正在写的那一笔不许被换掉 |
 | 1251 | 收尾：两根一起抬，交进文档 |
 
-## src/InkTeach/SelfTests/E2E/Zoom.cs（770 行）
+## src/InkTeach/SelfTests/E2E/Zoom.cs（771 行）
 
 | 行 | 顶层类型 |
 | --- | --- |

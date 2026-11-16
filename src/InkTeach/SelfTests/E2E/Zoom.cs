@@ -80,6 +80,7 @@ internal sealed partial class App
             ZoomTestBarAndPan(Check);       // G：文档条缩放组 / 档位浮层 / 横向拖页 / Ctrl+滚轮
             ZoomTestSelectionFurniture(Check, pdf);   // H：选中家具在 200% 下保持屏幕尺寸
             ZoomTestWorker(Check, pdf);     // F：worker 代次
+            ZoomTestPatchStress(Check, pdf);   // J2：驱动窗口 / 换倍率不闪 / 渲到一半关文档 ×20
 
             CloseDocument();
             Check("关文档：高清补丁全部释放（DocPatch 置空）", DocPatch == null,

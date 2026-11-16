@@ -23,7 +23,7 @@
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 156 行
       - `Engine.cs` 2,867 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
-      - `Engine.Host.cs` 2,231 行 — 启动、消息循环、窗口过程（WndProc）。
+      - `Engine.Host.cs` 2,335 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
       - `Engine.Selection.Gesture.cs` 1,466 行 — 框选/套索/拖动/对齐吸附/美化入口。
@@ -49,16 +49,16 @@
 
     **InkEngine/Doc/**
       - `DocImageSource.cs` 292 行
-      - `DocImport.cs` 696 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
+      - `DocImport.cs` 715 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
       - `DocImport.Pan.cs` 167 行 — 文档「手掌」拖页：文档模式下按下拖动平移相机（不落墨、不选中）。
       - `DocMemory.cs` 85 行
       - `DocPages.cs` 602 行 — 文档页底层：页配方、惰性生成、视口窗口回收；缩放只记相机倍率（页位图恒 1×）。
-      - `DocPatch.cs` 602 行 — PDF 页的**视口高清补丁**：1× 整页底图之上，只为可见区域渲一块设备分辨率小图（单 worker、单在飞、落稳 120ms）。
+      - `DocPatch.cs` 660 行 — PDF 页的**视口高清补丁**：1× 整页底图之上，只为可见区域渲一块设备分辨率小图（单 worker、单在飞、落稳 120ms）。
       - `DocResume.cs` 340 行 — 文档「上次看到第 N 页」恢复提示：读写位置、卡片命中、继续/从头、落盘节流。
       - `DocResumeLayout.cs` 97 行 — 文档恢复提示卡的几何：卡片 / 两行字 / 两个按钮的矩形（画与命中同一份）。
       - `DocResumeStore.cs` 135 行 — 文档「上次看到第几页」的落盘：一文档一目录一小文本文件（跨会话恢复用）。
       - `DocStore.cs` 246 行
-      - `Pdfium.cs` 371 行
+      - `Pdfium.cs` 412 行
 
     **InkEngine/Export/**
       - `ClipboardImage.cs` 191 行
@@ -137,7 +137,7 @@
       - `LegacyOverlayLayer.cs` 74 行
       - `Overlay.Capture.cs` 789 行 — 截图取景框绘制：遮罩/准线/读数/手柄。
       - `Overlay.Content.cs` 756 行 — 内容层合成：分块光栅、相机变换、缩放合成、滚动条。
-      - `Overlay.cs` 1,415 行 — 覆盖层主文件：窗口/初始化/生命周期。
+      - `Overlay.cs` 1,417 行 — 覆盖层主文件：窗口/初始化/生命周期。
       - `Overlay.Frame.cs` 1,662 行 — 覆盖层帧渲染：内容/界面/装饰合成。
       - `Overlay.PptBar.cs` 785 行 — PPT 条/回放条/滚动条绘制。
       - `Overlay.Radial.cs` 657 行 — 呼出盘绘制。
@@ -297,9 +297,9 @@
         - `TextStyleShow.cs` 125 行
         - `ToastTest.cs` 43 行
         - `Touch.cs` 1,271 行 — 触摸手势 E2E。
-        - `Zoom.cs` 770 行 — 文档缩放 E2E（阶段 2：渲染核心 + 引擎缩放 API）。
+        - `Zoom.cs` 771 行 — 文档缩放 E2E（阶段 2：渲染核心 + 引擎缩放 API）。
         - `ZoomSelection.cs` 211 行 — 文档缩放 E2E（选中家具：手柄 / 操作条 / 面板 / 旋转柄在缩放下的屏幕恒定性）。
-        - `ZoomShots.cs` 389 行 — 文档缩放 E2E：出图（50/100/200 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
+        - `ZoomShots.cs` 569 行 — 文档缩放 E2E：出图（50/100/200 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
 
       **InkTeach/SelfTests/Unit/**
         - `UnitTestRunner.cs` 135 行

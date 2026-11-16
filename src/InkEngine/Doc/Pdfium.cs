@@ -15,9 +15,11 @@ namespace InkEngine;
 /// 许可：PDFium 本体 BSD-3-Clause，第三方（freetype/harfbuzz/icu/libjpeg 等）全宽松。
 /// 详见 src/InkEngine/THIRD-PARTY-NOTICES.md。
 ///
-/// ⚠ **线程安全**：PDFium 自己不是线程安全的。本仓库只在渲染线程调它
-///（所有自检/产品路径都在这条线程），但这里仍加一把静态锁兜底——
-/// 宁可多一次无关紧要的 lock，也不要将来某天在后台线程里踩到它。
+/// ⚠ **线程安全**：PDFium 自己不是线程安全的，而本仓库现在**真的**有两条线程碰它
+/// （补丁 worker 在后台渲一块区域，UI 线程开/关文档、读页尺寸）。所以：
+///   · 所有碰句柄的调用都在 <see cref="Gate"/> 里（开、关、页尺寸、整页渲、区域渲）；
+///   · **句柄是否为空也在锁里查**——"读字段 → 调原生"之间句柄可能刚被另一条线程关掉，
+///     在外面查等于没查（2026-11-16 评审 P0-1）。
 /// </summary>
 internal static class Pdfium
 {
@@ -102,7 +104,11 @@ internal static class Pdfium
     private static extern uint FPDF_GetLastError();
 
     // ---- 加载与就绪 ------------------------------------------------------------------
-    private static readonly object Gate = new();
+    /// <summary>
+    /// 全局锁：PDFium 不是线程安全的，**所有**碰文档句柄的调用都要在它里面。
+    /// internal 是为了让 <see cref="PdfiumDoc"/> 的 Dispose/Size 也用同一把锁。
+    /// </summary>
+    internal static readonly object Gate = new();
     private static bool _tried;
     private static string _loadError;
 
@@ -221,28 +227,48 @@ internal static class Pdfium
         }
     }
 
-    // ---- 给 PdfiumDoc 用的内部帮手（都在锁里）--------------------------------------
-    internal static bool PageSize(IntPtr doc, int index, out float w, out float h)
+    // ---- 给 PdfiumDoc 用的内部帮手（都在锁里，句柄也在锁里查）----------------------
+
+    /// <summary>
+    /// 页尺寸。**锁里读句柄**：关文档那条线程可能正在关它，锁外读到的句柄
+    /// 下一秒就可能是野指针。
+    /// </summary>
+    internal static bool PageSize(PdfiumDoc owner, int index, out float w, out float h)
     {
-        var size = default(FS_SIZEF);
-        bool ok = FPDF_GetPageSizeByIndexF(doc, index, ref size);
-        w = size.Width;
-        h = size.Height;
-        return ok;
+        w = 595f;
+        h = 842f;
+        if (owner == null) return false;
+        lock (Gate)
+        {
+            IntPtr doc = owner.Handle;
+            if (doc == IntPtr.Zero) return false;
+            var size = default(FS_SIZEF);
+            bool ok = FPDF_GetPageSizeByIndexF(doc, index, ref size);
+            if (ok) { w = size.Width; h = size.Height; }
+            return ok;
+        }
     }
 
-    internal static void CloseDoc(IntPtr doc) => FPDF_CloseDocument(doc);
+    /// <summary>关文档（和渲染同一把锁；句柄为空不调原生）。</summary>
+    internal static void CloseDoc(IntPtr doc)
+    {
+        if (doc == IntPtr.Zero) return;
+        lock (Gate) FPDF_CloseDocument(doc);
+    }
 
     /// <summary>
     /// 渲一页进**我们自己的数组**：白底、按输出尺寸缩放（PDFium 自己缩），返回 BGRA。
     /// </summary>
-    internal static unsafe byte[] Render(IntPtr doc, int index, int outW, int outH)
+    internal static unsafe byte[] Render(PdfiumDoc owner, int index, int outW, int outH)
     {
-        if (outW <= 0 || outH <= 0) return null;
-        var buf = new byte[(long)outW * outH * 4];
+        if (owner == null || outW <= 0 || outH <= 0) return null;
 
         lock (Gate)
         {
+            IntPtr doc = owner.Handle;      // 锁里再查：句柄可能已经被关文档那条线程放掉
+            if (doc == IntPtr.Zero) return null;
+            var buf = new byte[(long)outW * outH * 4];
+
             fixed (byte* p = buf)
             {
                 IntPtr bitmap = FPDFBitmap_CreateEx(outW, outH, FPDFBitmap_BGRA, (IntPtr)p, outW * 4);
@@ -260,8 +286,8 @@ internal static class Pdfium
                 }
                 finally { FPDFBitmap_Destroy(bitmap); }
             }
+            return buf;
         }
-        return buf;
     }
     /// <summary>
     /// 渲一页的**一块区域**（设备像素）进我们自己的数组：白底、整页按
@@ -275,10 +301,10 @@ internal static class Pdfium
     /// 和整页版不是一套（缩放过 1 倍以上时字重会变），这里要和底图逐像素同一套渲染路径。
     /// 区域渲染和整页渲染在重叠区必须逐像素一致（`--zoomtest` 有对照断言）。
     /// </summary>
-    internal static unsafe byte[] RenderRegion(IntPtr doc, int index, int fullW, int fullH,
+    internal static unsafe byte[] RenderRegion(PdfiumDoc owner, int index, int fullW, int fullH,
                                                int rx, int ry, int rw, int rh)
     {
-        if (fullW <= 0 || fullH <= 0 || rw <= 0 || rh <= 0) return null;
+        if (owner == null || fullW <= 0 || fullH <= 0 || rw <= 0 || rh <= 0) return null;
         if (rx < 0) rx = 0;
         if (ry < 0) ry = 0;
         if (rx >= fullW || ry >= fullH) return null;
@@ -287,10 +313,13 @@ internal static class Pdfium
 
         long bytes = (long)rw * rh * 4;
         if (bytes <= 0 || bytes > int.MaxValue) return null;
-        var buf = new byte[(int)bytes];
 
         lock (Gate)
         {
+            IntPtr doc = owner.Handle;      // 锁里再查（同上：补丁 worker 和关文档是两条线程）
+            if (doc == IntPtr.Zero) return null;
+            var buf = new byte[(int)bytes];
+
             fixed (byte* p = buf)
             {
                 IntPtr bitmap = FPDFBitmap_CreateEx(rw, rh, FPDFBitmap_BGRA, (IntPtr)p, rw * 4);
@@ -308,8 +337,8 @@ internal static class Pdfium
                 }
                 finally { FPDFBitmap_Destroy(bitmap); }
             }
+            return buf;
         }
-        return buf;
     }
 }
 
@@ -332,13 +361,19 @@ internal sealed class PdfiumDoc : IDisposable
         _h = new float[pageCount];
     }
 
+    /// <summary>
+    /// 原生句柄（0 = 已经关了）。⚠ **只在 <see cref="Pdfium.Gate"/> 里读**：
+    /// 锁外读到非 0 不代表下一秒还非 0——关文档那条线程随时会把它关掉。
+    /// </summary>
+    internal IntPtr Handle => _doc;
+
     /// <summary>页尺寸（点，1pt = 1/72 英寸）。读不到就给 A4 兜底。</summary>
     public (float W, float H) Size(int index)
     {
         if (index < 0 || index >= PageCount) return (595f, 842f);
         if (_w[index] <= 0.5f)
         {
-            if (!Pdfium.PageSize(_doc, index, out float w, out float h) || w < 0.5f || h < 0.5f)
+            if (!Pdfium.PageSize(this, index, out float w, out float h) || w < 0.5f || h < 0.5f)
             {
                 w = 595f; h = 842f;
             }
@@ -349,23 +384,29 @@ internal sealed class PdfiumDoc : IDisposable
     }
 
     public byte[] RenderPage(int index, int outW, int outH)
-        => _doc == IntPtr.Zero ? null : Pdfium.Render(_doc, index, outW, outH);
+        => Pdfium.Render(this, index, outW, outH);
 
     /// <summary>
     /// 渲第 <paramref name="index"/> 页的一块区域（设备像素；见 <see cref="Pdfium.RenderRegion"/>）。
     /// 高清补丁只走这一条——整页 200% 重渲是 143MB，而这里通常只有一块屏。
     /// </summary>
     public byte[] RenderRegion(int index, int fullW, int fullH, int rx, int ry, int rw, int rh)
-        => _doc == IntPtr.Zero
-            ? null
-            : Pdfium.RenderRegion(_doc, index, fullW, fullH, rx, ry, rw, rh);
+        => Pdfium.RenderRegion(this, index, fullW, fullH, rx, ry, rw, rh);
 
+    /// <summary>
+    /// 关文档。**锁里把句柄摘掉、再在同一把锁里关**：
+    /// 渲染线程可能正拿着它渲（它整段都在锁里），这里等它出来；
+    /// 摘掉之后新来的渲染在锁里查到 0 就直接返回 null，不会碰已释放的文档。
+    /// </summary>
     public void Dispose()
     {
-        if (_doc != IntPtr.Zero)
+        if (_doc == IntPtr.Zero) return;
+        IntPtr doc;
+        lock (Pdfium.Gate)
         {
-            Pdfium.CloseDoc(_doc);
+            doc = _doc;
             _doc = IntPtr.Zero;
         }
+        Pdfium.CloseDoc(doc);
     }
 }
