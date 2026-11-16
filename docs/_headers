@@ -4,5 +4,12 @@
 /*.css
   Cache-Control: public, max-age=604800
 
+/*.js
+  Cache-Control: public, max-age=600
+
+# 发版清单：宁可每次问一次，也别让用户看到上一版的版本号/下载链接。
+/release.json
+  Cache-Control: public, max-age=300, must-revalidate
+
 /
   Cache-Control: public, max-age=0, must-revalidate
