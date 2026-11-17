@@ -288,17 +288,23 @@ internal sealed partial class OverlayWindow : IDisposable
         Matrix3x2.CreateScale(ViewScaleSafe)
         * Matrix3x2.CreateTranslation(-OriginX + ViewOffsetX, -OriginY + ViewOffsetY);
 
-    /// <summary>窗口/屏幕 X → 画布 X（<see cref="CanvasToWindow"/> 的逆）。</summary>
-    private float WindowToCanvasX(float wx) => (wx + OriginX - ViewOffsetX) / ViewScaleSafe;
+    /// <summary>窗口 X → 画布 X（<see cref="CanvasToWindow"/> 的逆；吃的是**窗口坐标**，不是屏幕坐标）。</summary>
+    private float WindowToCanvasX(float wx) => OverlayCoords.WindowToCanvas(wx, ViewScaleSafe, ViewOffsetX, OriginX);
 
-    /// <summary>窗口/屏幕 Y → 画布 Y（<see cref="CanvasToWindow"/> 的逆）。</summary>
-    private float WindowToCanvasY(float wy) => (wy + OriginY - ViewOffsetY) / ViewScaleSafe;
+    /// <summary>窗口 Y → 画布 Y（<see cref="CanvasToWindow"/> 的逆；吃的是**窗口坐标**）。</summary>
+    private float WindowToCanvasY(float wy) => OverlayCoords.WindowToCanvas(wy, ViewScaleSafe, ViewOffsetY, OriginY);
 
-    /// <summary>画布 X → 窗口/屏幕 X（<see cref="CanvasToWindow"/> 同一条式子）。</summary>
-    private float CanvasToWindowX(float cx) => cx * ViewScaleSafe + ViewOffsetX - OriginX;
+    /// <summary>画布 X → 窗口 X（<see cref="CanvasToWindow"/> 同一条式子）。</summary>
+    private float CanvasToWindowX(float cx) => OverlayCoords.CanvasToWindow(cx, ViewScaleSafe, ViewOffsetX, OriginX);
 
-    /// <summary>画布 Y → 窗口/屏幕 Y（<see cref="CanvasToWindow"/> 同一条式子）。</summary>
-    private float CanvasToWindowY(float cy) => cy * ViewScaleSafe + ViewOffsetY - OriginY;
+    /// <summary>画布 Y → 窗口 Y（<see cref="CanvasToWindow"/> 同一条式子）。</summary>
+    private float CanvasToWindowY(float cy) => OverlayCoords.CanvasToWindow(cy, ViewScaleSafe, ViewOffsetY, OriginY);
+
+    /// <summary>屏幕矩形 → 窗口矩形。界面矩形（物理像素、屏幕坐标）进 `_frameDirty` 前必须过它。</summary>
+    private RectF ScreenRectToWindow(in RectF r) => OverlayCoords.ScreenToWindow(r, OriginX, OriginY);
+
+    /// <summary>整个窗口（**窗口坐标** 0..Width × 0..Height）。整屏脏区一律用它。</summary>
+    private RectF FullWindowRect => OverlayCoords.FullWindow(Width, Height);
 
     /// <summary>
     /// 当前**看得见的那块画布**（画布坐标）。
@@ -311,14 +317,12 @@ internal sealed partial class OverlayWindow : IDisposable
     /// 都没有——表现就是"滚下去写的字看不见，滚回顶部又一切正常"。
     ///
     /// internal：引擎每帧挑"驱动高清补丁的那个窗口"时要用（见 `InkEngine.ChooseDocPatchDriver`）。
+    ///
+    /// ⚠ 2026-11-16（残影评审 P0-2）：以前这里传的是 `WindowToCanvasX(OriginX)`——给"窗口 → 画布"
+    /// 喂了屏幕坐标，原点被加了两次。主屏原点 0 看不出来，副屏上可见区整体偏出一个屏宽。
     /// </summary>
-    internal RectF VisibleCanvasRect => new()
-    {
-        MinX = WindowToCanvasX(OriginX),
-        MinY = WindowToCanvasY(OriginY),
-        MaxX = WindowToCanvasX(OriginX + Width),
-        MaxY = WindowToCanvasY(OriginY + Height),
-    };
+    internal RectF VisibleCanvasRect
+        => OverlayCoords.VisibleCanvas(Width, Height, OriginX, OriginY, ViewScaleSafe, ViewOffsetX, ViewOffsetY);
 
     /// <summary>相机缩放 / 偏移（由引擎每帧写进来；见 InkEngine.ViewScale / ViewOffsetY）。</summary>
     internal float ViewOffsetX, ViewOffsetY;
@@ -483,10 +487,38 @@ internal sealed partial class OverlayWindow : IDisposable
     // 最近两帧的临时图元范围，否则快速移动的笔画/激光会留下残影。
     private readonly List<RectF> _frameDirty = new();
     private readonly List<Vortice.RawRect> _presentRects = new();
-    private readonly RectF[] _transientHistory = new RectF[2];
-    private RectF _transientNow = RectF.Empty;
-    /// <summary>上一帧界面占的矩形。界面消失时得靠它把旧画面擦掉。</summary>
-    private RectF _uiBoundsPrev = RectF.Empty;
+    // 临时图元：**每类图元一块**（2026-11-16 残影评审 P1-1）。以前并成一个联合包围盒——
+    // 左上角一个选中框 + 右下角一个 PPT 条就等于整屏，既白画像素，又把这一帧推到 >80% 的整屏兜底。
+    // 三份 List 轮换复用（这一帧 / 上一帧 / 上上帧），每帧不分配。
+    private TransientRects _transientNow = new();
+    private readonly TransientRects[] _transientHistory = { new(), new() };
+
+    /// <summary>一帧的临时图元矩形（窗口坐标）。空矩形不收；复用同一份 List。</summary>
+    private sealed class TransientRects
+    {
+        public readonly List<RectF> Items = new();
+        public void Add(RectF r) { if (!r.IsEmpty) Items.Add(r); }
+        public void Clear() => Items.Clear();
+
+        /// <summary>外接框（只给 Trace 打印用）。</summary>
+        public RectF Bounds
+        {
+            get
+            {
+                var b = RectF.Empty;
+                foreach (var r in Items) b.Add(r);
+                return b;
+            }
+        }
+    }
+    /// <summary>
+    /// 前两帧界面占的矩形（[0] = 上一帧，[1] = 上上帧）。界面移动 / 消失时得靠它把旧画面擦掉。
+    ///
+    /// **为什么是两份、不是一份**（2026-11-16 残影评审 P0-1）：后缓冲里躺着的是**两帧前**的画面，
+    /// 只记上一帧的话，N-2 帧那块旧界面谁也不擦——走 `Present1` 时运行时会从上一缓冲拷过来盖住，
+    /// 走整屏上屏时就原样交上去了（"拖动工具条留下旧画面"）。和 `_transientHistory` 同一套。
+    /// </summary>
+    private readonly RectF[] _uiBoundsHistory = new RectF[2];
     /// <summary>上一帧图库面板占的矩形（窗口坐标）。面板关掉时要靠它把那张卡片擦掉。</summary>
     private RectF _libraryRectPrev = RectF.Empty;
     /// <summary>上一帧选中条弹层（AI/`⋯`）占的矩形（窗口坐标）。</summary>
@@ -531,18 +563,24 @@ internal sealed partial class OverlayWindow : IDisposable
     /// </summary>
     private bool _colorPickWasActive;
 
-    /// <summary>PPT 控件条上一帧的矩形（退出放映 / 拖动那一帧要靠它把旧位置擦干净，
+    /// <summary>上一帧反馈群二维码开着吗——它画在脏区循环外、整屏半透明，开着的每一帧都要整屏重画。</summary>
+    private bool _feedbackQrWasVisible;
+
+    // 下面这一组 `*Prev` 全是**窗口坐标**（几何函数给的是屏幕坐标，存进来之前过
+    // ScreenRectToWindow）：它们下一帧直接进 `_frameDirty`，而那边一律窗口坐标。
+
+    /// <summary>PPT 控件条上一帧的矩形（**窗口坐标**；退出放映 / 拖动那一帧要靠它把旧位置擦干净，
     /// 同 `_libraryRectPrev` 的做法）。</summary>
     private RectF _pptBarRectPrev = RectF.Empty;
-    /// <summary>回放控制条上一帧的矩形（退出回放那一帧要把旧位置擦干净，同 PPT 条）。</summary>
+    /// <summary>回放控制条上一帧的矩形（**窗口坐标**；退出回放那一帧要把旧位置擦干净，同 PPT 条）。</summary>
     private RectF _replayBarRectPrev = RectF.Empty;
-    /// <summary>计时卡片上一帧的矩形（停下 / 收起 / 拖动那一帧要把旧位置擦干净）。</summary>
+    /// <summary>计时卡片上一帧的矩形（**窗口坐标**；停下 / 收起 / 拖动那一帧要把旧位置擦干净）。</summary>
     private RectF _timerRectPrev = RectF.Empty;
-    /// <summary>点名卡片上一帧的矩形。</summary>
+    /// <summary>点名卡片上一帧的矩形（**窗口坐标**）。</summary>
     private RectF _rollRectPrev = RectF.Empty;
-    /// <summary>上一帧文档恢复提示卡占的矩形（关掉 / 换工具那一帧要把旧卡擦干净）。</summary>
+    /// <summary>上一帧文档恢复提示卡占的矩形（**窗口坐标**；关掉 / 换工具那一帧要把旧卡擦干净）。</summary>
     private RectF _docResumeRectPrev = RectF.Empty;
-    /// <summary>引擎侧悬停提示上一帧的矩形（换块 / 隐藏那一帧要把旧卡擦干净，同 PPT 条）。</summary>
+    /// <summary>引擎侧悬停提示上一帧的矩形（**窗口坐标**；换块 / 隐藏那一帧要把旧卡擦干净，同 PPT 条）。</summary>
     private RectF _tipRectPrev = RectF.Empty;
     /// <summary>上一帧轻提示占的矩形：提示到点消失那一帧要把它擦干净。</summary>
     private RectF _toastRectPrev = RectF.Empty;

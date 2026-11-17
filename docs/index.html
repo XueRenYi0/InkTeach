@@ -72,7 +72,12 @@
       <a class="btn ghost" href="#features" data-i18n="hero.more">看看功能</a>
     </p>
     <p class="note" data-i18n="hero.note">免装 .NET · 安装包 {SETUP_MB}MB / 绿色包 {ZIP_MB}MB · 开源 GPL-3.0 · 安装不需要管理员权限</p>
-    <div class="hero-shot"><img loading="eager" fetchpriority="high" src="img/demo.gif" alt="演示：手写一个圆，停顿后变成规整图形，选中拖动，再进入截图取景" data-i18n-alt="hero.alt"></div>
+    <!-- 2026-11-17：GIF（331 KB）换成 MP4（63 KB）+ 封面（12 KB）。
+         首屏流量降到原来的 1/5，OSS 按量付费的流量费也跟着降。
+         封面 poster 先出图，视频只在能自动播放的浏览器里跑；都不支持时浏览器显示 poster。 -->
+    <div class="hero-shot"><video class="hero-video" autoplay muted loop playsinline
+      preload="metadata" poster="img/demo-poster.jpg" width="800" height="710"
+      data-i18n-aria="hero.alt"><source src="img/demo.mp4" type="video/mp4"></video></div>
     <p class="caption" data-i18n="hero.caption">手写一个歪圆 → 停住 0.4 秒自动变规整图形 → 选中拖动 → 截图取景</p>
   </div>
 </section>

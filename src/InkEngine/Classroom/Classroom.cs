@@ -17,7 +17,7 @@ internal enum TimerZone
     Start,       // 开始 / 暂停 / 继续 / 到点重开
     Lap,         // 秒表：分段（只记录，不打断计时）
     Reset,       // 重置回待机
-    Minimize,    // 收成 206×48 小挂钟（点一下还原）
+    Minimize,    // 收成 48 高·按数字算宽 小挂钟（点一下还原）
     Fullscreen,  // 全屏
     Close,       // 停止并关窗（InkClass 同款语义）
     Tab0, Tab1, Tab2, Tab3,
@@ -74,7 +74,7 @@ internal static class WinScale
 /// <summary>
 /// 计时窗几何（**2026-10-05 重设计**，理由见下面那段"为什么重画"）。
 ///
-/// 设计稿 1100×700、卡片内缩 60（卡片 980×580）；改时长态、最小化 206×48、全屏。
+/// 设计稿 1100×700、卡片内缩 60（卡片 980×580）；改时长态、最小化 48 高·按数字算宽、全屏。
 /// 全部乘 u（= DpiScale × 适配缩放）得到物理像素。
 ///
 /// ## 为什么重画（这一段是这次改动的全部理由，别删）
@@ -99,8 +99,36 @@ internal static class WinScale
 internal static class TimerWin
 {
     public const float DW = 1100f, DH = 700f, Inset = 60f;
-    /// <summary>收起后的挂钟：206×48 逻辑（和 PDF 底条同高），整框可拖、单击还原。</summary>
-    public const float MinDW = 206f, MinDH = 48f;
+    /// <summary>收起后的挂钟：**高固定 48**（和 PDF 底条同高），整框可拖、单击还原。</summary>
+    public const float MinDH = 48f;
+
+    /// <summary>
+    /// 收起态宽度**按数字长度算**，不再固定 206（2026-11-17 用户反馈："计时器小化以后
+    /// 左右边距太大，看着不合适"）。
+    ///
+    /// 206 是旧版留的：那时底部还有一条拖动条，宽度是给"数字 + 拖动条"配的；
+    /// 2026-11-16 把拖动条去掉、整框都能拖之后，206 就只剩数字居中的大片留白了
+    /// （48 高的小窗里 27px 的 `12:34` 两侧各空出约 65px）。
+    ///
+    /// 现在按 `数字宽 + 两侧各 16` 算，`H:MM:SS` 这种更长的文本会自动变宽；
+    /// 上不超 <see cref="MinDWMax"/>、下不低于 <see cref="MinDWMin"/>
+    /// （太窄会让"点一下还原"的热区变小、也摆不下两位分钟数）。
+    /// </summary>
+    public const float MinDWMax = 206f, MinDWMin = 104f;
+    /// <summary>收起态左右内边距（逻辑像素）。</summary>
+    public const float MinPadX = 16f;
+    /// <summary>收起态数字字号（逻辑像素）。</summary>
+    public const float MinTextPx = 27f;
+
+    /// <summary>
+    /// 收起态的宽度（物理像素）：按当前要显示的数字估宽。
+    /// **画、命中、窗口矩形都读这一份**——两处各算一套就会"看着合适、点不中"。
+    /// </summary>
+    public static float MinWidthFor(string text, float u)
+    {
+        float w = DocResumeLayout.EstimateTextWidth(text, MinTextPx) * u + 2f * MinPadX * u;
+        return Math.Clamp(w, MinDWMin * u, MinDWMax * u);
+    }
     /// <summary>模式数（倒计时 / 正计时 / 秒表 / 时间）——页签、运行槽、命中都读它。</summary>
     public const int ModeCount = 4;
     private const float CardDW = DW - Inset * 2f;   // 980
@@ -143,11 +171,13 @@ internal static class TimerWin
         return MathF.Min(u, MathF.Min(maxW / DW, maxH / DH));
     }
 
-    public static RectF WindowRect(in RectF screen, float dpi, float cx, float cy, bool minimized, bool fullscreen)
+    public static RectF WindowRect(in RectF screen, float dpi, float cx, float cy, bool minimized, bool fullscreen,
+                                   float minW = 0f)
     {
         if (fullscreen) return screen;
         float u = Unit(screen, dpi);
-        float w = (minimized ? MinDW : DW) * u;
+        // 收起态宽度按数字长度算（见 MinWidthFor）；调用方没给就退回旧上限 206。
+        float w = minimized ? (minW > 0f ? minW : MinDWMax * u) : DW * u;
         float h = (minimized ? MinDH : DH) * u;
         return WinScale.PlaceCentered(screen, w, h, cx, cy, dpi);
     }
@@ -374,9 +404,18 @@ internal static class TimerWin
     // ---- 最小化态 ------------------------------------------------------------
 
     /// <summary>收起态整框都是"点一下还原"的热区（2026-11-16：原来的底部拖动条去掉，
-    /// 206×48 这么小再分两块只会点错）。拖动判据在移动里按 4px 阈值分开。</summary>
+    /// 这么小再分两块只会点错）。拖动判据在移动里按 4px 阈值分开。</summary>
     public static RectF MinimalDigitsRect(in RectF card, float u)
         => new() { MinX = card.MinX, MinY = card.MinY, MaxX = card.MaxX, MaxY = card.MaxY };
+
+    /// <summary>收起态数字**实际占的那一块**（左右各留 <see cref="MinPadX"/>，上下整高）。
+    /// 只给"文字该怎么摆"用；命中仍是整框（见 <see cref="MinimalDigitsRect"/>）。</summary>
+    public static RectF MinimalTextBox(in RectF card, float u)
+        => new()
+        {
+            MinX = card.MinX + MinPadX * u, MinY = card.MinY,
+            MaxX = card.MaxX - MinPadX * u, MaxY = card.MaxY,
+        };
 
     // ---- 命中 ---------------------------------------------------------------
 
@@ -744,7 +783,7 @@ public partial class InkEngine
     private bool _timerActive, _timerPaused, _timerFinished;
     private bool _timerCardOpen;         // 窗口开着
     private bool _timerEdit;             // 改时长态（仅倒计时）
-    private bool _timerMinimized;        // 收成 206×48 小挂钟
+    private bool _timerMinimized;        // 收成 48 高·按数字算宽 小挂钟
     private bool _timerFullscreen;
     private int _timerSetH = 0, _timerSetM = 5, _timerSetS = 0;   // 倒计时设定
     private bool _timerSoundOn = true;   // 到点提示音（默认开；窗口上不再放开关）
@@ -833,8 +872,20 @@ public partial class InkEngine
     {
         var screen = ScreenRectPhysical();
         LoadTimerPosIfNeeded();
-        return TimerWin.WindowRect(screen, UiUnit, _timerCX, _timerCY, _timerMinimized, _timerFullscreen);
+        return TimerWin.WindowRect(screen, UiUnit, _timerCX, _timerCY, _timerMinimized, _timerFullscreen,
+                                   _timerMinimized ? TimerMinWidthNow() : 0f);
     }
+
+    /// <summary>
+    /// 收起态这一刻的宽度（物理像素）：按**当前要显示的那串数字**算（2026-11-17）。
+    /// 秒表收起会藏掉 `.cc`（见 <see cref="TimerMinimalText"/>），所以要拿收起态的文案量。
+    ///
+    /// ⚠ 单位必须是 <see cref="TimerUnit"/>（= Dpi × 适配缩放），**不是** `UiUnit`：
+    /// `WindowRect` 的宽高都乘前者；用 `UiUnit` 时 1100×700 被屏宽 70% 压过的那一档会算错，
+    /// 收起态会比预期宽一圈（自检当场抓到 220 vs 176）。
+    /// </summary>
+    internal float TimerMinWidthNow()
+        => TimerWin.MinWidthFor(TimerMinimalText(), TimerUnit());
 
     /// <summary>计时窗的物理缩放单位（Overlay 画字/按钮要用同一个，包含界面大小档）。</summary>
     internal float TimerUnit() => TimerWin.Unit(ScreenRectPhysical(), UiUnit);
@@ -857,7 +908,7 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 收起态（206×48）的数字：秒表藏掉 `.cc`（那个宽度下小数只会挤成一团），
+    /// 收起态（48 高·按数字算宽）的数字：秒表藏掉 `.cc`（那个宽度下小数只会挤成一团），
     /// 倒计时 / 正计时 / 时间用正常文本。
     /// </summary>
     internal string TimerMinimalText()
@@ -1246,7 +1297,7 @@ public partial class InkEngine
     /// 进文档（PDF）模式时把「时间」档挂回来：只在这三件事同时成立时——
     /// ① 当前模式是时间；② 用户没在时间档按过 ×（`timerClockClosed` 未置）；
     /// ③ 上次关窗/退出时窗口是开着的（`timerCardOpen` = 1）。
-    /// 恢复的是**上次的收起/展开状态**（收起 = 206×48 小挂钟）。每次进文档都判断，
+    /// 恢复的是**上次的收起/展开状态**（收起 = 48 高·按数字算宽 小挂钟）。每次进文档都判断，
     /// 不是"只有第一次"（用户 2026-11-16 定）。
     /// </summary>
     internal void MaybeAutoShowTimerOnDocEntry()
@@ -1264,7 +1315,7 @@ public partial class InkEngine
         // 挂钟自己那块由 OverlayLayerRegistration 的计时层接输入，不依赖穿透。
         _dirty = true;
         NotifyUiStateChanged();
-        Console.WriteLine($"计时器：进文档自动挂回「时间」（{(_timerMinimized ? "收起 206×48" : "展开")}）");
+        Console.WriteLine($"计时器：进文档自动挂回「时间」（{(_timerMinimized ? "收起 48 高·按数字算宽" : "展开")}）");
     }
 
     private void PlayTimerBeep()
@@ -1364,7 +1415,8 @@ public partial class InkEngine
         if (!_timerCardOpen) return false;
         var screen = ScreenRectPhysical();
         float dpi = UiUnit;
-        var win = TimerWin.WindowRect(screen, dpi, _timerCX, _timerCY, _timerMinimized, _timerFullscreen);
+        var win = TimerWin.WindowRect(screen, dpi, _timerCX, _timerCY, _timerMinimized, _timerFullscreen,
+                                      _timerMinimized ? TimerMinWidthNow() : 0f);
         if (!win.Contains(x, y)) return false;
 
         if (_timerMinimized)
@@ -1468,7 +1520,8 @@ public partial class InkEngine
             {
                 var screen = ScreenRectPhysical();
                 float dpi = UiUnit;
-                var win = TimerWin.WindowRect(screen, dpi, _timerCX, _timerCY, _timerMinimized, _timerFullscreen);
+                var win = TimerWin.WindowRect(screen, dpi, _timerCX, _timerCY, _timerMinimized, _timerFullscreen,
+                                              _timerMinimized ? TimerMinWidthNow() : 0f);
                 float w = win.MaxX - win.MinX, h = win.MaxY - win.MinY;
                 float m = 8f * dpi;
                 float left = Math.Clamp(x - _timerGrabDX, screen.MinX + m,

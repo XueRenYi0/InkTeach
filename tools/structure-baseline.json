@@ -25,6 +25,7 @@
                          "src/InkEngine/Platform/Update.cs",
                          "src/InkEngine/Ppt/Ppt.cs",
                          "src/InkEngine/Rendering/Engine.UiBridge.cs",
+                         "src/InkEngine/Rendering/Overlay.Capture.cs",
                          "src/InkEngine/Rendering/Overlay.cs",
                          "src/InkEngine/Rendering/Overlay.Frame.cs",
                          "src/InkEngine/Rendering/Overlay.Readout.cs",
@@ -42,6 +43,7 @@
                          "src/InkTeach/DevTools/App.Dev.AiShow.cs",
                          "src/InkTeach/DevTools/DwellProbe.cs",
                          "src/InkTeach/DevTools/RecoProbe.cs",
+                         "src/InkTeach/SelfTests/E2E/AppClassroomTests.cs",
                          "src/InkTeach/SelfTests/E2E/BoardAndLaser.cs",
                          "src/InkTeach/SelfTests/E2E/Diagnostics.cs",
                          "src/InkTeach/SelfTests/E2E/Documents.cs",
@@ -62,7 +64,7 @@
                          "src/InkUi/Shell/FullUi.Interaction.cs"
                      ],
     "heavyMethods":  {
-                         "src/InkEngine/Rendering/SvgPath.cs":  1,
+                         "src/InkTeach/SelfTests/E2E/History.cs":  1,
                          "src/InkEngine/Platform/Engine.Update.cs":  1,
                          "src/InkTeach/DevTools/RecoProbe.cs":  1,
                          "src/InkTeach/SelfTests/E2E/SettingsAudit.cs":  1,
@@ -86,7 +88,7 @@
                          "src/InkTeach/DevTools/App.Dev.Smooth.cs":  2,
                          "src/InkEngine/Core/Selection.cs":  1,
                          "src/InkTeach/DevTools/App.Dev.Metrics.cs":  2,
-                         "src/InkTeach/SelfTests/E2E/History.cs":  1,
+                         "src/InkEngine/Rendering/SvgPath.cs":  1,
                          "src/InkEngine/Ai/AiPlotClient.cs":  1,
                          "src/InkEngine/Shapes/Engine.ShapeTools.cs":  1,
                          "src/InkTeach/SelfTests/E2E/Selection.cs":  7,
@@ -137,8 +139,10 @@
                          "src/InkTeach/SelfTests/E2E/SnapTest.cs":  1,
                          "src/InkTeach/SelfTests/E2E/OverlayAudit.cs":  1,
                          "src/InkTeach/SelfTests/E2E/Backup.cs":  1,
+                         "src/InkEngine/Rendering/Overlay.Content.cs":  1,
                          "src/InkTeach/DevTools/App.Dev.PageShow.cs":  1,
                          "src/InkEngine/Text/HandwritingOptimize.cs":  1,
+                         "src/InkTeach/SelfTests/E2E/UiDragGhost.cs":  1,
                          "src/InkEngine/Rendering/Overlay.Frame.cs":  3,
                          "src/InkEngine/Shapes/FigureRenderer.cs":  1
                      },
@@ -146,7 +150,7 @@
                           "Model":  8,
                           "App":  28,
                           "Engine":  24,
-                          "Overlay":  13,
+                          "Overlay":  14,
                           "FullUi":  8
                       },
     "wideFields":  [

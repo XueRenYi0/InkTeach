@@ -1,6 +1,6 @@
 # 段落地图（自动生成，勿手改）
 
-> 生成：2026-11-16 ／ 脚本：`tools/gen-section-map.ps1` ／ 只列 >= 600 行的文件。
+> 生成：2026-11-17 ／ 脚本：`tools/gen-section-map.ps1` ／ 只列 >= 600 行的文件。
 > 用法：``Read`` 大文件前先在这里找段落标题，再只读那一段（行号漂移后重跑脚本即可）。
 
 ## src/InkEngine/Ai/AiCard.cs（2,761 行）
@@ -38,7 +38,7 @@
 | 75 | `internal sealed class OcrLine` |
 | 82 | `internal sealed class ModelListResult` |
 
-## src/InkEngine/Classroom/Classroom.cs（2,259 行）
+## src/InkEngine/Classroom/Classroom.cs（2,312 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -46,33 +46,33 @@
 | 32 | `internal enum RollZone` |
 | 49 | `internal static class WinScale` |
 | 99 | `internal static class TimerWin` |
-| 471 | `internal static class RollWin` |
-| 725 | `public partial class InkEngine` |
-| 733 | `private struct TimerRun` |
+| 510 | `internal static class RollWin` |
+| 764 | `public partial class InkEngine` |
+| 772 | `private struct TimerRun` |
 
 | 行 | 段落 |
 | --- | --- |
-| 109 | 版式常量（相对卡片左上角；数字后面那行是"凭什么这么定"） |
-| 128 | 暂停统计（秒表） |
-| 197 | 主区（环 + 数字 + 说明） |
-| 222 | 秒表暂停统计 |
-| 296 | 底部主按钮（带文字） |
-| 335 | 改时长态 |
-| 374 | 最小化态 |
-| 422 | 文本格式（纯函数） |
-| 500 | 名牌区 |
-| 618 | 控制行（人数步进 + 抽奖） |
-| 637 | 信息行（不重复池） |
-| 648 | 顶栏 / 底行 |
-| 670 | 无名单时的学号范围 |
-| 727 | 计时器 |
-| 1335 | 计时窗指针 |
-| 1557 | 计时窗接输入小窗（穿透时） |
-| 1667 | 点名 |
-| 2137 | 点名名单（Names.txt） |
-| 2216 | 自检钩子（开发期用） |
+| 137 | 版式常量（相对卡片左上角；数字后面那行是"凭什么这么定"） |
+| 156 | 暂停统计（秒表） |
+| 227 | 主区（环 + 数字 + 说明） |
+| 252 | 秒表暂停统计 |
+| 326 | 底部主按钮（带文字） |
+| 365 | 改时长态 |
+| 404 | 最小化态 |
+| 461 | 文本格式（纯函数） |
+| 539 | 名牌区 |
+| 657 | 控制行（人数步进 + 抽奖） |
+| 676 | 信息行（不重复池） |
+| 687 | 顶栏 / 底行 |
+| 709 | 无名单时的学号范围 |
+| 766 | 计时器 |
+| 1386 | 计时窗指针 |
+| 1610 | 计时窗接输入小窗（穿透时） |
+| 1720 | 点名 |
+| 2190 | 点名名单（Names.txt） |
+| 2269 | 自检钩子（开发期用） |
 
-## src/InkEngine/Classroom/ClassroomDraw.cs（717 行）
+## src/InkEngine/Classroom/ClassroomDraw.cs（721 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -82,17 +82,17 @@
 | --- | --- |
 | 80 | 通用小工具（卡片 / 按钮 / 名牌 / 环） |
 | 163 | 计时窗 |
-| 190 | 顶栏：左边分段（凹槽 + 选中药丸） |
-| 220 | 顶栏：右上角三个窗口钮（收起 / 全屏 / 关闭） |
-| 354 | 左栏：总时长 + 关键统计 |
-| 397 | 右栏：分段表 |
-| 475 | 点名窗 |
-| 491 | 顶栏：右上角一个 ✕ |
-| 496 | 名牌区 |
-| 518 | 控制行：人数步进（左）＋ 抽奖（右） |
-| 532 | 信息行：不重复池 |
-| 537 | 底行：名单 / 学号范围 |
-| 563 | 绘制小工具 |
+| 194 | 顶栏：左边分段（凹槽 + 选中药丸） |
+| 224 | 顶栏：右上角三个窗口钮（收起 / 全屏 / 关闭） |
+| 358 | 左栏：总时长 + 关键统计 |
+| 401 | 右栏：分段表 |
+| 479 | 点名窗 |
+| 495 | 顶栏：右上角一个 ✕ |
+| 500 | 名牌区 |
+| 522 | 控制行：人数步进（左）＋ 抽奖（右） |
+| 536 | 信息行：不重复池 |
+| 541 | 底行：名单 / 学号范围 |
+| 567 | 绘制小工具 |
 
 ## src/InkEngine/Core/Engine.cs（2,881 行）
 
@@ -136,7 +136,7 @@
 | 2669 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
 | 2727 | 延时探针（见 Latency.cs） |
 
-## src/InkEngine/Core/Engine.Host.cs（2,354 行）
+## src/InkEngine/Core/Engine.Host.cs（2,358 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -715,23 +715,23 @@
 | 1482 | synthetic input (used by the automated input-path test) |
 | 1509 | 合成键盘输入（自检用：验证全局热键真的能"按"出来） |
 
-## src/InkEngine/Platform/Update.cs（990 行）
+## src/InkEngine/Platform/Update.cs（994 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 11 | `public enum UpdateStage` |
 | 53 | `internal static class UpdateFeed` |
-| 259 | `private sealed class Probe` |
-| 482 | `internal sealed class Manifest` |
-| 974 | `public static class ProductInfo` |
+| 263 | `private sealed class Probe` |
+| 486 | `internal sealed class Manifest` |
+| 978 | `public static class ProductInfo` |
 
 | 行 | 段落 |
 | --- | --- |
-| 168 | 同时发出，谁先答完谁先被处理（完成顺序 = 响应快慢） |
-| 222 | 下载候选排序（2026-10-03 起"优先国内"） |
-| 493 | 版本比较 |
-| 527 | 取清单 |
-| 626 | 下载与校验 |
+| 172 | 同时发出，谁先答完谁先被处理（完成顺序 = 响应快慢） |
+| 226 | 下载候选排序（2026-10-03 起"优先国内"） |
+| 497 | 版本比较 |
+| 531 | 取清单 |
+| 630 | 下载与校验 |
 
 ## src/InkEngine/Ppt/Ppt.cs（1,844 行）
 
@@ -787,7 +787,7 @@
 | 909 | 浮层主题（选中操作条 / 小面板用它画） |
 | 927 | 界面偏好的存取（引擎只当仓库，不解释内容） |
 
-## src/InkEngine/Rendering/Overlay.Capture.cs（789 行）
+## src/InkEngine/Rendering/Overlay.Capture.cs（831 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -808,35 +808,36 @@
 | 517 | 触点诊断浮层（8.3.3，默认关） |
 | 568 | 橡皮读数浮层（8.3.7，默认关；调参用） |
 
-## src/InkEngine/Rendering/Overlay.Content.cs（756 行）
+## src/InkEngine/Rendering/Overlay.Content.cs（766 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 21 | `internal sealed partial class OverlayWindow` |
-| 621 | `private enum PillPlace` |
+| 630 | `private enum PillPlace` |
 
 | 行 | 段落 |
 | --- | --- |
 | 23 | Content layer |
 
-## src/InkEngine/Rendering/Overlay.cs（1,419 行）
+## src/InkEngine/Rendering/Overlay.cs（1,457 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 20 | `internal static class Mem` |
 | 52 | `internal static class Gfx` |
 | 270 | `internal sealed partial class OverlayWindow : IDisposable` |
-| 338 | `internal struct ScrollBarLayout` |
+| 342 | `internal struct ScrollBarLayout` |
+| 497 | `private sealed class TransientRects` |
 
 | 行 | 段落 |
 | --- | --- |
-| 421 | 内容层（画布空间分块缓存） |
-| 465 | 界面缓存 |
-| 480 | 脏区上屏状态 |
-| 751 | 延时探针 |
-| 806 | 委托墨迹轨迹（微软的低延迟湿墨通道） |
+| 425 | 内容层（画布空间分块缓存） |
+| 469 | 界面缓存 |
+| 484 | 脏区上屏状态 |
+| 789 | 延时探针 |
+| 844 | 委托墨迹轨迹（微软的低延迟湿墨通道） |
 
-## src/InkEngine/Rendering/Overlay.Frame.cs（1,662 行）
+## src/InkEngine/Rendering/Overlay.Frame.cs（1,724 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -894,7 +895,7 @@
 | 721 | ③ 当前色预览 |
 | 737 | 取色板两张缓存位图（色相/尺寸变了才重画） |
 
-## src/InkEngine/Rendering/Overlay.Ui.cs（1,444 行）
+## src/InkEngine/Rendering/Overlay.Ui.cs（1,441 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -1080,13 +1081,13 @@
 | --- | --- |
 | 15 | `internal sealed partial class App` |
 
-## src/InkTeach/SelfTests/E2E/AppClassroomTests.cs（794 行）
+## src/InkTeach/SelfTests/E2E/AppClassroomTests.cs（813 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 19 | `internal sealed partial class App` |
 
-## src/InkTeach/SelfTests/E2E/BoardAndLaser.cs（1,377 行）
+## src/InkTeach/SelfTests/E2E/BoardAndLaser.cs（1,413 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -1125,7 +1126,8 @@
 | 1047 | 3) 跨块的长笔画：一整条都得在 |
 | 1074 | 4) 滚下去再滚回来：墨量必须一模一样，而且回程不重画 |
 | 1088 | 5) 常驻块数不超过预算 |
-| 1306 | Self test |
+| 1092 | 6) 缩放手势中（相机倍率 ≠ 块纹理倍率、走 Linear 拉伸）块边不出网格线 |
+| 1342 | Self test |
 
 ## src/InkTeach/SelfTests/E2E/Diagnostics.cs（3,295 行）
 

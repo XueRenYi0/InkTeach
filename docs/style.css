@@ -59,6 +59,9 @@ a { color: inherit; }
 .hero-shot { margin: 30px auto 6px; max-width: 860px; }
 .hero-shot img { width: 100%; height: auto; border-radius: 14px;
   box-shadow: 0 18px 50px rgba(31,35,40,.14), 0 0 0 1px var(--line); background: #fff; }
+/* 2026-11-17：首屏演示用 <video>（MP4 63 KB 换掉 331 KB 的 GIF），尺寸规则和老 img 保持一致。 */
+.hero-shot .hero-video { display: block; width: 100%; height: auto; border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(31,35,40,.14), 0 0 0 1px var(--line); background: #fff; }
 .caption { color: var(--gray); font-size: 13px; }
 .note { color: var(--gray); font-size: 13px; }
 .center { text-align: center; }

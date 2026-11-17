@@ -519,7 +519,7 @@ internal sealed partial class OverlayWindow
     private const float TouchHudWidthLogical = 470f;
     private const float TouchHudHeightLogical = 86f;
 
-    /// <summary>触点诊断浮层的**屏幕坐标**矩形（脏区用；绘制那份是它的窗口局部版）。</summary>
+    /// <summary>触点诊断浮层的**窗口坐标**矩形（脏区用；和绘制同一个位置。2026-11-16 前是屏幕坐标）。</summary>
     private RectF TouchHudRect(InkEngine app)
     {
         float s = Dpi / 96f;
@@ -528,8 +528,8 @@ internal sealed partial class OverlayWindow
         if (Width <= 0 || Height <= 0) return RectF.Empty;
         return new RectF
         {
-            MinX = OriginX + m, MinY = OriginY + Height - m - h,
-            MaxX = OriginX + m + w, MaxY = OriginY + Height - m,
+            MinX = m, MinY = Height - m - h,
+            MaxX = m + w, MaxY = Height - m,
         };
     }
 
@@ -570,7 +570,7 @@ internal sealed partial class OverlayWindow
     private const float EraserHudWidthLogical = 760f;
     private const float EraserHudHeightLogical = 62f;
 
-    /// <summary>橡皮读数浮层的**屏幕坐标**矩形（脏区用）。放在左下角（触点浮层开着就让到它上面）。</summary>
+    /// <summary>橡皮读数浮层的**窗口坐标**矩形（脏区用）。放在左下角（触点浮层开着就让到它上面）。</summary>
     private RectF EraserHudRect(InkEngine app)
     {
         float s = Dpi / 96f;
@@ -580,8 +580,8 @@ internal sealed partial class OverlayWindow
         float bottom = Height - m - (app.TouchHud ? (TouchHudHeightLogical + 8f) * s : 0f);
         return new RectF
         {
-            MinX = OriginX + m, MinY = OriginY + bottom - h,
-            MaxX = OriginX + m + w, MaxY = OriginY + bottom,
+            MinX = m, MinY = bottom - h,
+            MaxX = m + w, MaxY = bottom,
         };
     }
 
@@ -617,32 +617,69 @@ internal sealed partial class OverlayWindow
                       Brush(new Color4(1f, 1f, 1f, 0.95f)));
     }
 
-    public void Present()
+    /// <summary>
+    /// 一份脏区换算成上屏矩形之后的结论。<see cref="Full"/> = 这一帧要走 `Present()` 整屏上屏。
+    /// </summary>
+    private readonly record struct PresentPlan(int Count, double AreaPercent, bool CoversWindow, bool Full);
+
+    /// <summary>
+    /// 脏区 → 上屏矩形（裁剪 + 合并）+ "要不要整屏上屏"的判断。**唯一一份**。
+    ///
+    /// 为什么必须抽出来、两处共用（2026-11-16 残影评审 P0-1）：整屏上屏时运行时**不帮你拷**
+    /// 上一缓冲，交出去的是"两帧前的画面 + 这一帧重画的脏区"，只记了一帧旧位置的界面就会把
+    /// N-2 帧那块旧工具条一起交上去（用户报的"拖动经过的地方留下旧画面 / 拖完还留一块脏影"）。
+    /// 所以 `UpdateFrameDirty` 要**提前知道**这一帧会不会整屏上屏、会的话就整屏重画——
+    /// 它和 `Present()` 的判断只要差一点（各写一套），就又会出现"整屏上屏、局部重画"的帧。
+    /// </summary>
+    private PresentPlan ComputePresentRects(IReadOnlyList<RectF> dirty, List<Vortice.RawRect> rects)
     {
-        _presentRects.Clear();
-        foreach (var r in _frameDirty)
+        rects.Clear();
+        for (int i = 0; i < dirty.Count; i++)
         {
-            int l = (int)MathF.Floor(MathF.Max(0, r.MinX - OriginX));
-            int t = (int)MathF.Floor(MathF.Max(0, r.MinY - OriginY));
-            int rr = (int)MathF.Ceiling(MathF.Min(Width, r.MaxX - OriginX));
-            int b = (int)MathF.Ceiling(MathF.Min(Height, r.MaxY - OriginY));
+            // 脏区已经是窗口坐标（2026-11-16 起；以前这里减原点，和画的时候的裁剪框不是一套）
+            var r = OverlayCoords.ClipToWindow(dirty[i], Width, Height);
+            if (r.IsEmpty) continue;
+            int l = (int)MathF.Floor(r.MinX);
+            int t = (int)MathF.Floor(r.MinY);
+            int rr = (int)MathF.Ceiling(r.MaxX);
+            int b = (int)MathF.Ceiling(r.MaxY);
             if (rr <= l || b <= t) continue;
-            _presentRects.Add(new Vortice.RawRect(l, t, rr, b));
+            rects.Add(new Vortice.RawRect(l, t, rr, b));
         }
-        MergePresentRects();
+        MergePresentRects(rects);
 
         double area = 0;
-        foreach (var r in _presentRects)
+        foreach (var r in rects)
             area += (long)(r.Right - r.Left) * (r.Bottom - r.Top);
 
-        LastPresentRectCount = _presentRects.Count;
-        LastPresentAreaPercent = Width > 0 && Height > 0
+        double percent = Width > 0 && Height > 0
             ? Math.Min(100.0, area / (Width * (double)Height) * 100.0)
             : 100.0;
-        LastPresentFull = Width > 0 && Height > 0
-                          && _presentRects.Count == 1
-                          && _presentRects[0].Left <= 0 && _presentRects[0].Top <= 0
-                          && _presentRects[0].Right >= Width && _presentRects[0].Bottom >= Height;
+        bool covers = Width > 0 && Height > 0
+                      && rects.Count == 1
+                      && rects[0].Left <= 0 && rects[0].Top <= 0
+                      && rects[0].Right >= Width && rects[0].Bottom >= Height;
+        // 脏区太少或太大都不划算：太大不如直接整屏上屏，太少说明这一帧
+        // 没什么变化（例如只等垂直同步）。--fullpresent = 永远整屏上屏（诊断）。
+        bool full = FullPresent || rects.Count == 0 || rects.Count > 16 || percent > 80.0;
+        return new PresentPlan(rects.Count, percent, covers, full);
+    }
+
+    public void Present()
+    {
+        // 坐标系校验：`_frameDirty` 全是 AddClipped 过的窗口矩形，越界说明有人又塞了屏幕坐标进来
+        // （副屏上那就是"只画不擦"的残影）。只在 --traceframes 时查，不花平时的钱。
+        if (Trace)
+            foreach (var r in _frameDirty)
+                if (!OverlayCoords.InsideWindow(r, Width, Height))
+                    Console.WriteLine($"    [present] ⚠ 脏区越出窗口（坐标系混用？）"
+                                      + $"({r.MinX:F0},{r.MinY:F0})..({r.MaxX:F0},{r.MaxY:F0}) 窗口 {Width}×{Height} 原点 ({OriginX},{OriginY})");
+
+        var plan = ComputePresentRects(_frameDirty, _presentRects);
+
+        LastPresentRectCount = plan.Count;
+        LastPresentAreaPercent = plan.AreaPercent;
+        LastPresentFull = plan.CoversWindow;
 
         if (Trace)
         {
@@ -685,10 +722,8 @@ internal sealed partial class OverlayWindow
         LastPresentStartQpc = Qpc.Now;
         var sw = Stopwatch.StartNew();
 
-        // 脏区太少或太大都不划算：太大不如直接整屏上屏，太少说明这一帧
-        // 没什么变化（例如只等垂直同步）。--fullpresent = 永远整屏上屏（诊断）。
-        if (FullPresent
-            || _presentRects.Count == 0 || _presentRects.Count > 16 || LastPresentAreaPercent > 80.0)
+        // 整屏 / 局部的判断见 ComputePresentRects（UpdateFrameDirty 用的是同一个结论）。
+        if (plan.Full)
         {
             hr = _swapChain.Present(useWaitable ? 0u : 1u, PresentFlags.None);
             LastPresentAreaPercent = 100.0;
@@ -729,26 +764,33 @@ internal sealed partial class OverlayWindow
     /// `LastPresentAreaPercent` 这类性能数字不可信。合并后这些数才是屏幕像素占比。
     /// 只合并**有正面积重叠**的矩形；只是边/角相接的不合并，避免把中间空隙算进面积。
     /// </summary>
-    private void MergePresentRects()
+    private static void MergePresentRects(List<Vortice.RawRect> rects)
+        => MergeOverlapping(rects,
+            static (a, b) => a.Left < b.Right && b.Left < a.Right && a.Top < b.Bottom && b.Top < a.Bottom,
+            static (a, b) => new Vortice.RawRect(
+                Math.Min(a.Left, b.Left), Math.Min(a.Top, b.Top),
+                Math.Max(a.Right, b.Right), Math.Max(a.Bottom, b.Bottom)));
+
+    /// <summary>
+    /// "有正面积重叠就并成外接框、并到没有重叠为止"——上屏矩形（整数）和 `_frameDirty`（浮点、
+    /// 画之前那一次）共用这一份算法。静态 lambda 不捕获，调用不分配。
+    /// </summary>
+    private static void MergeOverlapping<T>(List<T> rects, Func<T, T, bool> overlap, Func<T, T, T> union)
     {
-        if (_presentRects.Count <= 1) return;
+        if (rects.Count <= 1) return;
         bool again = true;
         while (again)
         {
             again = false;
-            for (int i = 0; i < _presentRects.Count && !again; i++)
+            for (int i = 0; i < rects.Count && !again; i++)
             {
-                var a = _presentRects[i];
-                for (int j = i + 1; j < _presentRects.Count; j++)
+                var a = rects[i];
+                for (int j = i + 1; j < rects.Count; j++)
                 {
-                    var b = _presentRects[j];
-                    bool overlap = a.Left < b.Right && b.Left < a.Right
-                                && a.Top < b.Bottom && b.Top < a.Bottom;
-                    if (!overlap) continue;
-                    _presentRects[i] = new Vortice.RawRect(
-                        Math.Min(a.Left, b.Left), Math.Min(a.Top, b.Top),
-                        Math.Max(a.Right, b.Right), Math.Max(a.Bottom, b.Bottom));
-                    _presentRects.RemoveAt(j);
+                    var b = rects[j];
+                    if (!overlap(a, b)) continue;
+                    rects[i] = union(a, b);
+                    rects.RemoveAt(j);
                     again = true;
                     break;
                 }

@@ -15,11 +15,11 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 ｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
 
-> **Latest 9.9.2 (2026-11-16)**: PDF document mode now has 300% zoom, two-finger and precision-touchpad
-> pinch, `H` / hold-`Space` hand pan; large `.inkb` files open in the background with a “opening…” notice;
-> the recent-documents page now merges PDFs, PPTs and board history; the radial palette follows the live
-> colour band and its clear cell runs on a single click (undoable); the timer gains a Clock mode and a
-> 206×48 mini frame.
+> **Latest 9.9.3 (2026-11-17)**: dragging the toolbar or a panel no longer leaves ghost trails
+> (frames that present the whole window now really repaint the whole window, and the UI rect keeps a
+> three-frame history); dirty rects are unified to window coordinates, so overlays no longer "paint but
+> never erase" on an extended display or projector; present area while dragging drops to ~39% on average;
+> the minimised timer is now as wide as its digits instead of leaving big side margins.
 >
 > *This English README is a summary. The Chinese [README.md](README.md) is the authoritative, most
 > current version.*

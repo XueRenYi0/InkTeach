@@ -174,12 +174,16 @@ internal sealed partial class OverlayWindow
         var win = app.TimerCardRect();
         float u = app.TimerUnit();
 
-        // 最小化：206×48（和 PDF 底条同高），只剩时间数字、整框可拖、单击还原（2026-11-16）
+        // 最小化：48 高、宽度按数字算（和 PDF 底条同高），只剩时间数字、整框可拖、单击还原（2026-11-16）
+        //
+        // ⚠ 内边距和字号必须用 **u（= TimerUnit，含"屏宽 70% 封顶"那一档）**，不能混 UiUnit：
+        // 窗口宽高是按 u 算的（176 而不是 206×u），字号却按 UiUnit 画，字会比框宽、被折成两行
+        // 再裁掉（2026-11-17 出图当场看到："05:" 一行、"00" 掉到下一行）。
         if (app.TimerMinimized)
         {
             WinCard(win, dpi, pal);
-            WinText(app.TimerMinimalText(), TimerWin.MinimalDigitsRect(win, dpi),
-                    27f * dpi, pal.Ink, true);
+            WinText(app.TimerMinimalText(), TimerWin.MinimalTextBox(win, u),
+                    TimerWin.MinTextPx * u, pal.Ink, true);
             return;
         }
 

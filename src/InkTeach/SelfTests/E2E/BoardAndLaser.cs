@@ -1089,6 +1089,42 @@ internal sealed partial class App
         Check("常驻分块不超预算", w0.LastTileCount <= Math.Max(w0.LastTileBudget, 1),
               $"{w0.LastTileCount} 块 / 预算 {w0.LastTileBudget}（每块 {T * T * 4 / 1024}KB）");
 
+        // ---- 6) 缩放手势中（相机倍率 ≠ 块纹理倍率、走 Linear 拉伸）块边不出网格线 ----
+        // 2026-11-16 残影评审 T-a：没有 gutter 时双线性采样在块边读到纹理外的透明，白板上是一张淡网格。
+        // 做法：空白白板、关底纹，把相机一把拧到 1.37×，赶在 120ms "换倍率"之前抓一张；
+        // 白板应当是一整片同色，偏离板色的像素就是块边网格 / gutter 里没擦干净的渗色。
+        // ⚠ 本机（Iris Xe）上 GutterTexels = 0 时这一项**也是 PASS**（D2D 在源矩形边上按钳边采样，
+        // 空白板看不出网格）——所以它守的是"gutter 不渗色"，不是"gutter 消掉了网格"。
+        {
+            bool savedBoard = BoardOn;
+            int savedPattern = BoardPattern;
+            Doc.Clear();
+            Doc.ClearHistory();
+            BoardOn = true;
+            BoardPattern = 0;
+            Doc.InvalidateAll();
+            SettleFrames(300);
+            ViewScale = 1.37f;
+            SettleFrames(60);                 // 够 DWM 把这几帧合成上屏，又不到 120ms 的换倍率
+            int gx = _virtualX + _virtualW / 4, gy = _virtualY + _virtualH / 4;
+            int gw = _virtualW / 2, gh = _virtualH / 2;
+            byte[] px = ScreenProbe.CaptureRegion(gx, gy, gw, gh);
+            bool linear = MathF.Abs(w0.LastTileRenderScale - 1.37f) > 0.01f;   // 还没换倍率 = 真在 Linear 拉伸
+            int off = 0;
+            if (px.Length >= 4)
+            {
+                byte b0 = px[0], g0 = px[1], r0 = px[2];
+                for (int i = 0; i + 3 < px.Length; i += 4)
+                    if (Math.Abs(px[i] - b0) > 6 || Math.Abs(px[i + 1] - g0) > 6 || Math.Abs(px[i + 2] - r0) > 6) off++;
+            }
+            ViewScale = 1f;
+            BoardOn = savedBoard;
+            BoardPattern = savedPattern;
+            SettleFrames(300);
+            Check("缩放手势中块边无网格线", linear && off < 50,
+                  $"{(linear ? "Linear 拉伸中" : "已换倍率（没测到手势中）")}，偏离板色 {off} 像素（{gw}×{gh}）");
+        }
+
         Console.WriteLine();
         Console.WriteLine($"  {(fail == 0 ? "PASS" : "FAIL")}：块边界无缝、跨块笔画完整、回程免重画、内存有上界");
         Console.WriteLine();

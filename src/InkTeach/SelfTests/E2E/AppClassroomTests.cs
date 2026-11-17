@@ -218,18 +218,32 @@ internal sealed partial class App
             StopTimerFromUi();
         }
 
-        // ⑧ 最小化（206×48）/ 还原；全屏往返
+        // ⑧ 最小化（48 高·按数字算宽）/ 还原；全屏往返
         OpenTimerCardFromUi();
         var fullWin = TimerCardRect();
         var fullCard = TimerWin.CardRect(fullWin, U(), false);
         float fullLu = TimerWin.Layout(fullCard, U());
         ClickRect(TimerWin.BtnRect(fullCard, fullLu, TimerZone.Minimize));
         var minWin = TimerCardRect();
-        Check("最小化：206×48 逻辑",
+        // 2026-11-17：收起态宽度改成"按数字长度算"（不再固定 206），所以这里判
+        // ① 高度仍是 48；② 宽度 = MinWidthFor(当前收起文案)；③ 落在 [104, 206] 之间。
+        float wantMinW = TimerWin.MinWidthFor(TimerMinimalText(), U());
+        Check("最小化：高 48 / 宽按数字算",
               TimerMinimized
-              && MathF.Abs(minWin.MaxX - minWin.MinX - TimerWin.MinDW * U()) < 1.5f
-              && MathF.Abs(minWin.MaxY - minWin.MinY - TimerWin.MinDH * U()) < 1.5f,
-              $"{minWin.MaxX - minWin.MinX:F0}×{minWin.MaxY - minWin.MinY:F0}");
+              && MathF.Abs(minWin.MaxY - minWin.MinY - TimerWin.MinDH * U()) < 1.5f
+              && MathF.Abs((minWin.MaxX - minWin.MinX) - wantMinW) < 1.5f
+              && minWin.MaxX - minWin.MinX >= TimerWin.MinDWMin * U() - 1.5f
+              && minWin.MaxX - minWin.MinX <= TimerWin.MinDWMax * U() + 1.5f,
+              $"{minWin.MaxX - minWin.MinX:F0}×{minWin.MaxY - minWin.MinY:F0}（应 {wantMinW:F0}）");
+        // 左右留白要收窄：外框宽与数字实测宽之差的一半 == MinPadX（允许抗锯齿 2px 误差）。
+        {
+            var tb = TimerWin.MinimalTextBox(minWin, U());
+            float textW = tb.MaxX - tb.MinX;
+            float expect = TimerWin.MinWidthFor(TimerMinimalText(), U()) - 2f * TimerWin.MinPadX * U();
+            Check("最小化：左右边距 = 16 逻辑像素（不多留）",
+                  MathF.Abs(textW - expect) < 2f * U(),
+                  $"文字区 {textW:F0} / 应为 {expect:F0}（旧留白约 65 逻辑像素）");
+        }
         Check("最小化：不跳位（窗口中心不变）",
               MathF.Abs((minWin.MinX + minWin.MaxX) * 0.5f - (fullWin.MinX + fullWin.MaxX) * 0.5f) < 1.5f
               && MathF.Abs((minWin.MinY + minWin.MaxY) * 0.5f - (fullWin.MinY + fullWin.MaxY) * 0.5f) < 1.5f,
@@ -423,7 +437,7 @@ internal sealed partial class App
               && st.TimerMode == TimerKind);
         StopTimerFromUi(); SettleFrames(100);
 
-        // ⑭ 「时间」档（2026-11-16）：HH:mm / 无开始重置 / 收起 206×48 /
+        // ⑭ 「时间」档（2026-11-16）：HH:mm / 无开始重置 / 收起 48 高·按数字算宽 /
         //    文档自动挂回 / × 抑制 / 手动打开清抑制 / 偏好跨重启
         {
             void OpenFakeDoc(string key)
@@ -489,8 +503,9 @@ internal sealed partial class App
                   $"{fullSw} → {minSw}");
             ClickRect(TimerWin.MinimalDigitsRect(TimerCardRect(), U()));
 
-            // 四种模式收起都是 206×48
+            // 四种模式收起：高都是 48，宽度各自按自己的数字算（2026-11-17 不再固定 206）
             bool allMin = true;
+            var minWidths = new System.Collections.Generic.List<string>();
             for (int i = 0; i < TimerWin.ModeCount; i++)
             {
                 var cc = TimerWin.CardRect(TimerCardRect(), U(), false);
@@ -498,12 +513,15 @@ internal sealed partial class App
                 ClickRect(TimerWin.TabRect(cc, cclu, i));
                 ClickRect(TimerWin.BtnRect(cc, cclu, TimerZone.Minimize));
                 var mr = TimerCardRect();
+                float want = TimerWin.MinWidthFor(TimerMinimalText(), U());
+                minWidths.Add($"{TimerMinimalText()}={mr.MaxX - mr.MinX:F0}(应{want:F0})");
                 allMin &= TimerMinimized
-                          && MathF.Abs(mr.MaxX - mr.MinX - TimerWin.MinDW * U()) < 1.5f
-                          && MathF.Abs(mr.MaxY - mr.MinY - TimerWin.MinDH * U()) < 1.5f;
+                          && MathF.Abs(mr.MaxY - mr.MinY - TimerWin.MinDH * U()) < 1.5f
+                          && MathF.Abs((mr.MaxX - mr.MinX) - want) < 1.5f;
                 ClickRect(TimerWin.MinimalDigitsRect(mr, U()));
             }
-            Check("收起几何：四种模式都是 206×48 逻辑", allMin);
+            Check("收起几何：高 48 / 宽度按数字长度算（四种模式）", allMin,
+                  string.Join("  ", minWidths));
 
             // 时间 + 收起 → 偏好 → 模拟重启
             var c3 = TimerWin.CardRect(TimerCardRect(), U(), false);
@@ -521,14 +539,15 @@ internal sealed partial class App
             Check("模拟重启：读回「时间」+ 收起，但窗口不自己开",
                   TimerKind == TimerMode.Clock && TimerMinimized && !TimerCardOpen && !TimerClockClosed);
 
-            // 进文档：自动挂回（收起 206×48）
+            // 进文档：自动挂回（收起 48 高、宽度按数字算）
             OpenFakeDoc("clock-auto-1");
             var aw = TimerCardRect();
-            Check("文档打开：时间挂钟自动挂回（收起 206×48）",
+            float awWant = TimerWin.MinWidthFor(TimerMinimalText(), U());
+            Check("文档打开：时间挂钟自动挂回（收起态宽度按数字算）",
                   TimerCardOpen && TimerMinimized
-                  && MathF.Abs(aw.MaxX - aw.MinX - TimerWin.MinDW * U()) < 1.5f
+                  && MathF.Abs((aw.MaxX - aw.MinX) - awWant) < 1.5f
                   && MathF.Abs(aw.MaxY - aw.MinY - TimerWin.MinDH * U()) < 1.5f,
-                  $"{aw.MaxX - aw.MinX:F0}×{aw.MaxY - aw.MinY:F0}");
+                  $"{aw.MaxX - aw.MinX:F0}×{aw.MaxY - aw.MinY:F0}（应宽 {awWant:F0}）");
 
             // 点整框还原 → × 关窗 = 以后不再自动挂回
             ClickRect(TimerWin.MinimalDigitsRect(TimerCardRect(), U()));

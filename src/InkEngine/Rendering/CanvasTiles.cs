@@ -67,10 +67,33 @@ internal sealed class CanvasTileCache : IDisposable
     /// </summary>
     public float RenderScale { get; private set; } = 1f;
 
-    /// <summary>一块纹理的实际边长（像素）= round(TileSize × RenderScale)。</summary>
+    /// <summary>一块纹理**内容区**的边长（像素）= round(TileSize × RenderScale)。预算 / 诊断口径按它算。</summary>
     public int TextureSize => Math.Max(1, (int)MathF.Round(TileSize * RenderScale));
 
-    /// <summary>每块纹理的字节数（跟着 <see cref="RenderScale"/> 走，预算按它算）。</summary>
+    /// <summary>
+    /// 块纹理四周多烘的一圈**边像素**（gutter / border texel，Skia / Chromium raster tile 的同款做法；
+    /// 2026-11-16 残影评审 P2 / T-a）。
+    ///
+    /// 为什么要：缩放手势中（相机倍率 ≠ 块纹理倍率，见 CompositeTiles）按旧倍率 Linear 拉伸，
+    /// 双线性采样在块边上要读"块外面"那一列——没有 gutter 时读到的是纹理外的透明，屏幕上就是
+    /// 一张淡淡的网格（停手 120ms 换倍率后消失，用户会说成"有脏影"）。现在块外那一圈也按真实内容
+    /// 烘进来（光栅化矩形外扩 <see cref="GutterCanvas"/>），采样读到的就是邻块同一处的像素。
+    ///
+    /// **不渗色的前提**：邻块的改动也得把这一圈重烘——所以 MarkDirty / MarkAppend 都按外扩后的矩形
+    /// 找块。1:1 时合成走 NearestNeighbor、只取内容区，gutter 一个像素都不上屏。
+    /// </summary>
+    public const int GutterTexels = 2;
+
+    /// <summary>gutter 折算成画布像素（= GutterTexels / RenderScale）。</summary>
+    public float GutterCanvas => GutterTexels / RenderScale;
+
+    /// <summary>真正分配的纹理边长 = 内容区 + 两侧 gutter。</summary>
+    public int AllocTextureSize => TextureSize + 2 * GutterTexels;
+
+    /// <summary>
+    /// 每块纹理的字节数（跟着 <see cref="RenderScale"/> 走，预算按它算）。
+    /// **口径是内容区**，不含 gutter（实占多 ≈3%@100%、≈1.6%@200%）——预算 / 自检的数字保持原样。
+    /// </summary>
     public int TileBytes => TextureSize * TextureSize * 4;
 
     /// <summary>
@@ -251,6 +274,12 @@ internal sealed class CanvasTileCache : IDisposable
         MaxX = (float)(tx + 1) * TileSize, MaxY = (float)(ty + 1) * TileSize,
     };
 
+    /// <summary>
+    /// 光栅化一块时交给 paint 的画布矩形 = <see cref="RectOf"/> 外扩一圈 gutter。
+    /// 纹理像素 (0,0) 对应这个矩形的左上角，块本身的左上角落在纹理像素 (G, G)。
+    /// </summary>
+    public RectF PaintRectOf(int tx, int ty) => RectOf(tx, ty).Inflate(GutterCanvas);
+
     private static int FirstIdx(float v) => (int)MathF.Floor(v / TileSize);
     private static int LastIdx(float v) => (int)MathF.Ceiling(v / TileSize) - 1;
 
@@ -260,9 +289,11 @@ internal sealed class CanvasTileCache : IDisposable
     /// 只标记已经存在的块——不存在的那块本来就是脏的（新建时即脏）。
     /// 注意这里完全不看相机：脏区是画布坐标，块也是画布坐标。
     /// </summary>
-    public void MarkDirty(in RectF canvasRect)
+    public void MarkDirty(in RectF changed)
     {
-        if (canvasRect.IsEmpty) return;
+        if (changed.IsEmpty) return;
+        // 外扩 gutter：改动落在邻块边上时，邻块纹理里那一圈 gutter 也要重烘（否则缩放中 Linear 采样渗旧色）
+        var canvasRect = changed.Inflate(GutterCanvas);
         for (int ty = FirstIdx(canvasRect.MinY); ty <= LastIdx(canvasRect.MaxY); ty++)
             for (int tx = FirstIdx(canvasRect.MinX); tx <= LastIdx(canvasRect.MaxX); tx++)
                 if (_tiles.TryGetValue(Key(tx, ty), out var tile))
@@ -288,6 +319,7 @@ internal sealed class CanvasTileCache : IDisposable
     {
         var b = s.PaddedBounds;
         if (b.IsEmpty) return false;
+        b = b.Inflate(GutterCanvas);         // 同 MarkDirty：邻块的 gutter 里也有这一笔
         bool any = false;
         for (int ty = FirstIdx(b.MinY); ty <= LastIdx(b.MaxY); ty++)
             for (int tx = FirstIdx(b.MinX); tx <= LastIdx(b.MaxX); tx++)
@@ -351,7 +383,7 @@ internal sealed class CanvasTileCache : IDisposable
                 if (tile.Dirty)
                 {
                     var sw = Stopwatch.StartNew();
-                    StrokesLastFrame += paint(tile.Target, RectOf(tx, ty), null);
+                    StrokesLastFrame += paint(tile.Target, PaintRectOf(tx, ty), null);
                     sw.Stop();
                     RasterMsLastFrame += sw.Elapsed.TotalMilliseconds + createMs;
                     tile.Dirty = false;
@@ -363,7 +395,7 @@ internal sealed class CanvasTileCache : IDisposable
                 {
                     // 只补画新笔画：不清空，代价与"新笔画条数"成正比，而不是与块内总数成正比。
                     var sw = Stopwatch.StartNew();
-                    StrokesLastFrame += paint(tile.Target, RectOf(tx, ty), tile.Appended);
+                    StrokesLastFrame += paint(tile.Target, PaintRectOf(tx, ty), tile.Appended);
                     sw.Stop();
                     double ms = sw.Elapsed.TotalMilliseconds;
                     RasterMsLastFrame += ms;
@@ -433,7 +465,7 @@ internal sealed class CanvasTileCache : IDisposable
                 _tiles[k] = tile;
             }
             var sw = Stopwatch.StartNew();
-            paint(tile.Target, RectOf(tx, ty), null);     // 整块重画；新块/脏块都不会有补画清单
+            paint(tile.Target, PaintRectOf(tx, ty), null);     // 整块重画；新块/脏块都不会有补画清单
             sw.Stop();
             PrefetchMsLastFrame += sw.Elapsed.TotalMilliseconds + createMs;
             tile.Dirty = false;
@@ -474,8 +506,8 @@ internal sealed class CanvasTileCache : IDisposable
     {
         var desc = new Texture2DDescription
         {
-            Width = (uint)TextureSize,
-            Height = (uint)TextureSize,
+            Width = (uint)AllocTextureSize,
+            Height = (uint)AllocTextureSize,
             MipLevels = 1,
             ArraySize = 1,
             Format = Format.B8G8R8A8_UNorm,

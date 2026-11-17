@@ -74,6 +74,12 @@ internal static class UnitTestRunner
             UnitTestsCamera.Camera_Helpers_RoundTrip_At_Scale1),
         (nameof(UnitTestsCamera.Camera_Helpers_ScaleFormula_IsSymmetric),
             UnitTestsCamera.Camera_Helpers_ScaleFormula_IsSymmetric),
+        (nameof(UnitTestsOverlay.OverlayCoords_SecondaryScreen_CanvasWindow_RoundTrip),
+            UnitTestsOverlay.OverlayCoords_SecondaryScreen_CanvasWindow_RoundTrip),
+        (nameof(UnitTestsOverlay.OverlayCoords_SecondaryScreen_VisibleCanvas_NoDoubleOrigin),
+            UnitTestsOverlay.OverlayCoords_SecondaryScreen_VisibleCanvas_NoDoubleOrigin),
+        (nameof(UnitTestsOverlay.OverlayCoords_SecondaryScreen_Clip_And_ScreenToWindow),
+            UnitTestsOverlay.OverlayCoords_SecondaryScreen_Clip_And_ScreenToWindow),
     };
 
     public static int Run(string[] args)

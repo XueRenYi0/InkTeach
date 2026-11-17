@@ -1074,6 +1074,12 @@
       var a = valueFor(lang, altNodes[k].getAttribute("data-i18n-alt"));
       if (a != null) altNodes[k].alt = a;
     }
+    // 2026-11-17：首屏演示从 <img> 换成 <video>，它没有 alt，用 aria-label 承载同一句说明。
+    var ariaNodes = document.querySelectorAll("[data-i18n-aria]");
+    for (var k2 = 0; k2 < ariaNodes.length; k2++) {
+      var ar = valueFor(lang, ariaNodes[k2].getAttribute("data-i18n-aria"));
+      if (ar != null) ariaNodes[k2].setAttribute("aria-label", ar);
+    }
 
     document.title = valueFor(lang, "meta.title");
     var desc = document.querySelector('meta[name="description"]');

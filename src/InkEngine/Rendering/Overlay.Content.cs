@@ -358,7 +358,8 @@ internal sealed partial class OverlayWindow
     /// <see cref="CompositeTiles"/> 那一步。老做法里"脏区、裁剪、快路径"
     /// 各要记得换算一次，漏一处就出残影；现在想漏也没地方漏。
     ///
-    /// 块纹理正好是块的大小，所以画出界的部分会被渲染目标自己裁掉，
+    /// 块纹理正好是"块 + 一圈 gutter"的大小（<paramref name="canvas"/> 已经外扩过，见
+    /// CanvasTileCache.PaintRectOf），所以画出界的部分会被渲染目标自己裁掉，
     /// 不需要额外的裁剪矩形（这也顺带避免了抗锯齿接缝）。
     /// </summary>
     private int RasterizeTile(ID2D1Bitmap1 target, RectF canvas, List<Stroke> onlyThese)
@@ -376,8 +377,17 @@ internal sealed partial class OverlayWindow
         // 整块内容平移 (Scale−1)×Origin 个纹理像素——**100% 时两条式子恰好相等**
         // （Scale=1），所以这个错只在缩放时才露出来：200% 下墨迹被推到块外，
         // 屏幕上只剩纯色页（用户看到的"200% 只有页、没有墨"）。
-        _ctx.Transform = Matrix3x2.CreateTranslation(-canvas.MinX, -canvas.MinY)
-                       * Matrix3x2.CreateScale(_tiles.RenderScale);
+        //
+        // gutter：块原点在纹理里是 (G, G)。原点**按块网格取回整数倍**再平移，不直接用外扩后的
+        // canvas.MinX——那是"原点 − G/倍率"，非整数倍率下带浮点误差，会让相邻块的抗锯齿
+        // 覆盖差出零点几个像素（接缝防线：块内变换必须是整数平移，见 CanvasTileCache 文件头）。
+        float ts = CanvasTileCache.TileSize;
+        float ox = MathF.Round((canvas.MinX + _tiles.GutterCanvas) / ts) * ts;
+        float oy = MathF.Round((canvas.MinY + _tiles.GutterCanvas) / ts) * ts;
+        const float gt = CanvasTileCache.GutterTexels;
+        _ctx.Transform = Matrix3x2.CreateTranslation(-ox, -oy)
+                       * Matrix3x2.CreateScale(_tiles.RenderScale)
+                       * Matrix3x2.CreateTranslation(gt, gt);
 
         // 只补画新增的笔画：不清空、不遍历块内原有的笔画。
         // 内容层"只增不减"（正在写字）时才走这条路，见 SyncTiles 里的判断。
@@ -409,8 +419,9 @@ internal sealed partial class OverlayWindow
         bool boardOverDocTranslucent =
             app.BoardOn && app.DocView.IsOpen && app.BoardOpacity < 0.999f;
 
+        // 多擦 1 画布像素：gutter 边缘那一列不能因为浮点差一点点就只擦到 99%（出界部分被目标裁掉）
         var clearRect = new Vortice.RawRectF(
-            canvas.MinX, canvas.MinY, canvas.MaxX, canvas.MaxY);
+            canvas.MinX - 1f, canvas.MinY - 1f, canvas.MaxX + 1f, canvas.MaxY + 1f);
         _ctx.PrimitiveBlend = PrimitiveBlend.Copy;
         _ctx.FillRectangle(clearRect,
             boardOverDocTranslucent ? Brush(app.DocPaperColor) : BoardBrush(app));
@@ -523,10 +534,12 @@ internal sealed partial class OverlayWindow
             float b = MathF.Min(tr.MaxY, canvasRect.MaxY);
             if (r <= l || b <= t) continue;
 
-            // src = (画布子矩形 − 块原点) × RenderScale（纹理像素）；
+            // src = (画布子矩形 − 块原点) × RenderScale + gutter（纹理像素）：块原点在纹理里是 (G, G)，
+            // 外面那一圈只给 Linear 采样当邻居读（见 CanvasTileCache.GutterTexels），src 本身不碰它。
             // dst 由 CanvasToWindow 换算：缩放时同一块在窗口上更大，由 DrawBitmap 拉伸。
-            var src = new Vortice.RawRectF((l - tr.MinX) * tex, (t - tr.MinY) * tex,
-                                           (r - tr.MinX) * tex, (b - tr.MinY) * tex);
+            const float g = CanvasTileCache.GutterTexels;
+            var src = new Vortice.RawRectF((l - tr.MinX) * tex + g, (t - tr.MinY) * tex + g,
+                                           (r - tr.MinX) * tex + g, (b - tr.MinY) * tex + g);
             var dst = new Vortice.RawRectF(
                 CanvasToWindowX(l), CanvasToWindowY(t),
                 CanvasToWindowX(r), CanvasToWindowY(b));
@@ -551,15 +564,11 @@ internal sealed partial class OverlayWindow
         MinX = CanvasToWindowX(r.MinX), MinY = CanvasToWindowY(r.MinY),
         MaxX = CanvasToWindowX(r.MaxX), MaxY = CanvasToWindowY(r.MaxY),
     };
-    private RectF ClipToWindow(RectF r)
-    {
-        float l = MathF.Max(r.MinX, OriginX);
-        float t = MathF.Max(r.MinY, OriginY);
-        float rr = MathF.Min(r.MaxX, OriginX + Width);
-        float b = MathF.Min(r.MaxY, OriginY + Height);
-        if (rr < l || b < t) return RectF.Empty;
-        return new RectF { MinX = l, MinY = t, MaxX = rr, MaxY = b };
-    }
+    /// <summary>
+    /// 窗口矩形夹进 [0,Width]×[0,Height]。**吃窗口坐标**（2026-11-16 起；以前夹的是屏幕范围
+    /// [OriginX, OriginX+Width]，和画的时候"当窗口坐标用"对不上，副屏上全错）。
+    /// </summary>
+    private RectF ClipToWindow(RectF r) => OverlayCoords.ClipToWindow(r, Width, Height);
 
     /// <summary>
     /// 旋转度数标签的矩形（**画布坐标**）。抽成独立函数，是因为有两处必须
@@ -735,7 +744,8 @@ internal sealed partial class OverlayWindow
         // 滑块长度 = 一屏 / 画布总高；位置 = 视口顶在画布里的比例
         float thumbLen = MathF.Max(40f * dpi, trackLen * (Height / extentH));
         float maxTravel = trackLen - thumbLen;
-        float viewTop = WindowToCanvasY(OriginY);       // 视口顶部对应的画布 Y
+        // 视口顶部对应的画布 Y。WindowToCanvasY 吃**窗口坐标**：窗口顶 = 0（以前传 OriginY，原点被加两次）
+        float viewTop = WindowToCanvasY(0f);
         float frac = extentH - Height > 1f
             ? (viewTop - extent.MinY) / (extentH - Height) : 0f;
         frac = Math.Clamp(frac, 0f, 1f);

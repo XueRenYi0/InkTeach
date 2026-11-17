@@ -531,6 +531,17 @@ internal sealed partial class App
             InkTrailTest(args.Contains("--touch"));   // `--trailtest --touch` = 合成触摸对照
             return null;
         }),
+        new("--uidragghost", "[area]  界面拖动残影（强制整屏上屏 + 合成鼠标拖工具条 30 帧，截图 reports/shots/uidragghost.bmp；area = 局部上屏 + 打上屏面积）", args =>
+        {
+            // 2026-11-16 残影评审 P0-1：整屏兜底帧只重画脏区 → 旧界面上屏。修之前必然 FAIL。
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            UiDragGhostTest(args.Contains("area"));
+            // 退出码要带出去：返回 null 时外层固定 `return 0`，FAIL 也是 0。
+            Loop();
+            Shutdown();
+            return ExitCode;
+        }),
         new("--updatecheck", "[清单地址] [--apply]  自动更新验收（**会真的换壳**：--apply = 查到就装）", args =>
         {
             // **验收用（会真的换壳！）**：`--updatecheck [清单地址] [--apply]`

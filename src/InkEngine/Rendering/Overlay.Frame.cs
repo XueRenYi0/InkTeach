@@ -70,7 +70,7 @@ internal sealed partial class OverlayWindow
         // 动态橡皮：指针停住之后把尺寸**缓释**回去（每帧推一次；续帧由引擎那边的 `_dirty` 保证）。
         app.TickEraserIdleDecay();
 
-        _transientNow = ComputeTransientBounds(app);
+        ComputeTransientBounds(app);
         UpdateFrameDirty(app, uiVisible);
 
         var sw = Stopwatch.StartNew();
@@ -178,10 +178,23 @@ internal sealed partial class OverlayWindow
 
         if (app.EraserHud) DrawEraserHud(app);   // 橡皮读数（8.3.7，默认关；调参用）
 
+        // ↓↓↓ 【屏幕坐标浮层组】滚动条 / PPT 条 / 回放条 / 计时卡 / 点名卡 / 文档恢复卡 /
+        // 引擎提示：这几个的几何函数（TryScrollBar、PptBarRect、ReplayBarRect、TimerCardRect、
+        // RollCardRect、DocResumeRectsNow、TooltipCardRect）都从 ScreenRectPhysical() 出发，
+        // 给的是**虚拟桌面坐标**（含 _virtualX/_virtualY）；后缓冲吃的是**窗口坐标**，
+        // 所以画之前要整体减一次窗口原点（和 DrawUi 的 Overlay.Ui.cs:168 同一记）。
+        // 主屏 OriginX=OriginY=0 时两者相等，看不出来；副屏（OriginX=1920）上不减就画到窗口外。
+        // ⚠ 这些几何函数**本身不改**：命中测试（Engine.Cursor/Engine.Input 用屏幕指针坐标）
+        //   和 OverlayLayerRegistration 还在用屏幕坐标，改了会连带炸。
+        // ⚠ 组里的绘制函数**不许再自己减原点**（外层已经减过，内层重复减就是双倍偏移）。
+        // ⚠ HUD / 触点 HUD / 橡皮 HUD（上面那几行）、Toast、截图/吸管层（下面）已经是
+        //   窗口坐标，**不能**被这个平移带上——所以组结束必须还原 Identity。
+        _ctx.Transform = Matrix3x2.CreateTranslation(-OriginX, -OriginY);
+
         // 滚动条（样式 B：一根细线）。画在浮动层，不进内容层。
         DrawScrollBar(app);
 
-        // 底部那两条 PPT 控件（放映时才画）。**必须画在 `Matrix3x2.Identity` 之下**：
+        // 底部那两条 PPT 控件（放映时才画）。**必须画在"不带相机"的变换之下**：
         // 它们的矩形是**屏幕坐标**（贴屏幕底边、只跟屏幕走），画在上面的画布变换里
         // 会被相机整体平移——相机一滚，条就跟着跑偏（和 HUD、滚动条同一批，同一理由）。
         DrawPptBar(app);
@@ -203,7 +216,12 @@ internal sealed partial class OverlayWindow
         // 截图整层之下——截图时 TooltipShown 本来就是假的（进入截图会清掉）。
         DrawEngineTooltip(app);
 
+        // ↑↑↑ 【屏幕坐标浮层组】到此结束，还原成窗口坐标。
+        _ctx.Transform = Matrix3x2.Identity;
+
         // 轻提示（2 秒）：画在所有浮层之上、截图整层之下。
+        // 它的 ToastRect **已经是窗口坐标**（见 Overlay.Toast.cs:25-35），所以必须在
+        // 还原之后画——跟着上面那记平移会被多减一次原点。
         // 只画不接命中——提示期间笔/鼠标/触摸照常落到画布和按钮上。
         DrawToast(app);
 
@@ -233,8 +251,9 @@ internal sealed partial class OverlayWindow
         LastRecordMs = sw.Elapsed.TotalMilliseconds;
         if (hr.Failure) LastError = "frame EndDraw: " + hr.Description;
 
-        // 记住这一帧界面的位置，下一帧靠它把"刚刚消失"的界面擦干净。
-        _uiBoundsPrev = uiVisible ? _uiBounds : RectF.Empty;
+        // 记住这一帧界面的位置，后两帧靠它把"刚刚移走 / 消失"的界面擦干净（两个后缓冲各一次）。
+        _uiBoundsHistory[1] = _uiBoundsHistory[0];
+        _uiBoundsHistory[0] = uiVisible ? ScreenRectToWindow(_uiBounds) : RectF.Empty;
         // 图库面板同理：下一帧用它把刚刚关掉的那张卡片从屏幕上擦掉。
         // 抽屉可能比窄面板宽，也要一起并进来。
         _libraryRectPrev = RectF.Empty;
@@ -329,10 +348,15 @@ internal sealed partial class OverlayWindow
     /// 每帧都会重绘的元素的包围盒：正在书写的那一笔、激光轨迹、橡皮光标、
     /// 框选矩形、性能面板。它们不进内容层，所以每帧都要重新画，
     /// 也就必须每帧都算进脏区。
+    ///
+    /// 结果写进 <see cref="_transientNow"/>：**每处 `r.Add` 一块矩形**，不再并成一个联合包围盒
+    /// （2026-11-16 残影评审 P1-1）。各类图元"当前 + 上一帧"的账还是原样记在各自那一块里，
+    /// 上上帧由 UpdateFrameDirty 里的 `_transientHistory` 补齐——覆盖范围一块都没少，只是不再连带中间的空白。
     /// </summary>
-    private RectF ComputeTransientBounds(InkEngine app)
+    private void ComputeTransientBounds(InkEngine app)
     {
-        var r = RectF.Empty;
+        var r = _transientNow;
+        r.Clear();
 
         // 自绘的落点反馈（橡皮方框 / 圆环 / 圆盘）：每帧都重画，而且**一帧可能移动超过半径**
         //（快擦；面积擦的框还会随速度变大变小）。所以它必须走这条"最近三帧"的集合，
@@ -485,19 +509,29 @@ internal sealed partial class OverlayWindow
         // 所以取景期间干脆把整个窗口进脏区（这段时间本来就每帧全屏重画，一两秒的事）；
         // **收场那一帧**同样要整窗——把遮罩擦干净。
         if (app.CaptureActive || _captureWasActive)
-            r.Add(new RectF { MinX = OriginX, MinY = OriginY, MaxX = OriginX + Width, MaxY = OriginY + Height });
+            r.Add(FullWindowRect);
         _captureWasActive = app.CaptureActive;
 
         // 屏幕吸管（2026-10-28）：冻结帧铺满整窗，放大镜跟着指针每帧移动，
         // 退出后的第一帧还要把上一次的镜片/读数擦掉。和截图同理，短时模态，
         // **整窗进脏区**最稳；按"旧镜 ∪ 新镜"抠细节省不了多少，还会漏。
         if (app.ColorPickActive || _colorPickWasActive)
-            r.Add(new RectF { MinX = OriginX, MinY = OriginY, MaxX = OriginX + Width, MaxY = OriginY + Height });
+            r.Add(FullWindowRect);
         _colorPickWasActive = app.ColorPickActive;
+
+        // 反馈群二维码：整屏 55% 黑遮罩画在脏区循环**外面**（压住界面）。只要它开着，
+        // 每帧都得整屏重画——否则没进脏区的地方是"上一帧已经叠过一层黑"的画面，再叠一层，
+        // 静止区域一帧比一帧暗（2026-11-16 残影评审 P2）。消失后的第一帧也整屏，再补一次两帧整屏
+        // （HideFeedbackQr 那边也会请求，这里兜住别的关闭路径）。
+        if (app.FeedbackQrVisible || _feedbackQrWasVisible)
+            r.Add(FullWindowRect);
+        if (_feedbackQrWasVisible && !app.FeedbackQrVisible)
+            _fullFramesLeft = 2;
+        _feedbackQrWasVisible = app.FeedbackQrVisible;
 
         // 图库面板：开合、悬停高亮、勾选都会变，所以**每帧按当前矩形算进脏区**；
         // 关掉之后旧位置也要擦干净——所以上一帧那份矩形同样并进来
-        //（和界面 `_uiBoundsPrev` 一模一样的做法：只算当前，屏幕会留一张擦不掉的卡片印子）。
+        //（和界面 `_uiBoundsHistory` 一模一样的做法：只算当前，屏幕会留一张擦不掉的卡片印子）。
         if (app.LibraryPanelVisibleNow && !app.LibraryPlacementMode)
         {
             float pad = FloatingDirtyPad(app, app.UiUnit);
@@ -529,7 +563,7 @@ internal sealed partial class OverlayWindow
 
         // 底部页码条（含它上面的页号面板 / 菜单）：悬停、拖动每帧都在变，
         // 必须按当前矩形算进脏区；**退出放映/关文档那一帧**旧位置也要擦掉，所以上一帧
-        // 那份矩形同样并进来（同图库面板、界面 `_uiBoundsPrev` 的做法）。
+        // 那份矩形同样并进来（同图库面板、界面 `_uiBoundsHistory` 的做法）。
         {
             var cur = RectF.Empty;
             if (app.PageBarVisible)
@@ -543,11 +577,13 @@ internal sealed partial class OverlayWindow
                 // 缩放档位浮层（文档模式）同理：它开在条的上方，不收进脏区就不上屏。
                 if (app.PptZoomMenuOpen)
                 { app.PptZoomMenuRect(out var zm); cur.Add(zm.MinX, zm.MinY); cur.Add(zm.MaxX, zm.MaxY); }
+                // 这一条的几何是**屏幕坐标**（ScreenRectPhysical 那一套），脏区一律窗口坐标
+                cur = ScreenRectToWindow(cur);
                 float barPad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
                 r.Add(cur.Inflate(barPad));
             }
             if (!_pptBarRectPrev.IsEmpty) r.Add(_pptBarRectPrev);
-            _pptBarRectPrev = cur;
+            _pptBarRectPrev = cur;      // 窗口坐标，下一帧直接加（擦旧位置）
         }
 
         // 回放：控制条（悬停/拖动/数值都在变）＋ 正在长的那一条的前缀——都每帧在变，
@@ -556,7 +592,7 @@ internal sealed partial class OverlayWindow
             var cur = RectF.Empty;
             if (app.ReplayActive)
             {
-                cur = app.ReplayBarRect();
+                cur = ScreenRectToWindow(app.ReplayBarRect());   // 屏幕坐标 → 窗口坐标
                 float pad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
                 r.Add(cur.Inflate(pad));
                 int idx = app.ReplayCurrentIndexNow;
@@ -576,7 +612,7 @@ internal sealed partial class OverlayWindow
             var cur = RectF.Empty;
             if (app.TimerCardOpen)
             {
-                cur = app.TimerCardRect();
+                cur = ScreenRectToWindow(app.TimerCardRect());   // 屏幕坐标 → 窗口坐标
                 float pad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
                 r.Add(cur.Inflate(pad));
             }
@@ -589,7 +625,7 @@ internal sealed partial class OverlayWindow
             var cur = RectF.Empty;
             if (app.RollCardOpen)
             {
-                cur = app.RollCardRect();
+                cur = ScreenRectToWindow(app.RollCardRect());    // 屏幕坐标 → 窗口坐标
                 float pad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
                 r.Add(cur.Inflate(pad));
             }
@@ -602,7 +638,7 @@ internal sealed partial class OverlayWindow
             var cur = RectF.Empty;
             if (app.DocResumeVisible && app.DocView.IsOpen)
             {
-                cur = app.DocResumeCardRect();
+                cur = ScreenRectToWindow(app.DocResumeCardRect());   // 屏幕坐标 → 窗口坐标
                 if (!cur.IsEmpty)
                 {
                     float pad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
@@ -619,7 +655,7 @@ internal sealed partial class OverlayWindow
             var cur = RectF.Empty;
             if (app.TooltipShown)
             {
-                cur = TooltipCardRect(app);
+                cur = ScreenRectToWindow(TooltipCardRect(app));   // 屏幕坐标 → 窗口坐标
                 float tipPad = 4f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
                 if (!cur.IsEmpty) r.Add(cur.Inflate(tipPad));
             }
@@ -803,10 +839,11 @@ internal sealed partial class OverlayWindow
         if (app.ShowHud)
         {
             // 面板区域每帧都要进脏区：后缓冲里躺着的是两帧前的画面，不重贴就会闪。
+            // 窗口坐标（面板本来就画在窗口局部的 (m, m)；以前这里加了原点，副屏上对不上）。
             float m = HudMarginLogical * HudScale;
             var h = RectF.Empty;
-            h.Add(OriginX + m - 2, OriginY + m - 2);
-            h.Add(OriginX + m + HudWidthPx + 2, OriginY + m + HudHeightPx + 2);
+            h.Add(m - 2, m - 2);
+            h.Add(m + HudWidthPx + 2, m + HudHeightPx + 2);
             r.Add(h);
         }
 
@@ -839,13 +876,14 @@ internal sealed partial class OverlayWindow
         bool sbShown = TryScrollBar(app, out _)
                        && (app.ScrollBarHover || app.ScrollBarDragging
                            || (app.NowMs - app.ScrollBarActiveAtMs) / 1000.0 <= 3.5);
+        // 脏区一律窗口坐标（滚动条几何本身是屏幕坐标，这里只要"窗口右缘那一条"）。
         _scrollbarRect = sbShown
             ? new RectF
               {
-                  MinX = OriginX + Width - 30f * app.DpiScale,
-                  MinY = OriginY,
-                  MaxX = OriginX + Width,
-                  MaxY = OriginY + Height,
+                  MinX = Width - 30f * app.DpiScale,
+                  MinY = 0,
+                  MaxX = Width,
+                  MaxY = Height,
               }
             : RectF.Empty;
 
@@ -856,8 +894,6 @@ internal sealed partial class OverlayWindow
             r.Add(_selMenuRectPrev);
             _selMenuRectPrev = RectF.Empty;
         }
-
-        return r;
     }
 
     /// <summary>汇总这一帧要上屏的矩形交给 Present1。</summary>
@@ -865,11 +901,9 @@ internal sealed partial class OverlayWindow
     {
         _frameDirty.Clear();
 
-        var full = new RectF
-        {
-            MinX = OriginX, MinY = OriginY,
-            MaxX = OriginX + Width, MaxY = OriginY + Height,
-        };
+        // `_frameDirty` 一律**窗口坐标**（见 OverlayCoords）：画布矩形过 CanvasRectToWindow，
+        // 屏幕矩形（界面）过 ScreenRectToWindow，整屏就是 (0,0)..(W,H)。
+        var full = FullWindowRect;
 
         // 脏区也看 **RenderDoc**（回放中是影子文档——它才是内容层这一帧画的东西）。
         // 只看真文档的话，回放里"刚出完的那一条"不会进上屏脏区，贴出来的是上一帧。
@@ -905,13 +939,12 @@ internal sealed partial class OverlayWindow
         // 万一以后再看到那种"跟着框走的竖线"，先回来看 `AddClipped`：那里是唯一一处
         // 决定"哪些像素会被擦到"的地方。
 
-        // 临时图元：这一帧 + 前两帧（双缓冲里躺着的是两帧前的画面）
-        var t = _transientNow;
+        // 临时图元：这一帧 + 前两帧（双缓冲里躺着的是两帧前的画面）。**逐块**加，不再并成一个盒子。
+        AddClipped(_frameDirty, _transientNow.Items);
         for (int i = 0; i < Math.Clamp(TransientHistoryFrames, 0, 2); i++)
-            t.Add(_transientHistory[i]);
-        if (!t.IsEmpty) AddClipped(_frameDirty, t);
+            AddClipped(_frameDirty, _transientHistory[i].Items);
 
-        // 右缘滚动条那一条：**单独加**，不参与上面那个联合包围盒（理由见 ComputeTransientBounds）。
+        // 右缘滚动条那一条：**单独加**（理由见 ComputeTransientBounds 末尾；它整屏高）。
         // 上一帧那一份也要加：它可能是"淡出结束、这一帧不再画"的第一帧，少加一帧就留下一条残影。
         if (!_scrollbarRect.IsEmpty) AddClipped(_frameDirty, _scrollbarRect);
         if (!_scrollbarRectPrev.IsEmpty) AddClipped(_frameDirty, _scrollbarRectPrev);
@@ -919,25 +952,54 @@ internal sealed partial class OverlayWindow
 
         // 界面每帧都会重新贴到后缓冲上，所以它那块区域每帧都得算进上屏的脏区，
         // 否则双缓冲一交换，界面就会闪一下或干脆不见了。
-        // 界面这一帧和上一帧占的地方都要算进来：界面可能是刚刚消失的
-        // （比如穿透提示淡出、调色板收起），双缓冲里还留着它的旧画面。
-        if (uiVisible) AddClipped(_frameDirty, _uiBounds);
-        if (!_uiBoundsPrev.IsEmpty) AddClipped(_frameDirty, _uiBoundsPrev);
+        // 界面这一帧和前两帧占的地方都要算进来：界面可能是刚刚移走 / 消失的
+        // （拖动、穿透提示淡出、调色板收起），两个后缓冲里都还留着它的旧画面。
+        // 历史里存的已经是窗口坐标（见 RenderFrame 末尾）。
+        if (uiVisible) AddClipped(_frameDirty, ScreenRectToWindow(_uiBounds));
+        for (int i = 0; i < _uiBoundsHistory.Length; i++)
+            if (!_uiBoundsHistory[i].IsEmpty) AddClipped(_frameDirty, _uiBoundsHistory[i]);
 
         // 兜底：真要是一个矩形都没有，就整屏来一次，避免出现没擦干净的画面
         if (_frameDirty.Count == 0) _frameDirty.Add(full);
+
+        // 画之前先把**有正面积重叠**的块并成外接框（残影评审 P1-2）：同一个东西的这一帧 / 上一帧 /
+        // 上上帧三块几乎重合，不并的话重叠部分要把全部浮层重画三遍。只是边角相接的不并（不把空隙算进来）。
+        // 和上屏矩形同一个合并函数（MergeOverlapping）。
+        MergeOverlapping(_frameDirty, static (a, b) => a.MinX < b.MaxX && b.MinX < a.MaxX
+                                                     && a.MinY < b.MaxY && b.MinY < a.MaxY,
+                                      static (a, b) => new RectF
+                                      {
+                                          MinX = MathF.Min(a.MinX, b.MinX), MinY = MathF.Min(a.MinY, b.MinY),
+                                          MaxX = MathF.Max(a.MaxX, b.MaxX), MaxY = MathF.Max(a.MaxY, b.MaxY),
+                                      });
+
+        // 这一帧要走**整屏上屏**（--fullpresent / 合并后 >16 块 / 面积 >80% / 一块都没落进窗口）
+        // → 那就**真的整屏重画**（2026-11-16 残影评审 P0-1）。
+        // 整屏上屏时运行时不从上一缓冲拷任何东西，交出去的是"两帧前的画面 + 这一帧重画的脏区"：
+        // 哪一类图元的历史少记了一帧，它的旧像素就会被当成整屏内容上屏，之后 `Present1` 帧
+        // 再把它从这块缓冲拷进另一块，残影就一直留着。判断和 `Present()` 用同一个函数，不许各写一套。
+        var plan = ComputePresentRects(_frameDirty, _presentRects);
+        if (plan.Full)
+        {
+            _frameDirty.Clear();
+            _frameDirty.Add(full);
+        }
 
         if (Trace)
         {
             string R(RectF r) => r.IsEmpty ? "-" : $"({r.MinX:F0},{r.MinY:F0})..({r.MaxX:F0},{r.MaxY:F0})";
             string RL(List<RectF> l) => l.Count == 0 ? "-" : string.Join(",", l.ConvertAll(x => R(x)));
             Console.WriteLine($"    [dirtysrc] now={RL(_contentDirtyNow)} prev={RL(_contentDirtyPrev)} "
-                              + $"trans={R(_transientNow)} h0={R(_transientHistory[0])} h1={R(_transientHistory[1])} "
-                              + $"ui={R(_uiBounds)} uiprev={R(_uiBoundsPrev)} cursor={R(_cursorRectPrev)} uiVis={uiVisible}");
+                              + $"trans={RL(_transientNow.Items)} h0={R(_transientHistory[0].Bounds)} h1={R(_transientHistory[1].Bounds)} "
+                              + $"ui={R(_uiBounds)} uiprev={R(_uiBoundsHistory[0])} uiprev2={R(_uiBoundsHistory[1])} "
+                              + $"cursor={R(_cursorRectPrev)} uiVis={uiVisible} fullRedraw={plan.Full}");
         }
 
+        // 三份 List 轮换（不分配）：最老那份腾出来，下一帧 ComputeTransientBounds 先 Clear 再填
+        var oldest = _transientHistory[1];
         _transientHistory[1] = _transientHistory[0];
         _transientHistory[0] = _transientNow;
+        _transientNow = oldest;
 
         _contentDirtyPrev.Clear();
         _contentDirtyPrev.AddRange(_contentDirtyNow);

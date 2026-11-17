@@ -1420,11 +1420,7 @@ internal sealed partial class OverlayWindow
     private void RenderTransparentForCapture()
     {
         _frameDirty.Clear();
-        _frameDirty.Add(new RectF
-        {
-            MinX = OriginX, MinY = OriginY,
-            MaxX = OriginX + Width, MaxY = OriginY + Height,
-        });
+        _frameDirty.Add(FullWindowRect);
 
         _ctx.Target = _backBuffer;
         _ctx.BeginDraw();
@@ -1437,7 +1433,8 @@ internal sealed partial class OverlayWindow
         _ctx.Target = null;
         if (hr.Failure) LastError = "transparent capture EndDraw: " + hr.Description;
 
-        _uiBoundsPrev = RectF.Empty;
+        _uiBoundsHistory[0] = RectF.Empty;
+        _uiBoundsHistory[1] = RectF.Empty;
         _libraryRectPrev = RectF.Empty;
     }
 

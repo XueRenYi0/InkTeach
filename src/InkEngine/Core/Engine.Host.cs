@@ -2180,7 +2180,11 @@ public partial class InkEngine
                 return IntPtr.Zero;
 
             case Native.WM_DISPLAYCHANGE:
+                // 换分辨率 / 投影模式之后两个后缓冲里都可能是旧画面：**整屏重画两帧**
+                // （同 _fullFramesLeft = 2 的道理；只置脏的话局部脏区会让一块旧画面一直留着。
+                // 2026-11-16 残影评审 P2）。
                 _dirty = true;
+                RequestFullFrames();
                 return IntPtr.Zero;
 
             case Native.WM_CLOSE:
