@@ -1,0 +1,7 @@
+{
+  "_说明": "复制成 oss-site.local.json 再填。这个文件（含 example 的副本）不进 git；AK 不写在这里，走 ossutil config。",
+  "enabled": true,
+  "bucket": "inkteach-site",
+  "region": "cn-hangzhou",
+  "prefix": ""
+}

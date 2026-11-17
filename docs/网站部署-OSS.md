@@ -47,22 +47,22 @@ src\InkTeach\InkTeach.csproj  <Version>   ← 版本号唯一来源
 |---|---|---|---|
 | `img/demo.gif` | 331 KB | **删了** | 首屏大图，占全站 2/3 |
 | `img/demo.mp4` | — | **63 KB** | 同画面 H.264，`autoplay muted loop playsinline` |
-| `img/demo-poster.jpg` | — | **12 KB** | 视频封面，首帧就出图，不等视频下载 |
-| 白名单 12 个文件合计 | 约 490 KB | **约 250 KB** | 磁盘体积 |
+| `img/demo-poster.jpg` | — | **14 KB** | 视频封面（取圆变成规整图形那一刻），不等视频下载就有画面 |
+| 白名单 12 个文件合计 | 约 490 KB | **约 296 KB** | 磁盘体积 |
 
-再叠一层 **gzip**（`deploy-site` 对文本类做）：`index.html` 5.8 KB、`style.css` 2.5 KB、
-`i18n.js` 34.6 KB、`site-release.js` 2.3 KB、`release.json` 不到 1 KB。
-文本类合计约 47 KB。
+再叠一层 **gzip**（`deploy-site` 对文本类做）：`index.html` 5.8 KB、`style.css` 2.6 KB、
+`i18n.js` 34.1 KB、`site-release.js` 2.2 KB、`release.json` 0.2 KB。
+文本类合计约 48 KB。
 
-**一次首次访问 ≈ 122 KB**（文本 47 + 封面 12 + 视频 63），视频进缓存后复访 ≈ 60 KB。
+**一次首次访问 ≈ 125 KB**（文本 48 + 封面 14 + 视频 63），视频进缓存后复访 ≈ 62 KB。
 
 按量付费的钱主要花在**外网流出流量**（存储 0.09 元/GB/月，这点文件一个月不到 1 分钱）：
 
 | 月访问量 | 流量 | 流量费（忙时 0.50 元/GB 粗算） |
 |---|---|---|
-| 1,000 次 | ≈ 122 MB | **≈ 0.06 元** |
-| 10,000 次 | ≈ 1.2 GB | ≈ 0.6 元 |
-| 100,000 次 | ≈ 12 GB | ≈ 6 元 |
+| 1,000 次 | ≈ 125 MB | **≈ 0.06 元** |
+| 10,000 次 | ≈ 1.25 GB | ≈ 0.6 元 |
+| 100,000 次 | ≈ 12.5 GB | ≈ 6 元 |
 
 **安装包永远不放 OSS**：zip 16.7 MB / Setup 13.9 MB，一个下载就是网站首屏的 100 倍流量。
 下载继续走 GitHub Releases（国外）+ GitCode（国内），`release.json` 里已经分好了 `gh` / `cn` 两个地址。

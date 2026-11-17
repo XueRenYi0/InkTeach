@@ -38,6 +38,9 @@ vendor/
 reports/log-ledger.json
 logs-download/
 
+# 官网 OSS 部署配置（bucket / region / prefix，一人一份；AK 走 ossutil config 也不进库）
+tools/oss-site.local.json
+
 # AI 基准：密钥与原始返回不进库
 tools/ai-bench/keys.json
 tools/ai-bench/raw/

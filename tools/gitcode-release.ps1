@@ -116,7 +116,11 @@ if (Test-Path $localManifest) {
         }
         if ($curFile -and $curFile.sha) { $putBody.sha = $curFile.sha }
         $putFile = Join-Path $env:TEMP "inkteach-gc-put-$Version.json"
-        ($putBody | ConvertTo-Json -Compress) | Set-Content -Path $putFile -Encoding UTF8
+        # **不带 BOM**：`Set-Content -Encoding UTF8` 在 Windows PowerShell 5.1 上会写 BOM，
+        # 带着 BOM 的 JSON 体 GitCode 直接回 400（"Request body parsing error"），
+        # 2026-11-17 发 9.9.3 时踩到过一次。这里显式用无 BOM 的 UTF8Encoding。
+        [System.IO.File]::WriteAllText($putFile, ($putBody | ConvertTo-Json -Compress),
+            (New-Object System.Text.UTF8Encoding($false)))
         $putOut = curl.exe -s --max-time 60 -X PUT "$contentsApi`?access_token=$tok" -H 'Content-Type: application/json' --data-binary "@$putFile"
         Remove-Item $putFile -Force -ErrorAction SilentlyContinue
         if ($putOut -match '"commit"') { Write-Host "  镜像清单已更新（$Version）" -ForegroundColor Green }

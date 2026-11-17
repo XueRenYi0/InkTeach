@@ -13,6 +13,7 @@
   顺序：
     ① sync-site  官网 release.json / JSON-LD / sitemap 跟上版本
     ② publish    打包（AOT + zip + Setup + update.json）
+    ②b           官网大小回填，再传到阿里云 OSS（没配 tools\oss-site.local.json 就跳过）
     ③ 提交并推 main + tag 到 **原仓库 XueRenYi0/InkTeach**（源码公开）
     ④ GitHub Release：建 tag 发行版，传 zip / Setup / 固定名副本 / update.json
     ⑤ GitCode 镜像：建发行版、传附件（国内直连，不停）
@@ -59,6 +60,15 @@ Run { & powershell @pubArgs }
 foreach ($f in @($zip, $setup, $manifest)) {
     if (-not (Test-Path $f)) { throw "打包没产出：$f" }
 }
+
+Step '2b' "官网大小回填 + 同步到阿里云 OSS"
+# 打包前那次 sync-site 读的是**上一版**的 dist（这一版的 zip/setup 还没生成），
+# 所以打完包再跑一次，把这一版的真实大小写进 release.json，然后整站传到 OSS。
+# 没配 tools\oss-site.local.json 时 deploy-site 自己跳过，不影响 GitHub Pages 这条线。
+Run { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'sync-site.ps1') -Version $ver }
+$deployArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'deploy-site.ps1'))
+if ($DryRun) { $deployArgs += '-DryRun' }
+Run { & powershell @deployArgs }
 
 if ($DryRun) {
     Write-Host "`n-DryRun：打包完成，未提交/未发布。产物在 dist\。" -ForegroundColor Yellow
