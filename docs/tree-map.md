@@ -1,6 +1,6 @@
 # 目录树（自动生成，勿手改）
 
-> 生成：2026-11-17 ／ 脚本：`tools/gen-tree-map.ps1`
+> 生成：2026-11-18 ／ 脚本：`tools/gen-tree-map.ps1`
 > 用途：目录 = 功能域、文件名 = 功能块；先看树定位目录，再看行数决定读哪一段。
 > 语义导航（“某个需求该看哪 1–2 个文件”）看 `docs/module-map.md`；段落行号看 `docs/section-map.md`。
 
@@ -22,8 +22,8 @@
     **InkEngine/Core/**
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 170 行
-      - `Engine.cs` 2,881 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
-      - `Engine.Host.cs` 2,358 行 — 启动、消息循环、窗口过程（WndProc）。
+      - `Engine.cs` 2,898 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
+      - `Engine.Host.cs` 2,357 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
       - `Engine.Selection.Gesture.cs` 1,466 行 — 框选/套索/拖动/对齐吸附/美化入口。
@@ -75,13 +75,14 @@
       - `DwellAssist.cs` 122 行
       - `Engine.Capture.cs` 374 行 — 截图状态、确认/取消、手柄与读数。
       - `Engine.Clipboard.cs` 506 行
-      - `Engine.Input.cs` 2,029 行 — 指针输入、停顿成型、动态橡皮。
+      - `Engine.Input.cs` 2,030 行 — 指针输入、停顿成型、动态橡皮。
       - `Engine.TouchGestures.cs` 792 行 — 触摸手势：单指/双指/三指/长按/惯性。
       - `GoogleInkSlidingWindow.cs` 670 行 — Google Ink 滑动窗口输入。
       - `InkModel.cs` 285 行
       - `InkModelProbe.cs` 278 行
       - `InkStrokeModeler.cs` 1,321 行 — ink-stroke-modeler 1:1 移植（笔迹模型）。
       - `InputBlackBox.cs` 76 行
+      - `InputDeliveryStats.cs` 85 行 — 统计"喂进引擎的点"到底是怎么投递的：同一批里时标是否相同、连批有多长。
       - `InputPrecision.cs` 75 行
       - `MotionProbe.cs` 589 行
       - `PenInput.cs` 173 行
@@ -125,7 +126,7 @@
       - `PptLink.cs` 193 行
 
     **InkEngine/Prediction/**
-      - `InkPredictorLinear.cs` 273 行
+      - `InkPredictorLinear.cs` 452 行
 
     **InkEngine/Rendering/**
       - `CanvasTiles.cs` 552 行
@@ -162,7 +163,7 @@
       - `Engine.Library.Input.cs` 1,013 行 — 收藏库指针输入：拖拽/整理/排序/页签拖动。
       - `Engine.Library.Layout.cs` 583 行 — 收藏面板插入/几何/尺寸/拖拽落位。
       - `Engine.Library.Menu.cs` 407 行 — 收藏库 ⋯ 菜单、过滤、滚动。
-      - `Engine.Library.Pair.cs` 555 行 — 收藏库杂项：双支配对/隐藏配对/结束笔画。
+      - `Engine.Library.Pair.cs` 561 行 — 收藏库杂项：双支配对/隐藏配对/结束笔画。
       - `Engine.ShapeTools.cs` 1,573 行 — 图形工具：直线/矩形/椭圆/箭头/曲线绘制。
       - `FavoriteTransfer.cs` 149 行
       - `FigureParamBar.cs` 126 行
@@ -209,7 +210,7 @@
       - `App.Dev.Render.cs` 484 行
       - `App.Dev.Sheets.cs` 382 行
       - `App.Dev.Showcase.cs` 500 行
-      - `App.Dev.Smooth.cs` 624 行 — 平滑/运动模型展示工具（开发期）。
+      - `App.Dev.Smooth.cs` 765 行 — 平滑/运动模型展示工具（开发期）。
       - `App.Dev.TextShow.cs` 488 行
       - `AppIconUi.cs` 199 行
       - `CaptureIconSheet.cs` 152 行
@@ -217,7 +218,7 @@
       - `HeadlessUi.cs` 31 行
       - `InputReplay.cs` 146 行
       - `LaserIconSheet.cs` 130 行
-      - `PdMetrics.cs` 183 行
+      - `PdMetrics.cs` 357 行
       - `PenIcons.g.cs` 97 行
       - `PenSheet.cs` 163 行
       - `RecoProbe.cs` 2,188 行 — 笔迹识别自检（--inktest）。
@@ -281,7 +282,7 @@
         - `PlotFromCard.cs` 174 行
         - `PlotSuiteTest.cs` 205 行
         - `PptStorage.cs` 1,783 行 — PPT 批注落盘 E2E。
-        - `PredictLinear.cs` 111 行
+        - `PredictLinear.cs` 160 行
         - `Qr.cs` 77 行
         - `SelAiShow.cs` 126 行
         - `SelBarShow.cs` 40 行

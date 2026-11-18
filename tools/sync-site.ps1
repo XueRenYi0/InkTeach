@@ -16,7 +16,7 @@
     ① 写 docs\release.json（version / date / 四个下载地址 / 两个大小）；
     ② 顺手把 index.html 的 JSON-LD（softwareVersion / downloadUrl）和 sitemap 的
        lastmod 就地改掉——这两处是给搜索引擎看的，不能靠 JS；
-    ③ 校验 index.html / i18n.js 里**没有**再写死版本号（写死就报错，免得又漏）；
+    ③ 校验所有 docs\*.html + docs\i18n\*.js 里**没有**再写死版本号（写死就报错，免得又漏）；
     ④ 打印一份对照，方便肉眼确认。
 #>
 param(
@@ -113,16 +113,40 @@ window.INKTEACH_RELEASE_FALLBACK = {
 
 # ---- 自检：页面里不许再出现写死的版本号 ----
 # 只认「当前版本号」写死：历史更新卡（9.9.0 / 9.8.0 …）本来就该写死，那是在讲旧版本。
+# 2026-11-17 拆页后页面变成六个 HTML + 十个语言文件，这里改成扫整个目录——
+# 以前只查 index.html + i18n.js，新页面写死版本号根本没人管。
+# 两处豁免（它们只认 HTML 里的字面值，靠 JS 填不了）：index.html 的 JSON-LD、首屏兜底对象。
+$targets = @()
+$targets += @(Get-ChildItem -Path $docs -Filter '*.html' -File | Sort-Object Name | ForEach-Object { $_.Name })
+$targets += @(Get-ChildItem -Path (Join-Path $docs 'i18n') -Filter '*.js' -File -ErrorAction SilentlyContinue |
+    Sort-Object Name | ForEach-Object { "i18n/$($_.Name)" })
+if (-not $targets.Contains('i18n.js')) { $targets += 'i18n.js' }   # 骨架也不能写死
+
 $hard = @()
-foreach ($f in @('index.html', 'i18n.js')) {
-    $p = Join-Path $docs $f
+foreach ($f in $targets) {
+    $p = Join-Path $docs ($f -replace '/', '\')
     if (-not (Test-Path $p)) { continue }
-    $hits = Select-String -Path $p -Pattern ([regex]::Escape($Version)) -SimpleMatch
-    foreach ($h in $hits) { $hard += "${f}:$($h.LineNumber): $($h.Line.Trim())" }
+    $lines = [System.IO.File]::ReadAllLines($p)
+    $skip = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+        if (-not $skip -and $line -match '<script\s+type="application/ld\+json">') { $skip = $true; continue }
+        if (-not $skip -and $line -match '<script>\s*$') {
+            # 兜底对象那个 <script> 块：注释里带 "发版时由"，块里有 INKTEACH_RELEASE_FALLBACK。
+            # 往后看 6 行判断，避免把别的内联脚本一起放过。
+            $peek = ($lines[$i..([Math]::Min($i + 6, $lines.Count - 1))] -join "`n")
+            if ($peek -match 'INKTEACH_RELEASE_FALLBACK') { $skip = $true; continue }
+        }
+        if ($skip) {
+            if ($line -match '</script>') { $skip = $false }
+            continue
+        }
+        if ($line.Contains($Version)) { $hard += "${f}:$($i + 1): $($line.Trim())" }
+    }
 }
 if ($hard.Count -gt 0) {
     Write-Host '  ⚠ 页面里仍有写死的版本号（应该改用 {V} 占位）：' -ForegroundColor Yellow
     $hard | ForEach-Object { Write-Host "    $_" -ForegroundColor Yellow }
 } else {
-    Write-Host '  页面里已无写死版本号（全部走 release.json）' -ForegroundColor Green
+    Write-Host "  页面里已无写死版本号（全部走 release.json；扫了 $($targets.Count) 个文件）" -ForegroundColor Green
 }

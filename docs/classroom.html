@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InkTeach 课堂 · 一堂课从打开课件到保存板书</title>
+<meta name="description" content="InkTeach 课堂使用流程：一、打开 PPT / WPS 放映 / PDF / 图片或白板；二、直接手写、荧光笔、激光笔、截图、数学图形；三、翻页批注隔离并自动保存，课后还能找回。">
+<link rel="canonical" href="https://www.inkteach.com/classroom.html">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://www.inkteach.com/classroom.html">
+<meta property="og:title" content="InkTeach 课堂 · 一堂课从打开课件到保存板书">
+<meta property="og:description" content="打开课件 → 直接写 → 翻页与保存：三步走完一堂课的批注流程。">
+<link rel="icon" type="image/png" href="img/icon.png">
+<link rel="apple-touch-icon" href="img/icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="img/icon.png" alt="" width="24" height="24">InkTeach</a>
+    <nav>
+      <a href="features.html" data-i18n="nav.features">功能</a>
+      <a href="math.html" data-i18n="nav.math">数学</a>
+      <a href="classroom.html" aria-current="page" data-i18n="nav.classroom">课堂</a>
+      <a href="download.html" data-i18n="nav.install">下载</a>
+      <a href="https://github.com/XueRenYi0/InkTeach" target="_blank" rel="noopener">GitHub</a>
+      <select id="langSelect" class="lang" aria-label="Language"></select>
+    </nav>
+  </div>
+</header>
+
+<div class="page-head">
+  <div class="wrap">
+    <p class="pill" data-i18n="nav.classroom">课堂</p>
+    <h1 data-i18n="class.title">一堂课的流程</h1>
+  </div>
+</div>
+
+<section id="classroom" class="section">
+  <div class="wrap">
+    <div class="grid">
+      <div class="card">
+        <h3 data-i18n="cl1t">01 · 打开要讲的内容</h3>
+        <p data-i18n="cl1d">PPT / WPS 放映、PDF、图片，或者直接开白板。不用先导出、也不用换软件。</p>
+      </div>
+      <div class="card">
+        <h3 data-i18n="cl2t">02 · 直接写</h3>
+        <p data-i18n="cl2d">手写、荧光笔、激光笔、截图、数学图形都在同一层；停顿一下还能把歪图画规整。</p>
+      </div>
+      <div class="card">
+        <h3 data-i18n="cl3t">03 · 翻页与保存</h3>
+        <p data-i18n="cl3d">PPT 每页批注隔离；PDF / 图片批注跟着页面走；自动保存，课后还能找回。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 2026-11-17：Opus 评审指出内容子页看完没有出口，转化在这里断掉。
+     三页同一段，只有第二行文案按页面微调。 -->
+<section class="cta-end">
+  <div class="wrap">
+    <h2>准备好在你的课堂上试试？</h2>
+    <p>随堂点名、计时、翻页批注，一条命令装好。</p>
+    <p class="btns">
+      <a class="btn primary" href="download.html" data-i18n="install.c1btn">下载安装包</a>
+      <a class="btn" href="download.html#updates" data-i18n="footer.log">更新日志</a>
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <nav class="foot-nav">
+      <a href="features.html" data-i18n="nav.features">功能</a>
+      <a href="math.html" data-i18n="nav.math">数学</a>
+      <a href="classroom.html" data-i18n="nav.classroom">课堂</a>
+      <a href="download.html" data-i18n="nav.install">下载</a>
+      <a href="download.html#updates" data-i18n="footer.log">更新日志</a>
+      <a href="privacy.html" data-i18n="footer.privacy">隐私说明</a>
+      <a href="https://github.com/XueRenYi0/InkTeach" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+    <p class="foot-tag">InkTeach · <span data-i18n="footer.short">开源课堂批注工具</span> · GPL-3.0 · 免装 .NET</p>
+    <p class="muted">© 2026 XueRenYi0</p>
+  </div>
+</footer>
+
+<!-- 2026-11-17 拆页：本页无版本号/下载链接，只挂 i18n.js。 -->
+<script defer src="i18n.js"></script>
+</body>
+</html>

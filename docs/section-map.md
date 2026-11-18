@@ -1,6 +1,6 @@
 # 段落地图（自动生成，勿手改）
 
-> 生成：2026-11-17 ／ 脚本：`tools/gen-section-map.ps1` ／ 只列 >= 600 行的文件。
+> 生成：2026-11-18 ／ 脚本：`tools/gen-section-map.ps1` ／ 只列 >= 600 行的文件。
 > 用法：``Read`` 大文件前先在这里找段落标题，再只读那一段（行号漂移后重跑脚本即可）。
 
 ## src/InkEngine/Ai/AiCard.cs（2,761 行）
@@ -94,7 +94,7 @@
 | 541 | 底行：名单 / 学号范围 |
 | 567 | 绘制小工具 |
 
-## src/InkEngine/Core/Engine.cs（2,881 行）
+## src/InkEngine/Core/Engine.cs（2,898 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -102,11 +102,11 @@
 | 28 | `internal enum PassThroughMode` |
 | 45 | `public partial class InkEngine` |
 | 576 | `internal enum CaptureDrag { None, Move, L, R, T, B, TL, TR, BL, BR }` |
-| 2216 | `internal enum VertexReadoutKind` |
-| 2346 | `internal enum AlignSnapKind` |
-| 2355 | `private enum AlignLineRole` |
-| 2362 | `private struct AlignAxisCandidate` |
-| 2464 | `private enum FrameDrive` |
+| 2233 | `internal enum VertexReadoutKind` |
+| 2363 | `internal enum AlignSnapKind` |
+| 2372 | `private enum AlignLineRole` |
+| 2379 | `private struct AlignAxisCandidate` |
+| 2481 | `private enum FrameDrive` |
 
 | 行 | 段落 |
 | --- | --- |
@@ -121,22 +121,22 @@
 | 1239 | armed（幽灵期）"按住拖动"的两件事（**只给直线用**，见 ArmedStrokeMove） |
 | 1317 | `--clean N`：入笔前的净化 |
 | 1332 | 湿墨档位（2026-10-13 新增；2026-10-15 精简为两档：应用湿墨层撤除） |
-| 1401 | 自绘预测尾（2026-10-15 接入：线性预测，Chromium 同族） |
-| 1481 | 长度限速（在"像素"上做，治"跳跃的笔头"） |
-| 1724 | 文档缩放（只缩文档，50/75/100/125/150/200/300） |
-| 2029 | 交互矢量图的参数滑杆（v2.1） |
-| 2077 | 图形定义元素编辑（直线 / 箭头 / 圆 / 椭圆）：和"拖对象"同一条快路 |
-| 2335 | 对象吸附（2026-10-18） |
-| 2489 | 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictorLinear.cs） |
-| 2512 | 书写期间的分配 / GC 仪表（低配机排查用） |
-| 2595 | perf accounting |
-| 2608 | 界面接入口 |
-| 2616 | 工具带色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成 8 个可改色位） |
-| 2645 | 荧光笔的 5 个色位 / 5 档浓度（2026-10-28） |
-| 2669 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
-| 2727 | 延时探针（见 Latency.cs） |
+| 1406 | 自绘预测尾（2026-10-15 接入：线性预测，Chromium 同族） |
+| 1494 | 长度限速（在"像素"上做，治"跳跃的笔头"） |
+| 1741 | 文档缩放（只缩文档，50/75/100/125/150/200/300） |
+| 2046 | 交互矢量图的参数滑杆（v2.1） |
+| 2094 | 图形定义元素编辑（直线 / 箭头 / 圆 / 椭圆）：和"拖对象"同一条快路 |
+| 2352 | 对象吸附（2026-10-18） |
+| 2506 | 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictorLinear.cs） |
+| 2529 | 书写期间的分配 / GC 仪表（低配机排查用） |
+| 2612 | perf accounting |
+| 2625 | 界面接入口 |
+| 2633 | 工具带色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成 8 个可改色位） |
+| 2662 | 荧光笔的 5 个色位 / 5 档浓度（2026-10-28） |
+| 2686 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
+| 2744 | 延时探针（见 Latency.cs） |
 
-## src/InkEngine/Core/Engine.Host.cs（2,358 行）
+## src/InkEngine/Core/Engine.Host.cs（2,357 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -155,15 +155,15 @@
 | 338 | 模拟压力与笔锋：**已全部停用**（2026-10-05，代码保留） |
 | 348 | 中心线曲线化（过点 Catmull-Rom ＋ 角点保护） |
 | 373 | 笔迹运动模型（2026-10-03 对照台 → 2026-10-05 收敛） |
-| 504 | D1：亚像素输入（默认开；`--nohimetric` 退回 D0 对照） |
-| 513 | 呈现节奏 |
-| 608 | 荧光笔的 5 个色位 + 5 档浓度 |
-| 983 | 原始输入"被哪道门挡住的"分项计数（诊断，2026-10-07 加） |
-| 998 | "到底有没有中间点可捞"的自适应判据（2026-10-07 加） |
-| 1213 | 放映期间的"临时全局热键"（2026-09-30 用户定方案①） |
-| 1292 | Message loop |
-| 1452 | 文档高清补丁：每帧同步一次（由引擎挑驱动窗口） |
-| 1929 | Window procedure |
+| 505 | D1：亚像素输入（默认开；`--nohimetric` 退回 D0 对照） |
+| 514 | 呈现节奏 |
+| 609 | 荧光笔的 5 个色位 + 5 档浓度 |
+| 984 | 原始输入"被哪道门挡住的"分项计数（诊断，2026-10-07 加） |
+| 999 | "到底有没有中间点可捞"的自适应判据（2026-10-07 加） |
+| 1212 | 放映期间的"临时全局热键"（2026-09-30 用户定方案①） |
+| 1291 | Message loop |
+| 1451 | 文档高清补丁：每帧同步一次（由引擎挑驱动窗口） |
+| 1928 | Window procedure |
 
 ## src/InkEngine/Core/Engine.Selection.Gesture.cs（1,466 行）
 
@@ -446,7 +446,7 @@
 | 903 | 墨迹文件（.inkb）的保存 / 打开（墨迹 A，2026-10-01） |
 | 1109 | "打开文档…"（图片批量 / PDF；2026-10-07，图片与 PDF 导入第一步） |
 
-## src/InkEngine/Input/Engine.Input.cs（2,029 行）
+## src/InkEngine/Input/Engine.Input.cs（2,030 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -455,9 +455,9 @@
 | 行 | 段落 |
 | --- | --- |
 | 18 | Pointer input |
-| 701 | 停顿成型：计时 / 触发 / 按住调整 / 定型（规格见 计划-图形工具.md §四十二） |
-| 1130 | 自检入口（`--dwelltest` 用；四条都是"薄封装"，不含任何逻辑） |
-| 1162 | 黑匣子（`--reclive` / `--replayinput`）用的薄钩子 |
+| 702 | 停顿成型：计时 / 触发 / 按住调整 / 定型（规格见 计划-图形工具.md §四十二） |
+| 1131 | 自检入口（`--dwelltest` 用；四条都是"薄封装"，不含任何逻辑） |
+| 1163 | 黑匣子（`--reclive` / `--replayinput`）用的薄钩子 |
 
 ## src/InkEngine/Input/Engine.TouchGestures.cs（792 行）
 
@@ -1048,7 +1048,7 @@
 | --- | --- |
 | 17 | `internal sealed partial class App` |
 
-## src/InkTeach/DevTools/App.Dev.Smooth.cs（624 行）
+## src/InkTeach/DevTools/App.Dev.Smooth.cs（765 行）
 
 | 行 | 顶层类型 |
 | --- | --- |

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InkTeach 下载与安装 · 安装包 / 绿色版 / 最近更新</title>
+<meta name="description" content="InkTeach 下载与安装：AOT 单 exe，安装包免装 .NET、不弹 UAC，也提供解压即用的绿色版；含常用快捷键、最近三个版本的更新要点和开源许可信息。">
+<link rel="canonical" href="https://www.inkteach.com/download.html">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://www.inkteach.com/download.html">
+<meta property="og:title" content="InkTeach 下载与安装">
+<meta property="og:description" content="安装包 / 绿色版两条路，免装 .NET、不弹 UAC；含常用键与最近更新。">
+<link rel="icon" type="image/png" href="img/icon.png">
+<link rel="apple-touch-icon" href="img/icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="img/icon.png" alt="" width="24" height="24">InkTeach</a>
+    <nav>
+      <a href="features.html" data-i18n="nav.features">功能</a>
+      <a href="math.html" data-i18n="nav.math">数学</a>
+      <a href="classroom.html" data-i18n="nav.classroom">课堂</a>
+      <a href="download.html" aria-current="page" data-i18n="nav.install">下载</a>
+      <a href="https://github.com/XueRenYi0/InkTeach" target="_blank" rel="noopener">GitHub</a>
+      <select id="langSelect" class="lang" aria-label="Language"></select>
+    </nav>
+  </div>
+</header>
+
+<div class="page-head">
+  <div class="wrap">
+    <!-- 2026-11-17：挂在导航同一批 key 上，切语言时这个标签不会孤零零留在中文。 -->
+    <p class="pill" data-i18n="nav.install">下载</p>
+    <h1 data-i18n="install.title">下载与安装</h1>
+  </div>
+</div>
+
+<section id="install" class="section">
+  <div class="wrap">
+    <p class="note" style="margin-bottom:12px" data-i18n-html="install.note"><b>当前版本 {V}</b> · AOT 单 exe，安装包 {SETUP_MB}MB / 绿色包 {ZIP_MB}MB（以实际发布件为准） · 免装 .NET。</p>
+    <div class="grid two">
+      <div class="card">
+        <h3 data-i18n="install.c1t">安装包（推荐）</h3>
+        <p data-i18n-html="install.c1d">双击 → 下一步 → 完成，<b>不弹 UAC</b>：装到当前用户目录，自动更新也不会要管理员。
+        批量部署可静默安装：<code>InkTeach-Setup-*.exe /VERYSILENT</code>。</p>
+        <p><a class="btn primary" href="https://github.com/XueRenYi0/InkTeach/releases/latest/download/InkTeach-Setup.exe" data-href="setup-cn" target="_blank" rel="noopener" data-i18n="install.c1btn">下载安装包</a></p>
+      </div>
+      <div class="card">
+        <h3 data-i18n="install.c2t">绿色版</h3>
+        <p data-i18n="install.c2d">解压即用，适合 U 盘、教室机或不想安装的电脑。下载后把整个文件夹放到固定位置，
+        自动更新会保留用户数据。</p>
+        <p><a class="btn" href="https://github.com/XueRenYi0/InkTeach/releases/latest/download/InkTeach-win-x64.zip" data-href="zip" target="_blank" rel="noopener" data-i18n="install.c2btn">下载绿色包</a></p>
+      </div>
+    </div>
+    <h3 class="h3" data-i18n="install.keyslabel">几个常用键</h3>
+    <p class="note" data-i18n-html="install.keys">
+      <kbd>Ctrl</kbd> + <kbd>L</kbd> 激光笔 ·
+      <kbd>Ctrl</kbd> + <kbd>E</kbd> 橡皮 ·
+      <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>Q</kbd> 呼出盘 ·
+      <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd> 穿透 / 回画笔
+    </p>
+  </div>
+</section>
+
+<section id="updates" class="section alt">
+  <div class="wrap">
+    <h2 data-i18n="updates.title">最近更新</h2>
+    <p class="lead small" data-i18n-html="updates.lead">当前最新版 <b>{V}</b>。只列最影响课堂体验的几条，完整记录在《发版历史》。</p>
+    <div class="grid" id="updateCards">
+      <div class="card">
+        <h3 data-i18n="u1t">9.9.0 · 匿名设备统计 v2</h3>
+        <p data-i18n="u1d">默认开启、不弹模态框；只到国家，不取 IP / 省市 / 账号 / 板书。设置 → 关于可关闭并删除本机设备卡；日志上传仍单独确认。</p>
+      </div>
+      <div class="card">
+        <h3 data-i18n="u2t">9.8.0 · 10 种语言 / 源码恢复 GPL-3.0</h3>
+        <p data-i18n="u2d">安装器和界面支持中 / 英 / 日 / 韩 / 德 / 法 / 西 / 巴西葡 / 俄 / 意；设置里切换后重启生效。源码回到原开源仓库，恢复 GPL-3.0。</p>
+      </div>
+      <div class="card">
+        <h3 data-i18n="u3t">9.7.0 · 图片美化 / 识别成题卡</h3>
+        <p data-i18n="u3d">选中图片一键去黄提亮；AI 把题目照片识别成可编辑题卡，原图保留，答案可按需生成。</p>
+      </div>
+    </div>
+    <p class="note" data-i18n-html="updates.note">完整更新与校验值：<a href="https://github.com/XueRenYi0/InkTeach/blob/main/%E8%B0%83%E7%A0%94/%E4%BC%98%E5%8C%96%E8%AE%B0%E5%BD%95/%E5%8F%91%E7%89%88%E5%8E%86%E5%8F%B2.md" target="_blank" rel="noopener">GitHub 发版历史</a> ｜ <a href="https://github.com/XueRenYi0/InkTeach/releases" target="_blank" rel="noopener">Release 列表</a>。</p>
+  </div>
+</section>
+
+<section id="opensource" class="section">
+  <div class="wrap">
+    <h2 data-i18n="os.title">开源与许可</h2>
+    <p class="lead small" data-i18n="os.lead">
+      InkTeach 以 GPL-3.0 开源，可商业授权。源码在 GitHub，国内镜像在 GitCode；
+      问题、建议和更新日志都在仓库里。
+    </p>
+    <p class="btns">
+      <a class="btn" href="https://github.com/XueRenYi0/InkTeach" target="_blank" rel="noopener" data-i18n="os.github">GitHub 源码</a>
+      <a class="btn" href="https://gitcode.com/XueRenYI0/InkTeach" target="_blank" rel="noopener" data-i18n="os.gitcode">GitCode 镜像</a>
+      <a class="btn ghost" href="https://github.com/XueRenYi0/InkTeach/issues" target="_blank" rel="noopener" data-i18n="os.issues">问题反馈</a>
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <nav class="foot-nav">
+      <a href="features.html" data-i18n="nav.features">功能</a>
+      <a href="math.html" data-i18n="nav.math">数学</a>
+      <a href="classroom.html" data-i18n="nav.classroom">课堂</a>
+      <a href="download.html" data-i18n="nav.install">下载</a>
+      <a href="download.html#updates" data-i18n="footer.log">更新日志</a>
+      <a href="privacy.html" data-i18n="footer.privacy">隐私说明</a>
+      <a href="https://github.com/XueRenYi0/InkTeach" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+    <p class="foot-tag">InkTeach · <span data-i18n="footer.short">开源课堂批注工具</span> · GPL-3.0 · 免装 .NET</p>
+    <p class="muted">© 2026 XueRenYi0</p>
+  </div>
+</footer>
+
+<!-- 2026-11-17 拆页：这一页要填 {V} / 两个大小、要给 data-href 赋真实地址、还要重画 #updateCards，
+     所以 i18n.js + site-release.js 都挂。内联兜底对象只有首页那一份，这里靠 release.json。 -->
+<script defer src="i18n.js"></script>
+<script defer src="site-release.js"></script>
+</body>
+</html>

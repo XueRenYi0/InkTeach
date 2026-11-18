@@ -8,8 +8,9 @@
   白名单：docs\ 里同时躺着开发文档（tree-map.md 等）和 Pages 专用文件（CNAME / _headers）。
   这些不该进 OSS（浪费存储，也把内部文档公开了），所以下面维护明确的 `$files` 清单。
 
-  体积：文本类先 gzip 再上传并打上 `Content-Encoding: gzip`，全站 296 KB → 实际传输 200 KB
-  （首屏那 8 个文本 + 封面 + 视频 ≈ 125 KB）。OSS 自己不压缩，这一步只能在上传时做。不想压就加 -NoGzip。
+  体积：文本类先 gzip 再上传并打上 `Content-Encoding: gzip`。2026-11-17 拆页后是 16 个文件
+  + docs\i18n\ 下 10 个语言文件：磁盘 320 KB，实际传输约 219 KB（首屏那几件 ≈ 102 KB，
+  视频 63 KB 在里面）。OSS 自己不压缩，这一步只能在上传时做。不想压就加 -NoGzip。
 
   用法：
     .\tools\deploy-site.ps1                     # 按 tools\oss-site.local.json 上传
@@ -74,8 +75,14 @@ if (-not $ossutil -and -not $DryRun) {
 
 # ---------- 2. 要传哪些文件（白名单） ----------
 # gz = 文本类，可以先 gzip 再传（Content-Encoding: gzip）
+# 2026-11-17 拆页：单页拆成 index / features / math / classroom / download / privacy 六个页面。
+# 少传一个就是一个必然 404，所以这几个页面必须在清单里（下方的"缺文件就报错"会兜住）。
 $files = @(
     @{ p = 'index.html';             cache = 'html';     type = 'text/html; charset=utf-8';                gz = $true }
+    @{ p = 'features.html';          cache = 'html';     type = 'text/html; charset=utf-8';                gz = $true }
+    @{ p = 'math.html';              cache = 'html';     type = 'text/html; charset=utf-8';                gz = $true }
+    @{ p = 'classroom.html';         cache = 'html';     type = 'text/html; charset=utf-8';                gz = $true }
+    @{ p = 'download.html';          cache = 'html';     type = 'text/html; charset=utf-8';                gz = $true }
     @{ p = 'privacy.html';           cache = 'html';     type = 'text/html; charset=utf-8';                gz = $true }
     @{ p = 'style.css';              cache = 'asset';    type = 'text/css; charset=utf-8';                 gz = $true }
     @{ p = 'i18n.js';                cache = 'asset';    type = 'application/javascript; charset=utf-8';    gz = $true }
@@ -88,6 +95,26 @@ $files = @(
     @{ p = 'img/demo-poster.jpg';    cache = 'img';      type = 'image/jpeg';                              gz = $false }
     @{ p = 'img/social-preview.png'; cache = 'img';      type = 'image/png';                               gz = $false }
 )
+
+# 2026-11-17：i18n.js 拆成 docs\i18n\<code>.js 十份。这里**不手写十行**，直接扫目录生成条目——
+# 以后加一门语言，只要放文件进 docs\i18n\，上传清单自动跟上（上一轮就是漏了这层，线上语言文件 404）。
+$i18nDir = Join-Path $docs 'i18n'
+if (-not (Test-Path $i18nDir)) { throw 'docs\i18n\ 目录不存在（i18n.js 拆出来的语言文件都在这）' }
+$i18nFiles = @(Get-ChildItem -Path $i18nDir -Filter '*.js' -File | Sort-Object Name)
+if ($i18nFiles.Count -eq 0) { throw 'docs\i18n\ 里一个 .js 都没有，语言切换会全挂' }
+# 光"目录里有几个"不够：少一个文件目录照样扫得出来（清单会静悄悄少一条，线上某个语言 404）。
+# 所以拿 i18n.js 里的语言表对照一遍，缺哪个点名哪个。
+$langCodes = @([regex]::Matches([System.IO.File]::ReadAllText((Join-Path $docs 'i18n.js')), 'code:\s*"([^"]+)"') |
+    ForEach-Object { $_.Groups[1].Value })
+$langMissing = @($langCodes | Where-Object { -not (Test-Path (Join-Path $i18nDir "$_.js")) })
+if ($langMissing.Count -gt 0) {
+    throw ("i18n.js 列了这些语言，但 docs\i18n\ 里没有对应文件：`n  " + ($langMissing -join "`n  "))
+}
+foreach ($lf in $i18nFiles) {
+    # 路径统一用正斜杠：下面的本地路径换算和 OSS 目标路径都按 / 处理
+    $files += @{ p = "i18n/$($lf.Name)"; cache = 'asset'; type = 'application/javascript; charset=utf-8'; gz = $true }
+}
+
 
 # 缓存策略：**清单类必须短**，否则发版后用户还看到上一版的版本号/下载链接
 # （GitHub Pages 那份 docs\_headers 里说的是同一件事，两边别改岔）。

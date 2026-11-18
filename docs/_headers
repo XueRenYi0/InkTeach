@@ -7,6 +7,10 @@
 /*.js
   Cache-Control: public, max-age=600
 
+# 2026-11-17 拆页：语言文件挪到 docs/i18n/ 子目录了（/*.js 不一定跨目录匹配，单独写一条更稳）。
+/i18n/*.js
+  Cache-Control: public, max-age=600
+
 # 发版清单：宁可每次问一次，也别让用户看到上一版的版本号/下载链接。
 /release.json
   Cache-Control: public, max-age=300, must-revalidate

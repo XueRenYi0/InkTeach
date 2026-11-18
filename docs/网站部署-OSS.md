@@ -23,6 +23,12 @@ src\InkTeach\InkTeach.csproj  <Version>   ← 版本号唯一来源
                                    并给 data-href 的按钮赋真实下载地址
 ```
 
+> 2026-11-17 拆页：官网从一张单页变成六页 —— `index.html`（首屏 + 三张卡 + 一条紧凑下载带）、
+> `features.html`（12 张功能卡）、`math.html`（数学三张卡）、`classroom.html`（课堂三步）、
+> `download.html`（安装包 / 绿色版 / 常用键 + 最近更新 + 开源许可）、`privacy.html`。
+> 内联兜底对象只在 `index.html` 留一份；`download.html` 靠 `release.json` 填 `{V}` / 两个大小 /
+> `data-href` 并重画 `#updateCards`；`features` / `math` / `classroom` 只挂 `i18n.js`（footer 里不写版本号）。
+
 页面里**只有占位符**（`{V}`、`{SETUP_MB}`），`site-release.js` 有三档兜底：内联对象 → 同目录
 `release.json` → jsDelivr 上的 `release.json`。所以“发版当场就有正确版本号”，CDN/缓存没刷也不至于露出梅花括号。
 
@@ -41,30 +47,60 @@ src\InkTeach\InkTeach.csproj  <Version>   ← 版本号唯一来源
 .\tools\release.ps1 -Notes dist\release-notes-<ver>.md
 ```
 
-### 1.2 “按量付费，体积不能大” → 首屏砍到约 1/3
+### 1.2 “按量付费，体积不能大” → 首屏约 1/4，纯文本页 21 KB
 
 | 文件 | 之前 | 现在 | 说明 |
 |---|---|---|---|
 | `img/demo.gif` | 331 KB | **删了** | 首屏大图，占全站 2/3 |
 | `img/demo.mp4` | — | **63 KB** | 同画面 H.264，`autoplay muted loop playsinline` |
 | `img/demo-poster.jpg` | — | **14 KB** | 视频封面（取圆变成规整图形那一刻），不等视频下载就有画面 |
-| 白名单 12 个文件合计 | 约 490 KB | **约 296 KB** | 磁盘体积 |
+| 白名单（2026-11-17 拆页前 12 个文件） | 约 490 KB | 296 KB | 磁盘体积 |
+| 白名单（拆页后 16 个文件 + 10 个语言文件） | — | **320 KB** | 磁盘体积 |
 
-再叠一层 **gzip**（`deploy-site` 对文本类做）：`index.html` 5.8 KB、`style.css` 2.6 KB、
-`i18n.js` 34.1 KB、`site-release.js` 2.2 KB、`release.json` 0.2 KB。
-文本类合计约 48 KB。
+再叠一层 **gzip**（`deploy-site` 对文本类做）。下表是 `-DryRun` 实测（2026-11-17，压缩后传输体积）：
 
-**一次首次访问 ≈ 125 KB**（文本 48 + 封面 14 + 视频 63），视频进缓存后复访 ≈ 62 KB。
+| 文件 | gzip 后 |
+|---|---|
+| `index.html` | 3.5 KB |
+| `features.html` | 2.3 KB |
+| `math.html` | 1.7 KB |
+| `classroom.html` | 1.5 KB |
+| `download.html` | 2.9 KB |
+| `privacy.html` | 2.3 KB |
+| `style.css` | 3.4 KB |
+| `i18n.js`（骨架） | 4.2 KB |
+| `site-release.js` | 2.2 KB |
+| `release.json` | 0.2 KB |
+| `robots.txt` + `sitemap.xml` | 0.1 + 0.3 KB |
+| `i18n/<code>.js` × 10 | 3.8 ~ 4.6 KB **各一份**，只加载当前语言 |
+| 文本类小计（全部 26 个文件） | **217 KB**（磁盘 317 KB） |
+
+> 子页面的「标题 / 描述别被首页文案覆盖」这件事已经收进 `i18n.js` 的 `apply()`（按 `.page-head h1`
+> 判断是不是子页），不再每页复制一段内联脚本——拆页时先写成 4 份复制，2026-11-17 收成一份。
+
+**一次首次访问的真实成本**（中文访客，按 `-DryRun` 和逐页资源实测相加）：
+
+- **主页 ≈ 102 KB** = html 3.5 + css 3.4 + i18n 骨架 4.2 + `zh-CN.js` 3.9 + `site-release.js` 2.2
+  + `release.json` 0.2 + 图标 7.6 + 封面 14.1 + 视频 63。**视频进缓存后复访 ≈ 39 KB**。
+- **`download.html` ≈ 24.7 KB** = html 2.9 + css 3.4 + i18n 骨架 4.2 + `zh-CN.js` 3.9 + `site-release.js` 2.2
+  + `release.json` 0.2 + 图标 7.6。**只想下载的访客走这条，约是主页的 1/4**——这就是拆页最实际的收益。
+- 纯文案页（features 21.8 / math 21.1 / classroom 20.9 KB）：不挂 `site-release.js`，不 fetch `release.json`。
+- `privacy.html` 13.4 KB：纯中文，连 `i18n.js` 都没挂。
+
+拆页前那 34 KB 的 `i18n.js` 现在人人只付自己那 4 KB，这是这轮降得最多的一块。
+
+> 下一步还能砍的：`img/icon.png` 7.6 KB（显示尺寸只有 24 / 84 px，转 WebP 约 2 KB，全站每页都能省 5 KB），
+> 以及 `img/social-preview.png` 67.5 KB（只有分享卡片用，页面本身不加载，不影响首访）。
 
 按量付费的钱主要花在**外网流出流量**（存储 0.09 元/GB/月，这点文件一个月不到 1 分钱）：
 
-| 月访问量 | 流量 | 流量费（忙时 0.50 元/GB 粗算） |
+| 月访问量 | 流量（主页首访 102 KB / 下载页 25 KB 混合算） | 流量费（忙时 0.50 元/GB 粗算） |
 |---|---|---|
-| 1,000 次 | ≈ 125 MB | **≈ 0.06 元** |
-| 10,000 次 | ≈ 1.25 GB | ≈ 0.6 元 |
-| 100,000 次 | ≈ 12.5 GB | ≈ 6 元 |
+| 1,000 次 | ≈ 60 MB | **≈ 0.03 元** |
+| 10,000 次 | ≈ 0.6 GB | ≈ 0.3 元 |
+| 100,000 次 | ≈ 6 GB | ≈ 3 元 |
 
-**安装包永远不放 OSS**：zip 16.7 MB / Setup 13.9 MB，一个下载就是网站首屏的 100 倍流量。
+**安装包永远不放 OSS**：zip 16.7 MB / Setup 13.9 MB，一个下载就是网站首屏的 160 倍流量。
 下载继续走 GitHub Releases（国外）+ GitCode（国内），`release.json` 里已经分好了 `gh` / `cn` 两个地址。
 
 ## 2. 一次性准备（Bucket 侧，控制台点一遍）
@@ -154,8 +190,11 @@ RAM 子账号的权限给到最小即可：`oss:PutObject`、`oss:ListParts`、`
 
 ## 7. 下一步可选优化（还没做）
 
-- `i18n.js` 106 KB（gzip 34.6 KB）是最大的一块：按语言拆成 `i18n.zh-CN.js` 等 10 个文件、
-  只加载当前语言，首屏文本能从 ~47 KB 降到 ~15 KB。改动会碰语言切换逻辑，等有需要再做。
-- `img/social-preview.png` 67 KB 只在分享卡片用，可以按需再压。
+- ~~`i18n.js` 106 KB 按语言拆分~~ **2026-11-17 已做**：现在是骨架 `docs\i18n.js`（gzip 4.2 KB）
+  + `docs\i18n\<code>.js` 十份（每份 gzip 3.8~4.6 KB），只加载当前语言。
+  **注意上传清单**：`deploy-site.ps1` 会扫描 `docs\i18n\*.js` 自动加条目，新增语言不用再改脚本；
+  但别再手写清单——上一轮就是漏了这一层，线上语言文件全 404。
+- `img/icon.png` 7.6 KB 而显示尺寸只有 24 / 84 px：转成 WebP 约 2 KB，**每页首访都能省 5 KB**。
+- `img/social-preview.png` 67 KB 只在分享卡片用（页面本身不加载），可以按需再压。
 - 想要“HTTP 自动跳 HTTPS + 全球加速”，就在 OSS 前面加 CDN（回源 0.15 元/GB，比直出便宜），
   代价是多一层缓存要刷。
