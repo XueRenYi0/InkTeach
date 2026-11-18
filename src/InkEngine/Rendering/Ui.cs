@@ -644,6 +644,9 @@ public interface IEngineCommands
     /// </summary>
     void SetPressure(bool on);
 
+    /// <summary>「设置 → 书写 → 收笔笔锋」：无压感笔迹末尾甩速收尖总开关（默认开）。</summary>
+    void SetTaper(bool on);
+
     /// <summary>「设置 → 书写 → 精细笔迹」：原始输入补点总开关（2026-10-07 加）。</summary>
     void SetFineStroke(bool on);
 
@@ -1387,6 +1390,9 @@ public readonly struct UiState
     /// 默认开；关掉 = 整块板等宽（渲染期语义，文档里的压力数据不动）。
     /// </summary>
     public bool PressureOn { get; init; }
+
+    /// <summary>「设置 → 书写 → 收笔笔锋」开着吗（默认开）。</summary>
+    public bool TaperOn { get; init; }
 
     /// <summary>「精细笔迹」（原始输入补点）总开关的状态（默认开）。</summary>
     public bool FineStrokeOn { get; init; }

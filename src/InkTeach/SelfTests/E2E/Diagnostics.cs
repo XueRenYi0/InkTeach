@@ -1559,6 +1559,13 @@ internal sealed partial class App
             Console.WriteLine($"  {(ok ? "通过" : "失败")}  {name,-38} {detail}");
         }
 
+        // 压感自检只验"压感"这条口径：临时关掉收笔笔锋，避免"压感关掉→有压感笔迹
+        // 仍因笔锋走变宽通道"把"关掉后新画压感笔迹不走变宽通道"那条判据冲掉
+        //（笔锋语义由 --tapertest 单独覆盖）。全程关、退出前恢复。
+        bool taperSaved = StrokeTaper.Enabled;
+        StrokeTaper.Enabled = false;
+        StrokeTaper.BumpVersion();
+
         // ================= ① 映射：纯函数先钉死 =================
         {
             float f0 = PressureWidth.Factor(0f), f1 = PressureWidth.Factor(1f), fh = PressureWidth.Factor(0.5f);
@@ -1905,6 +1912,8 @@ internal sealed partial class App
         PenWidthLogical = oldPenWidth;
         SetColorFromUi(oldColor);
         SetDashFromUi(StrokeDash.Solid);
+        StrokeTaper.Enabled = taperSaved;   // 压感自检全程关笔锋，这里恢复
+        StrokeTaper.BumpVersion();
         Doc.Clear();
         Doc.ClearHistory();
         SettleFrames(120);

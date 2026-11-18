@@ -223,6 +223,7 @@ public partial class InkEngine
         CoordGridDefault = CoordGridDefault,
         DwellShapeOn = DwellShapeEnabled,
         PressureOn = PressureWidth.Enabled,      // 界面拿它显示「设置 → 书写 → 压感粗细」那个开关
+        TaperOn = StrokeTaper.Enabled,           // 界面拿它显示「设置 → 书写 → 收笔笔锋」那个开关
         FineStrokeOn = RawInputCapture,          // 「设置 → 书写 → 精细笔迹」（原始输入补点）总开关
         PredictTailOn = PredictTailEnabled,      // 「设置 → 书写 → 墨迹预测」（自绘预测尾）总开关（默认关，2026-10-16 起）
         WetMode = WetMode,                       // 「设置 → 墨迹 → 湿墨档位」（0..3；界面显示当前档）
@@ -451,6 +452,22 @@ public partial class InkEngine
     }
 
     /// <summary>
+    /// 「更多 → 设置 → 书写 → 收笔笔锋」被点了一下。语义同 <see cref="SetPressureFromUi"/>：
+    /// **渲染期**开关，文档一个字节不动；只改 StrokeTaper.Enabled，BumpVersion 让缓存重算，
+    /// 再整层作废（笔迹按块烘进内容层缓存，不整层作废屏幕还是旧样子）。
+    /// </summary>
+    internal void SetTaperFromUi(bool on)
+    {
+        if (StrokeTaper.Enabled == on) return;
+        StrokeTaper.Enabled = on;
+        StrokeTaper.BumpVersion();
+        Doc.InvalidateAll();
+        _dirty = true;
+        Console.WriteLine($"收笔笔锋：{(on ? "开（末尾甩速收尖）" : "关（所有笔迹等宽）")}");
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>
     /// 触摸模式（「更多 → 设置 → 书写 → 触摸模式」，2026-10-24 恢复为两档）。
     /// true = 手势模式；false = 单指书写（双指手势 / ≥3 指擦 / 长按选择 / 轮盘全部停用）。
     /// 默认手势；单指档落盘 `touch.mode=single`，手势档不写项。
@@ -562,8 +579,14 @@ public partial class InkEngine
     /// <summary>命令行上有没有 `--nopressure`（给对照实验用，它优先于用户偏好）。</summary>
     private bool _noPressureArg;
 
+    /// <summary>命令行上有没有 `--notaper`（给对照实验用，它优先于用户偏好）。</summary>
+    private bool _noTaperArg;
+
     /// <summary>压感粗细的偏好键（只写"关过"的那一份）。</summary>
     private const string PressurePrefKey = "pressure";
+
+    /// <summary>收笔笔锋的偏好键（默认开，只写"关过"的那一份）。</summary>
+    private const string TaperPrefKey = "taper";
 
     /// <summary>精简笔迹（原始输入补点）的偏好键（同样只写"关过"的那一份）。</summary>
     private const string FineStrokePrefKey = "finestroke";
@@ -629,6 +652,13 @@ public partial class InkEngine
     /// </summary>
     internal void ApplyPressurePrefForTest()
         => PressureWidth.Enabled = !_noPressureArg && GetUiPref(PressurePrefKey) != "0";
+
+    /// <summary>自检用：把"收笔笔锋"的偏好**重新应用一次**（理由同 <see cref="ApplyPressurePrefForTest"/>）。</summary>
+    internal void ApplyTaperPrefForTest()
+    {
+        StrokeTaper.Enabled = !_noTaperArg && GetUiPref(TaperPrefKey) != "0";
+        StrokeTaper.BumpVersion();
+    }
 
 
 

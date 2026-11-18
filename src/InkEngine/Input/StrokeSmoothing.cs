@@ -200,6 +200,7 @@ internal static class StrokeSmoothing
     private static float[] _pr = new float[1024];
     private static float[] _t = new float[1024];
     private static bool[] _corner = new bool[1024];
+    private static int[] _src = new int[1024];   // 保留点 → 原始输入下标（去重 / 抽稀后仍可追回）
     private static int _m;
 
     private static Seg[] _out = new Seg[1024];
@@ -210,6 +211,13 @@ internal static class StrokeSmoothing
     public static float PressureAt(int i) => _pr[i];
     /// <summary>输出段（Finish 之后有效）：第 k 段 = PointAt(k) → PointAt(k+1)。</summary>
     public static Seg[] Out => _out;
+
+    /// <summary>保留点在原始采样点序列里的下标（<see cref="Finish"/> 之后有效；首尾必留）。</summary>
+    public static int[] SrcIndex = Array.Empty<int>();
+
+    /// <summary>返回第 <paramref name="i"/> 个保留点对应的原始采样点下标；未映射返回 i。</summary>
+    public static int SrcIndexOf(int i)
+        => i >= 0 && i < SrcIndex.Length ? SrcIndex[i] : i;
 
     public static void Begin() => _n = 0;
 
@@ -240,6 +248,10 @@ internal static class StrokeSmoothing
         Decimate();                 // 只丢"近似直线且步长小"的点，角点一个不丢
         if (_m < 2) return 0;
 
+        // 把保留点 → 原始输入下标映射交出去（调用方据此给逐点系数对位）。
+        if (SrcIndex.Length < _m) Array.Resize(ref SrcIndex, Math.Max(_m, SrcIndex.Length * 2));
+        for (int i = 0; i < _m; i++) SrcIndex[i] = _src[i];
+
         Knots();                    // 抽稀之后重算弦长（centripetal 参数化用它）
         Build();
         return _m - 1;
@@ -260,6 +272,7 @@ internal static class StrokeSmoothing
             if (_m == _p.Length) GrowP(_m * 2);
             _p[_m] = _in[i];
             _pr[_m] = _inR[i];
+            _src[_m] = i;
             _m++;
         }
     }
@@ -445,12 +458,13 @@ internal static class StrokeSmoothing
                     _p[w] = _p[i];
                     _pr[w] = _pr[i];
                     _corner[w] = _corner[i];
+                    _src[w] = _src[i];
                 }
                 w++;
             }
         }
         // 末点必留（它是笔的"现在"，少了会短一截）
-        if (w != _m - 1) { _p[w] = _p[_m - 1]; _pr[w] = _pr[_m - 1]; _corner[w] = false; }
+        if (w != _m - 1) { _p[w] = _p[_m - 1]; _pr[w] = _pr[_m - 1]; _corner[w] = false; _src[w] = _src[_m - 1]; }
         _m = w + 1;
     }
 
@@ -519,5 +533,6 @@ internal static class StrokeSmoothing
         Array.Resize(ref _pr, need);
         Array.Resize(ref _t, need);
         Array.Resize(ref _corner, need);
+        Array.Resize(ref _src, need);
     }
 }

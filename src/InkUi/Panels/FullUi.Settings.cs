@@ -1906,7 +1906,7 @@ public sealed partial class FullUi
 
     private static bool IsToggleRow(Row kind)
         => kind is Row.DarkTheme or Row.AutoHide or Row.RailPin or Row.DwellShape
-           or Row.Pressure or Row.Predict or Row.Privacy or Row.RestoreInk or Row.PptAutoSave
+           or Row.Pressure or Row.Taper or Row.Predict or Row.Privacy or Row.RestoreInk or Row.PptAutoSave
            or Row.AutoStart or Row.ClearOnArrow;
 
     private bool IsToggleRow(int i) => IsToggleRow(Rows[i].Kind);
@@ -2084,6 +2084,7 @@ public sealed partial class FullUi
         Row.AutoStart => "settings.general.autoStart",
         Row.DwellShape => "settings.writing.dwellShape",
         Row.Pressure => "settings.writing.pressure",
+        Row.Taper => "settings.writing.taper",
         Row.Predict => "settings.writing.predict",
         Row.TouchMode => "settings.writing.touchMode",
         Row.RestoreInk => "settings.ink.restoreInk",
@@ -2164,6 +2165,13 @@ public sealed partial class FullUi
             // 关掉是**渲染期**的：整块板立刻等宽，文档里的压力数据不动。
             case Row.Pressure:
                 _host.Commands.SetPressure(!_host.State.PressureOn);
+                SavePrefs();
+                break;
+
+            // 笔锋（2026-11-18）：同一条规矩——引擎是权威，界面翻转后落盘。
+            // 只改**显示**：收笔变尖是渲染期的，文档里的墨迹数据不动。
+            case Row.Taper:
+                _host.Commands.SetTaper(!_host.State.TaperOn);
                 SavePrefs();
                 break;
 
@@ -2295,7 +2303,7 @@ public sealed partial class FullUi
     private static readonly Row[] SettingsGeneralRows =
         { Row.DarkTheme, Row.AutoHide, Row.RailPin, Row.UiSize, Row.Language, Row.AutoStart };
     private static readonly Row[] SettingsWritingRows =
-        { Row.DwellShape, Row.Pressure, Row.Predict, Row.TouchMode, Row.ClearOnArrow };
+        { Row.DwellShape, Row.Pressure, Row.Taper, Row.Predict, Row.TouchMode, Row.ClearOnArrow };
     private static readonly Row[] SettingsInkRows =
         { Row.RestoreInk, Row.PptAutoSave, Row.HistoryDays };
     private static readonly Row[] SettingsAiRows = { Row.AiApi };

@@ -23,7 +23,7 @@
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 170 行
       - `Engine.cs` 2,898 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
-      - `Engine.Host.cs` 2,357 行 — 启动、消息循环、窗口过程（WndProc）。
+      - `Engine.Host.cs` 2,380 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
       - `Engine.Selection.Gesture.cs` 1,466 行 — 框选/套索/拖动/对齐吸附/美化入口。
@@ -90,7 +90,7 @@
       - `PressureSim.cs` 306 行
       - `SmoothProbe.cs` 313 行
       - `StrokeMotion.cs` 837 行 — 笔迹运动模型对照台（M0–M7）。
-      - `StrokeSmoothing.cs` 523 行
+      - `StrokeSmoothing.cs` 538 行
       - `Touch.cs` 362 行
       - `TouchStats.cs` 135 行
       - `WpfInkFit.cs` 599 行
@@ -132,7 +132,7 @@
       - `CanvasTiles.cs` 552 行
       - `Cursors.cs` 505 行
       - `Engine.Cursor.cs` 800 行 — 光标形状与滚动条交互。
-      - `Engine.UiBridge.cs` 994 行 — 引擎 ↔ 界面边界：IOverlayUi 命令转发。
+      - `Engine.UiBridge.cs` 1,024 行 — 引擎 ↔ 界面边界：IOverlayUi 命令转发。
       - `GlyphFill.cs` 341 行
       - `Icons.Paths.cs` 142 行
       - `LegacyOverlayLayer.cs` 74 行
@@ -140,18 +140,19 @@
       - `Overlay.Content.cs` 766 行 — 内容层合成：分块光栅、相机变换、缩放合成、滚动条。
       - `Overlay.cs` 1,457 行 — 覆盖层主文件：窗口/初始化/生命周期。
       - `Overlay.Frame.cs` 1,724 行 — 覆盖层帧渲染：内容/界面/装饰合成。
-      - `Overlay.PptBar.cs` 785 行 — PPT 条/回放条/滚动条绘制。
+      - `Overlay.PptBar.cs` 790 行 — PPT 条/回放条/滚动条绘制。
       - `Overlay.Radial.cs` 651 行 — 呼出盘绘制。
       - `Overlay.Readout.cs` 1,572 行 — 读数、收藏面板、滚动条、回放/PPT 条绘制。
       - `Overlay.SelectionBar.cs` 1,064 行 — 选中操作条/色板/字体/图层/菜单的绘制。
       - `Overlay.Toast.cs` 339 行
-      - `Overlay.Ui.cs` 1,441 行 — 界面层合成与界面位图上传。
+      - `Overlay.Ui.cs` 1,468 行 — 界面层合成与界面位图上传。
       - `OverlayCoords.cs` 65 行 — 覆盖窗口的坐标换算（画布 ↔ 窗口 ↔ 屏幕）与窗口裁剪：纯数学、无状态，OverlayWindow 与单测共用。
       - `OverlayLayerManager.cs` 192 行
       - `OverlayLayerRegistration.cs` 215 行
+      - `StrokeTaper.cs` 238 行 — 收笔笔锋（速度尖尾）：抬笔前末段快 → 笔画末端渐尖；慢 → 等宽。
       - `SvgPath.cs` 271 行
-      - `Ui.cs` 1,691 行 — 界面接入契约：IOverlayUi / IEngineCommands / UiState。
-      - `UiHost.cs` 265 行
+      - `Ui.cs` 1,697 行 — 界面接入契约：IOverlayUi / IEngineCommands / UiState。
+      - `UiHost.cs` 266 行
       - `UiImageBytes.cs` 40 行
 
     **InkEngine/Replay/**
@@ -218,7 +219,7 @@
       - `HeadlessUi.cs` 31 行
       - `InputReplay.cs` 146 行
       - `LaserIconSheet.cs` 130 行
-      - `PdMetrics.cs` 357 行
+      - `PdMetrics.cs` 425 行
       - `PenIcons.g.cs` 97 行
       - `PenSheet.cs` 163 行
       - `RecoProbe.cs` 2,188 行 — 笔迹识别自检（--inktest）。
@@ -234,7 +235,7 @@
       - `App.Dev.ShapeShow.cs` 597 行
       - `App.Dev.Show.cs` 429 行
       - `App.Modes.Catalog.cs` 46 行 — 自检模式注册表：总表与查找（ADR-005 D2）。
-      - `App.Modes.Dev.cs` 188 行 — 自检模式注册表：Dev 域（ADR-005 D2）。新增模式只改本文件。
+      - `App.Modes.Dev.cs` 195 行 — 自检模式注册表：Dev 域（ADR-005 D2）。新增模式只改本文件。
       - `App.Modes.Doc.cs` 94 行 — 自检模式注册表：Doc 域（ADR-005 D2）。新增模式只改本文件。
       - `App.Modes.Ink.cs` 614 行 — 自检模式注册表：Ink 域（ADR-005 D2）。新增模式只改本文件。
       - `App.Modes.Shape.cs` 244 行 — 自检模式注册表：Shape 域（ADR-005 D2）。新增模式只改本文件。
@@ -251,7 +252,7 @@
         - `Backup.cs` 210 行
         - `BandAction.cs` 84 行
         - `BoardAndLaser.cs` 1,413 行 — 白板底纹/激光/光标 E2E。
-        - `Diagnostics.cs` 3,295 行 — 诊断/环境/性能 E2E。
+        - `Diagnostics.cs` 3,304 行 — 诊断/环境/性能 E2E。
         - `DocMem.cs` 792 行 — PDF 缩放内存归因诊断（--docmem）：WS/私有/托管/LOH/GPU/页位图/分块，含 100ms 峰值与回收后快照。
         - `DocResume.cs` 194 行 — 文档「上次看到第 N 页」恢复提示 E2E（挂在 --doctest 末尾的 F 组）。
         - `Documents.cs` 1,524 行 — 文档导入 E2E。
@@ -282,7 +283,7 @@
         - `PlotFromCard.cs` 174 行
         - `PlotSuiteTest.cs` 205 行
         - `PptStorage.cs` 1,783 行 — PPT 批注落盘 E2E。
-        - `PredictLinear.cs` 160 行
+        - `PredictLinear.cs` 167 行
         - `Qr.cs` 77 行
         - `SelAiShow.cs` 126 行
         - `SelBarShow.cs` 40 行
@@ -294,6 +295,7 @@
         - `ShapePanel.cs` 845 行 — 图形面板专项 E2E。
         - `SnapTest.cs` 219 行
         - `Startup.cs` 41 行
+        - `TaperTest.cs` 350 行 — 收笔笔锋（速度尖尾）E2E：速度门控 / 尾长 / 上屏宽窄 / 开关往返。
         - `TextBoxSim.cs` 429 行
         - `TextColorTest.cs` 96 行
         - `TextInputAudit.cs` 100 行
@@ -335,12 +337,12 @@
       - `UiActionTable.cs` 45 行
 
     **InkUi/Panels/**
-      - `FullUi.MorePanel.cs` 2,806 行 — 更多面板：首页/设置/说明/日志/AI 服务入口。
+      - `FullUi.MorePanel.cs` 2,808 行 — 更多面板：首页/设置/说明/日志/AI 服务入口。
       - `FullUi.Pages.cs` 478 行 — 更多面板的各页（启动器 / 设置 / 说明 / 日志 / AI 服务 / 最近文档）：绘制与命中。
-      - `FullUi.Settings.cs` 3,047 行 — 设置页：工具条/通用/书写/墨迹/AI/备份。
+      - `FullUi.Settings.cs` 3,055 行 — 设置页：工具条/通用/书写/墨迹/AI/备份。
       - `HelpUi.cs` 500 行
 
     **InkUi/Shell/**
       - `Anim.cs` 89 行
-      - `FullUi.cs` 1,883 行 — 工具条/球/上带/色带的主体布局与绘制。
+      - `FullUi.cs` 1,887 行 — 工具条/球/上带/色带的主体布局与绘制。
       - `FullUi.Interaction.cs` 2,301 行 — 界面命中、开合、换页、贴边隐藏。

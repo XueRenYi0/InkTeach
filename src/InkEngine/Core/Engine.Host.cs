@@ -345,6 +345,26 @@ public partial class InkEngine
         // （这里原来还有各开关的解析与 flicktip 速度门控块；停用与删除的原文见登记文档。）
         PressureSim.BumpVersion();
 
+        // ---- 收笔笔锋（速度尖尾，仿 ClassIn）----------------------
+        //
+        // **默认开**；`--notaper` 强关（给对照实验用，优先于用户偏好）。
+        // `--taper L,vMin` 可选调参：L = 尾长系数（× 笔宽），vMin = 收尖速度下限（px/ms）。
+        _noTaperArg = args.Contains("--notaper");
+        StrokeTaper.Enabled = !_noTaperArg;
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] != "--taper") continue;
+            var parts = args[i + 1].Split(',');
+            if (parts.Length >= 1 && float.TryParse(parts[0], out float tl) && tl > 0f)
+                StrokeTaper.TailFactor = Math.Clamp(tl, 0.5f, 12f);
+            if (parts.Length >= 2 && float.TryParse(parts[1], out float tv) && tv > 0f)
+                StrokeTaper.VMin = Math.Clamp(tv, 0.05f, 10f);
+        }
+        // 用户开关：偏好只写"关过"的那一份（`ui.taper = "0"`）。
+        if (!_noTaperArg && GetUiPref(TaperPrefKey) == "0")
+            StrokeTaper.Enabled = false;
+        StrokeTaper.BumpVersion();
+
         // ---- 中心线曲线化（过点 Catmull-Rom ＋ 角点保护）------------------------
         //
         // **默认开**（2026-09-28 用户拍板："默认开也没关系"）：把"逐点直线段"换成
@@ -393,6 +413,7 @@ public partial class InkEngine
             // **时长不可调**（用户定）：地平线按刷新率自动缩放，见 InkPredictorLinear。
             _noPredictArg = args.Contains("--nopredict2");
             _forcePredictArg = args.Contains("--predict2");
+            TailScaleUp = args.Contains("--tailscaleup");
             for (int i = 0; i < args.Length - 1; i++)
                 if (args[i] == "--wetpred" && float.TryParse(args[i + 1], out float wp))
                     _wetPredScale = Math.Clamp(wp, 0f, 1f);
@@ -1070,12 +1091,10 @@ public partial class InkEngine
             // （2026-09-22 用户碰到的两个坑：--predictms 100 被静默夹到 15；--noinktrail 生效了没有
             //   只能靠猜。这两件事都不该靠猜。）
             // 2026-10-15：只剩线性预测（Chromium 同族）——算法行不再需要"档"的口径。
-            // 2026-10-16：地平线**按刷新率缩放**（用户定：60Hz=10ms，其余按比例 600/Hz、收在 4~10ms）
-            // ——取第一块屏（和显示层限速的帧预算同一个口径），放在下面这一行之前算好。
-            if (_windows.Count == 1 && w.RefreshPeriodMs > 1.0)
-                _predictor.HorizonMs = Math.Clamp(0.6 * w.RefreshPeriodMs, 4.0, 10.0);
+            // 2026-11-17：地平线不再在 Host 单次设置，改在 UpdatePredictTail 每帧按同口径刷新。
+            double horizonMs = Math.Clamp(0.6 * (w.RefreshPeriodMs > 1.0 ? w.RefreshPeriodMs : 1000.0 / 60), 4.0, 10.0);
             Console.WriteLine(PredictTailEnabled
-                ? $"笔迹预测: 开（自绘尾；线性预测（Chromium 同族）；地平线 {_predictor.HorizonMs:F1} ms"
+                ? $"笔迹预测: 开（自绘尾；线性预测（Chromium 同族）；地平线 {horizonMs:F1} ms"
                   + $"（按 {(w.RefreshPeriodMs > 1.0 ? 1000.0 / w.RefreshPeriodMs : 60):F0}Hz 缩放）；"
                   + "设置「墨迹预测」可关 / --nopredict2）"
                 : "笔迹预测: 关（设置 → 书写 → 墨迹预测；--predict2 可再开）");
@@ -1123,6 +1142,9 @@ public partial class InkEngine
             Console.WriteLine($"压感→粗细: {(PressureWidth.Enabled
                 ? $"开（{PressureWidth.Min:F2}~{PressureWidth.Max:F2} 倍，曲线 gamma {PressureWidth.Gamma:F2}）"
                 : "关（--nopressure）")}；变宽通道: {OverlayWindow.InkNote}");
+            Console.WriteLine($"收笔笔锋: {(StrokeTaper.Enabled
+                ? $"开（末段速度 {StrokeTaper.VMin:F1}~{StrokeTaper.VMax:F1} px/ms，尾长 ≤ {StrokeTaper.MaxTailWidths:F1}× 笔宽）"
+                : "关（--notaper）")}");
             // [停用 2026-10-05] 模拟压力 / 笔锋 / 收尖：全部停用（代码与备份见 已停用-渲染实验.md）。
             Console.WriteLine("无压感笔迹增强: 已停用（模拟压力 / 笔锋 / 收尖）");
             // **输入路径总览**（2026-10-07 用户要求）：一次说清这台机器上会走哪几条路。

@@ -182,6 +182,7 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void SetCoordGridDefault(bool on) => _engine.SetCoordGridDefaultFromUi(on);
     public void SetDwellShape(bool on) => _engine.SetDwellShapeFromUi(on);
     public void SetPressure(bool on) => _engine.SetPressureFromUi(on);
+    public void SetTaper(bool on) => _engine.SetTaperFromUi(on);
     public void SetFineStroke(bool on) => _engine.SetFineStrokeFromUi(on);
     /// <summary>「设置 → 书写 → 墨迹预测」：自绘预测尾总开关（默认关，2026-10-16 起）。</summary>
     public void SetPredict(bool on) => _engine.SetPredictFromUi(on);

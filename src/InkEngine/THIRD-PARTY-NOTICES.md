@@ -121,11 +121,12 @@ Apache-2.0 与本项目的 GPL-3.0 兼容；分发时须保留上述声明与文
 
 ## perfect-freehand（行为/公式参考；MIT）
 
-> **状态（2026-10-05）**：**已停用**——`simulatePressure` 速度压力与 `--flicktip` 收尖
-> 均已停用/删除；仅 `start/end taper` 的公式代码保留在 `PressureSim`（随之停用）。
-> 见仓库根目录 `已停用-渲染实验.md`。
+> **状态（2026-11-18）**：**在用**——`end.taper`（收笔锥化）的半径缩放思路用于
+> `StrokeTaper`（设置 → 书写 → 笔锋），尾长改由「抬笔前末段速度」决定，不是上游的固定锥长。
+> `PressureSim` 的 `simulatePressure` 速度压力仍停用（见 `已停用-渲染实验.md`）。
 
-- **文件**：`src/InkEngine/PressureSim.cs`（`--pfpressure` 模拟压力、`--simtaper` 起收笔锥化）
+- **文件**：`src/InkEngine/Rendering/StrokeTaper.cs`（收笔笔锋：速度门控 + 末端锥化）；
+  `src/InkEngine/Input/PressureSim.cs`（`--pfpressure` 模拟压力、`--simtaper` 起收笔锥化，停用）
 - **来源**：https://github.com/steveruizok/perfect-freehand
   （`packages/perfect-freehand/src/simulatePressure.ts`、`getStrokePoints.ts`、
   `getStrokeOutlinePoints.ts` 等）

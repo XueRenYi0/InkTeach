@@ -1100,6 +1100,8 @@ public sealed partial class FullUi
         Row.DwellShape => _host == null || _host.State.DwellShapeOn,
         // 压感粗细：状态在**引擎**（渲染期开关），界面只是显示它
         Row.Pressure => _host == null || _host.State.PressureOn,
+        // 笔锋：状态在**引擎**（渲染期开关），界面只是显示它
+        Row.Taper => _host == null || _host.State.TaperOn,
         // 墨迹预测：同样在引擎（默认关，2026-10-16 起），界面只是显示它
         Row.Predict => _host == null || _host.State.PredictTailOn,
         // 设备与性能统计：引擎是权威（首次弹窗同意/设置页切换）。

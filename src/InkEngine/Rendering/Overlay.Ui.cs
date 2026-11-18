@@ -1213,8 +1213,12 @@ internal sealed partial class OverlayWindow
     private bool DrawPressureInk(Stroke s)
     {
         if (_ctx2 == null || _inkStyle == null) return false;
-        if (!InkAvailable || !PressureWidth.Enabled) return false;
-        if (!s.HasPressure || s.Dash != StrokeDash.Solid) return false;
+        if (!InkAvailable) return false;
+        // 变宽通道放行 = 「有压感参与（压感开且这笔有压力）」或「笔锋生效」之一。
+        // 有压感的笔迹在压感关掉后仍可因笔锋开而走这条路（中段等宽、末端尖尾）。
+        bool taperOn = StrokeTaper.Eligible(s);
+        bool pressureOn = PressureWidth.Enabled && s.HasPressure;
+        if ((!pressureOn && !taperOn) || s.Dash != StrokeDash.Solid) return false;
         if (s.Erased.Count > 0 || s.Kind != StrokeKind.Freehand) return false;
 
         // 段由两条路生成（旧的"按步长抽稀" / `--smooth` 的"曲线化"），
@@ -1283,7 +1287,29 @@ internal sealed partial class OverlayWindow
         float Py(int i) => useModel ? StrokeMotion.At(i).Y : pts[i].Y;
         float Pp(int i) => useModel ? StrokeMotion.At(i).Z : pts[i].P;
 
-        startRadius = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, Pp(0)));
+        // 收笔笔锋：**有压感的笔迹也生效**（真笔是主要设备）。逐点系数 k 乘在
+        // PressureWidth.HalfWidth **之外**（Factor 有 0.22 地板，压不住尖端）。
+        // 无压感笔迹的基准半径取 s.Width*0.5 等宽（P 不可用），有压感用 PressureWidth.HalfWidth。
+        // 回放前缀（clipped）按"前缀末端"重算系数，尖端随书写推进平滑移动；
+        // 建模输出（mean2）与原始点近似 1:1，末段追加点按末点系数（最尖）取。
+        var taperF = clipped ? StrokeTaper.Factors(s, lastIdx, frac) : StrokeTaper.Factors(s);
+        float K(int i)
+        {
+            if (taperF == null) return 1f;
+            int orig = useModel ? Math.Min(i, s.Points.Count - 1) : i;
+            return taperF[Math.Min(orig, taperF.Length - 1)];
+        }
+        float HalfW(float p) => (s.HasPressure && PressureWidth.Enabled)
+            ? PressureWidth.HalfWidth(s.Width, p)
+            : s.Width * 0.5f;   // 压感关 / 无压感：中段等宽，只叠末端尖尾
+        // 极细笔的 InkMinRadius=0.4 会把笔锋尖端钳住（看不出变细）；笔锋生效时下限收到
+        // 系数下限 × 压感地板对应的半径，让尖端仍能视觉变细。只在 taper 时生效；
+        // 不生效时保持 InkMinRadius——有压感的旧下限不动（否则压感轻写段会消失，见 PressureWidth.Min）。
+        float minR = taperF != null
+            ? MathF.Max(0.05f, s.Width * 0.5f * PressureWidth.Min * StrokeTaper.MinFactor)
+            : InkMinRadius;
+
+        startRadius = MathF.Max(minR, HalfW(Pp(0)) * K(0));
         float lastX = Px(0), lastY = Py(0), lastR = startRadius;
 
         // `--nosmooth`（StrokeSmoothing.Enabled=false）时整体退回折线：
@@ -1314,7 +1340,8 @@ internal sealed partial class OverlayWindow
             {
                 float pk2 = StrokeSmoothing.PressureAt(k + 1);
                 ema += (pk2 - ema) * (pk2 > ema ? InkPressureEma : InkPressureEmaDown);
-                float r1 = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, ema));
+                float kk = K(StrokeSmoothing.SrcIndexOf(k + 1));
+                float r1 = MathF.Max(minR, HalfW(ema) * kk);
                 _inkSegs[count++] = new InkBezierSegment
                 {
                     Point1 = new Vortice.Direct2D1.InkPoint
@@ -1349,7 +1376,7 @@ internal sealed partial class OverlayWindow
                 if (i % stride != 0 && i != lastIdx) continue; // 中间的按步长抽稀（末点必留）
 
                 float ex = Px(i), ey = Py(i);
-                float er = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, sm));
+                float er = MathF.Max(minR, HalfW(sm) * K(i));
                 // 直线段写成三次贝塞尔：控制点落在两端之间 → 位置是直线，半径沿途线性插值。
                 //
                 // 注意**必须全限定** `Vortice.Direct2D1.InkPoint`：我们自己也有一个
@@ -1381,7 +1408,7 @@ internal sealed partial class OverlayWindow
                 float ey = Py(lastIdx) + (Py(j) - Py(lastIdx)) * frac;
                 float piTail = Pp(lastIdx) + (Pp(j) - Pp(lastIdx)) * frac;
                 sm += (piTail - sm) * (piTail > sm ? InkPressureEma : InkPressureEmaDown);
-                float er = MathF.Max(InkMinRadius, PressureWidth.HalfWidth(s.Width, sm));
+                float er = MathF.Max(minR, HalfW(sm) * K(j));
                 _inkSegs[count++] = new InkBezierSegment
                 {
                     Point1 = new Vortice.Direct2D1.InkPoint

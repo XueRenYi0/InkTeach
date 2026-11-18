@@ -438,24 +438,162 @@ internal sealed partial class App
     ///
     /// 症状的机理：鼠标模式下没有委托轨迹，预测尾由我们自己画；而鼠标/兼容模式的输入
     /// 是**突发**的（报几个点、停一下、再报几个点）。来一阵好数据 → 末速度算得大 →
-    /// 尾巴甩到前面；间隔一超 `MaxGapMs`(20ms) → 速度清零 → 尾巴没了；再来数据又甩出来。
+    /// 尾巴甩到前面；间隔一超 `MaxGapMs`(40ms) → 速度清零 → 尾巴没了；再来数据又甩出来。
     ///
     /// 判据是**笔尖的逐帧轨迹**（品红墨的最右列）：
     ///   · `往前跳的最大幅度`：一帧里笔尖突然前进多少；
     ///   · `往后退的次数 / 最大后退`：尾巴消失时笔尖会**缩回去**——这就是"突突"的正身。
     /// 对照组 `--off` 应当明显更稳（这就是这条测试的自证）。
     /// 测试**自己摆状态**（不依赖启动默认值）：默认测"开预测"，`--off` 测对照。
+    ///
+    /// 2026-11-17 增补 `--batch`（PLAN T4）：纯引擎复现**真机批量投递**——每 16.6ms 一批、
+    /// 每批 3 个**同时标**点（同批点之间不推 `NowMs`，所以时标全等，和真机输入栈一致）。
+    /// 两块用例：急转 75°（判尾端垂距 + 尾方向夹角）、停顿抖动（判尾长）。
+    /// `--batch` 只跑这两块，不跑下面的合成鼠标节奏部分。
     /// </summary>
     // [重启 2026-10-08] B4 预测尾"突突跳"检测（老系统 2026-10-05 停用，本次接回新尾）：
     // 新尾的纪律（长度限速 + 断笔后缓慢回收）就是对着下面这段"机理"修的。
-    private void TailJumpTest(bool noisy = false, bool predictOff = false)
+    private void TailJumpTest(bool noisy = false, bool predictOff = false, bool batch = false)
     {
         Console.WriteLine();
-        Console.WriteLine("=== 预测尾“突突跳”检测（合成鼠标，突发节奏）===");
+        Console.WriteLine(batch
+            ? "=== 预测尾批量节奏检测（纯引擎：16.6ms 一批 / 每批 3 点同刻）==="
+            : "=== 预测尾“突突跳”检测（合成鼠标，突发节奏）===");
         // 测试自己摆状态（不依赖启动默认值）：默认测"开预测"，`--off` 测对照
         bool predOn = !predictOff;
         global::InkEngine.InkEngine.PredictTailEnabled = predOn;
-        Console.WriteLine($"  预测={(predOn ? "开" : "关（对照）")}；节奏={(noisy ? "忽大忽小 + 间隔不齐（像真鼠标）" : "固定步长 + 每 4 点一停")}");
+        Console.WriteLine($"  预测={(predOn ? "开" : "关（对照）")}；节奏="
+                          + (batch ? "批量 16.6ms 一批 × 每批 3 点（同批点时标相同）"
+                                   : (noisy ? "忽大忽小 + 间隔不齐（像真鼠标）" : "固定步长 + 每 4 点一停")));
+
+        // ── 批量节奏（2026-11-17，PLAN T4）：真机输入栈是「每 16.6ms 一批、批内点**同毫秒**」，
+        //    下面旧急转用例是 4ms 一点（批批不同刻），覆盖不到这一层。
+        //    这里**只用引擎接口**（DwellBegin/ MoveFor/ EndFor + UpdatePredictTail），
+        //    `NowMs` 只在**批与批之间** +16.6：同批 3 次 `DwellMoveForTest` 期间不推时钟，
+        //    而 `DwellMoveForTest` 最终走 `AddPointCleaned(…, NowMs)`，所以同批点时标全等
+        //    —— 这正是要复现的真机结构（旧预测器在 `dt<=0` 上直接 return，整批只吃到跨批那一段）。
+        //    `--batch` 只跑这一块，不跑下面的合成鼠标节奏部分。
+        if (batch)
+        {
+            const double batchMs = 16.6;          // 60Hz 一批
+            const int perBatch = 3;               // 每批 3 个采样点（同刻）
+            const float spd = 3f;                 // 3px/ms（真机快写）
+            float stepBatch = spd * (float)batchMs;   // 一批走 49.8px
+
+            if (!predOn)
+                Console.WriteLine("  （--off：预测关，批量用例无对象）");
+            else
+            {
+                // ── 用例 1：急转 75°（批量）──
+                //   向右匀速 ≥20 批 → 75° 向下急转（转后同速）→ 再喂 2 批，每批后 UpdatePredictTail。
+                //   判据换成"尾端到**转后直线**的垂距"和"尾方向与新方向的夹角"：
+                //   旧判据 `lead`（X 分量）天生带着 6·cos75°≈1.55px 的正常几何量，量不出方向。
+                Doc.Clear();
+                Doc.ClearHistory();
+                float tx0 = 400f, ty0 = 300f;
+                DwellBeginForTest(tx0, ty0);
+                double tb = NowMs;
+                const int nWrite = 24;
+                for (int b = 1; b <= nWrite; b++)
+                {
+                    NowMs = tb + b * batchMs;     // 只推一次：同批三点同刻
+                    for (int j = 1; j <= perBatch; j++)
+                        DwellMoveForTest(tx0 + (b - 1) * stepBatch + stepBatch * j / perBatch, ty0);
+                }
+                UpdatePredictTail(); UpdatePredictTail();
+                bool hadTail = PredictTailActive;
+                float turnX = tx0 + nWrite * stepBatch, turnY = ty0;
+                float rad = 75f * MathF.PI / 180f;    // 急转 75°：向下
+                float dxNew = MathF.Cos(rad), dyNew = MathF.Sin(rad);
+                for (int k = 1; k <= 2; k++)
+                {
+                    NowMs = tb + (nWrite + k) * batchMs;
+                    for (int j = 1; j <= perBatch; j++)
+                    {
+                        float d = (k - 1) * stepBatch + stepBatch * j / perBatch;
+                        DwellMoveForTest(turnX + d * dxNew, turnY + d * dyNew);
+                    }
+                    UpdatePredictTail();
+                }
+                var bTail = PredictTailPoints;
+                int bn = bTail.Count;
+                float perp = 0f, tailAng = 0f, tailLen = 0f;
+                if (bn >= 2)
+                {
+                    // 判据的几何口径（2026-11-17）：尾是**从锚点画出去**的（`UpdatePredictTail` 里
+                    // `_tailCanvas[0]` 就是锚点），所以"尾端点到转后路径直线"取**过锚点、方向=转后
+                    // 新方向**的那条直线——等价于 |尾向量 × 新方向|。不取拐角点本身当基线：
+                    // 锚点在拐角处天生带一截补平滑滞后（笔身滞后，两版预测器都有，不是本用例对象），
+                    // 拿拐角点算会把 `lag·sin75°≈0.97·lag` 记成"旧方向残留"，判据就没有分辨力了。
+                    float adx = bTail[bn - 1].X - bTail[0].X;
+                    float ady = bTail[bn - 1].Y - bTail[0].Y;
+                    tailLen = MathF.Sqrt(adx * adx + ady * ady);
+                    perp = MathF.Abs(adx * dyNew - ady * dxNew);   // 叉积 = 垂直分量（px）
+                    if (tailLen > 1e-3f)
+                        tailAng = MathF.Acos(Math.Clamp((adx * dxNew + ady * dyNew) / tailLen, -1f, 1f))
+                                  * 57.29578f;
+                }
+                // 尾收干净（点数 <2）＝没有旧方向残留，直接算通过。
+                bool bTurnOk = bn < 2 || (perp <= 1.5f && tailAng <= 25f);
+                Console.WriteLine($"  急转 75°（批量）：转前尾={(hadTail ? "有" : "无")}；转后尾 {bn} 点 / 长 {tailLen:F1}px，"
+                                  + $"垂距 {perp:F1}px / 尾方向偏差 {tailAng:F0}°（要求 ≤1.5px、≤25°）");
+                Console.WriteLine(bTurnOk
+                    ? "  PASS: 批量节奏下急转处没有旧方向残留"
+                    : $"  FAIL: 批量节奏下急转残留（垂距 {perp:F1}px / 夹角 {tailAng:F0}°）");
+                DwellEndForTest();
+                Doc.Clear();
+                Doc.ClearHistory();
+
+                // ── 用例 2：停顿抖动（批量）──
+                //   匀速若干批后停笔 ≥200ms：时钟照常 16.6ms 走，每批喂 ±1px 抖动（三点同刻），
+                //   每批 UpdatePredictTail。判据：尾长（末点到锚点）始终 ≤2px
+                //   （v·H＋0.5 的简化：抖动速度 ~0.1px/ms、H≈10ms ⇒ 1.5px，取 2px 留余量）。
+                //   旧预测器在这里会露"陈旧速度"：跨批速度仍是 3px/ms，尾按 3×10ms 伸到弧长顶 6px。
+                float px0 = 700f, py0 = 420f;
+                DwellBeginForTest(px0, py0);
+                double tp = NowMs;
+                const int nPre = 12;
+                for (int b = 1; b <= nPre; b++)
+                {
+                    NowMs = tp + b * batchMs;
+                    for (int j = 1; j <= perBatch; j++)
+                        DwellMoveForTest(px0 + (b - 1) * stepBatch + stepBatch * j / perBatch, py0);
+                }
+                UpdatePredictTail();
+                float restX = px0 + nPre * stepBatch;
+                float maxTail = 0f;
+                // 前 3 批不计判据：停笔前那一截**合法**的 6px 尾要按回收限速（~1.8px/帧）
+                // 收回来，约 3 帧（50ms）；判据从第 4 批（≈66ms）起生效。
+                for (int k = 1; k * batchMs <= 200.0 + batchMs; k++)   // 约 13 批 ≈ 216ms ≥ 200ms
+                {
+                    NowMs = tp + (nPre + k) * batchMs;
+                    float jit = (k % 2 == 0) ? 1f : -1f;    // ±1px；同批三点同刻
+                    DwellMoveForTest(restX + jit, py0 - jit * 0.5f);
+                    DwellMoveForTest(restX - jit, py0 + jit * 0.5f);
+                    DwellMoveForTest(restX + jit * 0.5f, py0 - jit);
+                    UpdatePredictTail();
+                    if (k < 4) continue;
+                    var jTail = PredictTailPoints;
+                    if (jTail.Count >= 2)
+                    {
+                        float jdx = jTail[jTail.Count - 1].X - jTail[0].X;
+                        float jdy = jTail[jTail.Count - 1].Y - jTail[0].Y;
+                        maxTail = MathF.Max(maxTail, MathF.Sqrt(jdx * jdx + jdy * jdy));
+                    }
+                }
+                bool bPauseOk = maxTail <= 2f;
+                Console.WriteLine($"  停顿抖动（批量）：停笔 ~216ms、每批 ±1px；尾长最大 {maxTail:F1}px（要求 ≤2，前 3 批回收期不计）");
+                Console.WriteLine(bPauseOk
+                    ? "  PASS: 停顿抖动时尾长收在噪声量级"
+                    : $"  FAIL: 停顿抖动时尾长 {maxTail:F1}px（陈旧速度在 extrapolate）");
+                DwellEndForTest();
+                Doc.Clear();
+                Doc.ClearHistory();
+            }
+            Console.WriteLine();
+            _quit = true;
+            return;
+        }
 
         // ── B4.2（2026-10-08 真机反馈）：**急转**时不许留"旧方向"的尾（**纯引擎，不走屏幕/合成鼠标**，
         //    所以放在 SkipIfNoSyntheticInput 之前——鼠标忙的时候这项也照样能跑）───────────
@@ -490,6 +628,9 @@ internal sealed partial class App
             float lead = float.MinValue;
             foreach (var pt in PredictTailPoints) lead = MathF.Max(lead, pt.X - lastX);
             if (lead == float.MinValue) lead = 0f; // 尾收干净了：更谈不上"旧方向残留"
+            // 2026-11-17 说明（REVIEW-VERIFY §1-6）：`lead` 只是**X 分量**，转后末点自身就有
+            // 6·cos75°≈1.55px 的几何量，判据 ≤4 只能抓 **>4px 的粗残留**，
+            // 不是"旧方向残留"的证据。真正的方向判据在 `--batch` 的垂距/夹角那一块。
             bool turnOk = hadTail && lead <= 4f;
             Console.WriteLine($"  急转 75°：转前尾={(hadTail ? "有" : "无")}；"
                               + $"转后沿旧方向最远伸出 {lead:F1}px（要求 ≤4）");

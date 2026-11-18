@@ -600,6 +600,7 @@ public partial class InkEngine
             trailStarted = wetWin?.BeginInkTrail(
                 tool == Tool.Highlighter ? HighlighterCurrent : CurrentColor, trailW * 0.5f) ?? false;
         _pen.BeginStroke();   // 缺压回填的基准只活在"一笔"之内（见 PenSampleBuffer.BeginStroke）
+        InputDeliveryStats.Reset();   // 投递结构遥测：一笔一清零（`[笔画]` 行的 `[投递 …]`）
         ResetPredictTail();   // B4：新的一笔，预测器从零开始
         _trailActiveThisStroke = trailStarted;   // 委托墨迹：本笔有系统湿墨 → 预测退场×scale
         InputBlackBox.Begin(NowMs, x, y, pressure, ptype);   // 黑匣子：起笔（回放用）

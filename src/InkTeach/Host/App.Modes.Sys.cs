@@ -495,7 +495,7 @@ internal sealed partial class App
             // [重启 2026-10-08] B4 预测尾"突突跳"检测（老系统 2026-10-05 停用；见 已停用-渲染实验.md）
             _autoExitAt = double.MaxValue;
             _nextLogAt = double.MaxValue;
-            TailJumpTest(args.Contains("--noisy"), args.Contains("--off"));
+            TailJumpTest(args.Contains("--noisy"), args.Contains("--off"), args.Contains("--batch"));
             return null;
         }),
         new("--tiletest", "分块缓存自检（边界无缝 / 回程复用 / 内存上界）", args =>

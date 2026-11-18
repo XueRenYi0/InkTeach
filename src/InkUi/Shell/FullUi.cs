@@ -416,7 +416,7 @@ public sealed partial class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。外观 / 书写 / 墨迹三列并排；
     /// `AutoStart` 排在表尾，但由 <see cref="MoreRowRect"/> 画在外观列最后一格。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, Language, DwellShape, Pressure, Predict, TouchMode, ClearOnArrow, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart, AiApi }
+    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, Language, DwellShape, Pressure, Taper, Predict, TouchMode, ClearOnArrow, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart, AiApi }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -447,6 +447,8 @@ public sealed partial class FullUi : IOverlayUi
         // 压感粗细（2026-10-01，批次 0.2）：默认开；关掉 = 整块板等宽，
         // 手写板的流畅 / 预测不受影响（渲染期开关，文档里的压力数据不动）。
         (Row.Pressure, "压感粗细", false, false, "关掉后所有笔迹等宽（手写板照样流畅）"),
+        // 笔锋（2026-11-18）：默认开；只改**显示**（快写收笔变尖），文档里的墨迹数据不动。
+        (Row.Taper, "笔锋", false, false, "快写收笔变尖、慢写等宽（只改显示，不改墨迹数据）"),
         // 墨迹预测（2026-10-09 回归；**2026-10-16 用户定：默认关**——"以后的软件默认不开预测"；
         // 唯一算法 = 线性预测（Chromium 同族），只剩这一个开关）。
         // 链路：行表 → ActivateRow → IsOn → SavePrefs（"开过"才写 "1"）。
@@ -740,6 +742,8 @@ public sealed partial class FullUi : IOverlayUi
         _host.SetPref("dwellShape", st.DwellShapeOn ? null : "0");
         // 压感粗细：**默认开**，同样只写"关了"这一种情况（引擎启动时自己读它）。
         _host.SetPref("pressure", st.PressureOn ? null : "0");
+        // 笔锋：**默认开**，同样只写"关了"这一种情况（引擎启动时自己读它）。
+        _host.SetPref("taper", st.TaperOn ? null : "0");
         // （精细笔迹 / 触摸手势的偏好写入 2026-10-09 晚随开关一起撤——两项都常开，没有可写的状态。）
         // 墨迹预测：**默认关**（2026-10-16 用户定："以后的软件默认不开预测"），
         // 只写"开过"的那一种情况（写 "1"）。

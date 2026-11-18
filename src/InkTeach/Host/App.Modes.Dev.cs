@@ -137,6 +137,13 @@ internal sealed partial class App
             PressureTest();
             return null;
         }),
+        new("--tapertest", "收笔笔锋自检（速度门控 / 尾长随速度 / 开关往返 / 上屏宽窄 / 文档不变）", args =>
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            TaperTest();
+            return null;
+        }),
         new("--replayinput", "<文件> [--frame 10]  黑匣子回放：供给率/帧间墨尖位移/方向翻转（诊断）", args =>
         {
             // 黑匣子回放：把 `--reclive` 记录的真实输入 1:1 喂回引擎，算出预测尾的指标。

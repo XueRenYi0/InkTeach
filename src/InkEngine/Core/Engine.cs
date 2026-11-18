@@ -1378,6 +1378,11 @@ public partial class InkEngine
     {
         if (ActiveStroke == null) return;
         InputBlackBox.Sample(t, x, y, p);   // 黑匣子：记录喂进预测器的原始点（回放靠它 1:1 复现）
+        // 投递结构遥测（2026-11-17，T0 诊断）：**不管预测开没开都记**——它量的是"这批点
+        // 有没有时标"这件输入栈属性，不是预测的状态；预测关着也能诊断。
+        // 口径与下一行 `_predictor.Add` 完全一致（同一个 `t`），所以这里 dt≤0 时，
+        // 预测器那边必然走 `dt <= 0f → return` 那一条（速度/方向都不更新）。
+        InputDeliveryStats.Sample(t);
         // 喂预测器。**用点自己的时间 `t`**（2026-10-16 修，用户同意）：
         //   · 笔/指针消息路径：`t` = 每点自带硬件时标（QPC）换算的相对时间——最新一点
         //     锚在 nowMs、批内其余点按真实间隔回推（见 PenSampleBuffer / PointerSampleBuffer）；
@@ -1409,8 +1414,14 @@ public partial class InkEngine
     // 对照与 60Hz 结论见 `调研/调研-线性预测-Chromium.md`。
     internal static bool PredictTailEnabled;
 
+    /// <summary>
+    /// `--tailscaleup`：允许把当帧预测偏移放大到历史尾长（旧行为，默认关）。
+    /// 2026-11-17 加开关，用于一键回退「显示尾长不得超过预测器当帧给的长度」的新行为。
+    /// </summary>
+    internal static bool TailScaleUp;
+
     // 版本号显示见 Update.cs 末尾的 `ProductInfo`（界面工程用；它拿不到内部的 UpdateFeed）。
-    // 唯一预测器（地平线固定 21.3ms = 实测端到端延迟；没有时长档）。
+    // 唯一预测器（地平线每帧按刷新率缩放 = clamp(0.6×帧周期, 4, 10)ms；没有时长档）。
     private readonly InkPredictorLinear _predictor = new();
     // 预测点暂存（复用；**不是每帧 new**——v6 一次最多给 ≤6 个点，缓冲给足 64）。
     private readonly PredictedPoint[] _predBuf = new PredictedPoint[64];
@@ -1463,6 +1474,8 @@ public partial class InkEngine
         float frameMs = _windows.Count > 0 && _windows[0].RefreshPeriodMs > 1.0
             ? (float)_windows[0].RefreshPeriodMs
             : 1000f / 90f;
+        // 2026-11-17：地平线跟显示层限速用同一帧周期，多屏/动态刷新率/拿不到刷新率都一致。
+        _predictor.HorizonMs = Math.Clamp(0.6 * frameMs, 4.0, 10.0);
 
         var pred = _predBuf;                      // 复用缓冲
         int n = _predictor.Predict(pred);         // 唯一预测器（2026-10-15 起：线性）
@@ -1497,6 +1510,8 @@ public partial class InkEngine
             ? fastRate * frameMs                                       // 失效：快收（≈8px/帧@90Hz）
             : (tipLenRaw > _tailLen ? extRate : retRate) * frameMs;    // 正常：伸 2.2 / 缩 1.2（@90Hz）
         _tailLen += Math.Clamp(tipLenRaw - _tailLen, -rate, rate);
+        // 2026-11-17：只许慢伸，不许把当帧预测偏移放大回历史尾长（治方向门控/停顿时被拉偏）。
+        if (!TailScaleUp && _tailLen > tipLenRaw) _tailLen = tipLenRaw;
         if (_tailLen < 0.4f) _tailLen = 0f;
         if (_tailLen <= 0f || _tailOffsets.Count == 0) return;
 
@@ -1531,7 +1546,9 @@ public partial class InkEngine
 
         var tipOff = _tailOffsets[^1];
         float tipOffLen = MathF.Max(1e-3f, MathF.Sqrt(tipOff.X * tipOff.X + tipOff.Y * tipOff.Y));
-        float scale = _tailLen / tipOffLen;
+        // 2026-11-17：方向不可信或零偏移时直接不画，防"笔头冒圆点"；默认不再放大当帧预测。
+        if (!TailScaleUp && tipOffLen < 0.5f) return;
+        float scale = TailScaleUp ? _tailLen / tipOffLen : MathF.Min(1f, _tailLen / tipOffLen);
         _tailCanvas.Add(anchor);
         for (int i = 0; i < _tailOffsets.Count; i++)
             _tailCanvas.Add(anchor + _tailOffsets[i] * scale);

@@ -400,7 +400,8 @@ internal sealed partial class OverlayWindow
 
         float pointParam = param * (s.Points.Count - 1);
         if (pointParam <= 0.02f) return;        // 刚起步：还没有可画的段
-        if (s.HasPressure && s.Dash == StrokeDash.Solid && s.Erased.Count == 0
+        if ((s.HasPressure || StrokeTaper.Eligible(s))
+            && s.Dash == StrokeDash.Solid && s.Erased.Count == 0
             && DrawReplayPressurePrefix(s, pointParam))
             return;
 
@@ -416,7 +417,11 @@ internal sealed partial class OverlayWindow
     /// <summary>压感前缀：同 <see cref="DrawPressureInk"/> 那条路，只是只喂到前缀。</summary>
     private bool DrawReplayPressurePrefix(Stroke s, float pointParam)
     {
-        if (_ctx2 == null || _inkStyle == null || !InkAvailable || !PressureWidth.Enabled) return false;
+        if (_ctx2 == null || _inkStyle == null || !InkAvailable) return false;
+        // 同 DrawPressureInk：压感参与 或 笔锋生效，之一即放行。
+        bool taperOn = StrokeTaper.Eligible(s);
+        bool pressureOn = PressureWidth.Enabled && s.HasPressure;
+        if (!pressureOn && !taperOn) return false;
         if (!BuildPressureSegments(s, out float startRadius, out int nSeg, pointParam)) return false;
         try
         {

@@ -136,7 +136,7 @@
 | 2686 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
 | 2744 | 延时探针（见 Latency.cs） |
 
-## src/InkEngine/Core/Engine.Host.cs（2,357 行）
+## src/InkEngine/Core/Engine.Host.cs（2,380 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -153,17 +153,18 @@
 | 319 | 用户开关：压感粗细（2026-10-01，「更多 → 设置 → 书写」） |
 | 329 | 精细笔迹（2026-10-07 加开关；**2026-10-09 晚用户定：开关撤掉、常开**） |
 | 338 | 模拟压力与笔锋：**已全部停用**（2026-10-05，代码保留） |
-| 348 | 中心线曲线化（过点 Catmull-Rom ＋ 角点保护） |
-| 373 | 笔迹运动模型（2026-10-03 对照台 → 2026-10-05 收敛） |
-| 505 | D1：亚像素输入（默认开；`--nohimetric` 退回 D0 对照） |
-| 514 | 呈现节奏 |
-| 609 | 荧光笔的 5 个色位 + 5 档浓度 |
-| 984 | 原始输入"被哪道门挡住的"分项计数（诊断，2026-10-07 加） |
-| 999 | "到底有没有中间点可捞"的自适应判据（2026-10-07 加） |
-| 1212 | 放映期间的"临时全局热键"（2026-09-30 用户定方案①） |
-| 1291 | Message loop |
-| 1451 | 文档高清补丁：每帧同步一次（由引擎挑驱动窗口） |
-| 1928 | Window procedure |
+| 348 | 收笔笔锋（速度尖尾，仿 ClassIn） |
+| 368 | 中心线曲线化（过点 Catmull-Rom ＋ 角点保护） |
+| 393 | 笔迹运动模型（2026-10-03 对照台 → 2026-10-05 收敛） |
+| 525 | D1：亚像素输入（默认开；`--nohimetric` 退回 D0 对照） |
+| 534 | 呈现节奏 |
+| 629 | 荧光笔的 5 个色位 + 5 档浓度 |
+| 1004 | 原始输入"被哪道门挡住的"分项计数（诊断，2026-10-07 加） |
+| 1019 | "到底有没有中间点可捞"的自适应判据（2026-10-07 加） |
+| 1235 | 放映期间的"临时全局热键"（2026-09-30 用户定方案①） |
+| 1314 | Message loop |
+| 1474 | 文档高清补丁：每帧同步一次（由引擎挑驱动窗口） |
+| 1951 | Window procedure |
 
 ## src/InkEngine/Core/Engine.Selection.Gesture.cs（1,466 行）
 
@@ -774,7 +775,7 @@
 | 495 | 滚动条（拖动 + 悬停） |
 | 523 | 整屏翻页（"一屏 = 一页"） |
 
-## src/InkEngine/Rendering/Engine.UiBridge.cs（994 行）
+## src/InkEngine/Rendering/Engine.UiBridge.cs（1,024 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -783,9 +784,9 @@
 | 行 | 段落 |
 | --- | --- |
 | 18 | 界面接入（引擎边界） |
-| 313 | 自检钩子（测试要驱动"换工具/操作条按钮/拖动中移动"这些私有路径） |
-| 909 | 浮层主题（选中操作条 / 小面板用它画） |
-| 927 | 界面偏好的存取（引擎只当仓库，不解释内容） |
+| 314 | 自检钩子（测试要驱动"换工具/操作条按钮/拖动中移动"这些私有路径） |
+| 939 | 浮层主题（选中操作条 / 小面板用它画） |
+| 957 | 界面偏好的存取（引擎只当仓库，不解释内容） |
 
 ## src/InkEngine/Rendering/Overlay.Capture.cs（831 行）
 
@@ -847,7 +848,7 @@
 | --- | --- |
 | 23 | Frame |
 
-## src/InkEngine/Rendering/Overlay.PptBar.cs（785 行）
+## src/InkEngine/Rendering/Overlay.PptBar.cs（790 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -895,7 +896,7 @@
 | 721 | ③ 当前色预览 |
 | 737 | 取色板两张缓存位图（色相/尺寸变了才重画） |
 
-## src/InkEngine/Rendering/Overlay.Ui.cs（1,441 行）
+## src/InkEngine/Rendering/Overlay.Ui.cs（1,468 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -905,7 +906,7 @@
 | --- | --- |
 | 23 | 界面层 |
 
-## src/InkEngine/Rendering/Ui.cs（1,691 行）
+## src/InkEngine/Rendering/Ui.cs（1,697 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -913,13 +914,13 @@
 | 183 | `public interface IUiHost` |
 | 311 | `public enum TimerMode` |
 | 324 | `public interface IEngineCommands` |
-| 839 | `public static class InkPalette` |
-| 980 | `public static class Hsv` |
-| 1032 | `public static class ShapeSpec` |
-| 1176 | `public static class LibraryCategoryIds` |
-| 1554 | `public enum UiTouchScrollPhase` |
-| 1590 | `public static class UiTouchFling` |
-| 1677 | `public sealed class NullUi : IOverlayUi` |
+| 842 | `public static class InkPalette` |
+| 983 | `public static class Hsv` |
+| 1035 | `public static class ShapeSpec` |
+| 1179 | `public static class LibraryCategoryIds` |
+| 1560 | `public enum UiTouchScrollPhase` |
+| 1596 | `public static class UiTouchFling` |
+| 1683 | `public sealed class NullUi : IOverlayUi` |
 
 ## src/InkEngine/Shapes/Engine.Library.cs（1,105 行）
 
@@ -1129,7 +1130,7 @@
 | 1092 | 6) 缩放手势中（相机倍率 ≠ 块纹理倍率、走 Linear 拉伸）块边不出网格线 |
 | 1342 | Self test |
 
-## src/InkTeach/SelfTests/E2E/Diagnostics.cs（3,295 行）
+## src/InkTeach/SelfTests/E2E/Diagnostics.cs（3,304 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -1158,24 +1159,24 @@
 | 1421 | 历史清理（墨迹 B）：按保留期清缓存；**永不动当前板书** |
 | 1473 | 放映中：两条都置灰（PPT 有自己的存取） |
 | 1492 | 「保存…/打开…」的分派（2026-10-16 合并入口）：按扩展名走对路 |
-| 1562 | ① 映射：纯函数先钉死 |
-| 1631 | ② 上屏：对齐用户在 WPF 里画的那三条线 |
-| 1702 | 下面四条是**对着用户那三条线**比的（这就是"和 Windows Ink 对齐了没有"） |
-| 1746 | ②.5 压感开关（2026-10-01，批次 0.2） |
-| 1809 | ③ 命中与回退：按"这一笔自己的最粗处"算 |
-| 1872 | ④ 存档：v10 往返 + 真·v9 老文件 |
-| 2243 | ① 画法：真机拖一个外框 |
-| 2280 | ② 手柄：四轴端 + 原点、无旋转柄、不留后门 |
-| 2307 | ③ 屏幕：轴真的上屏、框里是空的 |
-| 2319 | 拖原点：**整组平移**（2026-11-03 用户确认；四根半轴长度一个都不变） |
-| 2361 | 四个轴端：各自只改自己那一截（正负半轴可以不一样长） |
-| 2425 | 紧框就是"定义点的外接 + 半笔宽"（**刻度取消之后不该再虚报那一截**） |
-| 2438 | ③b 原点吸附：画布中心 / 边（2026-11-03） |
-| 2516 | ④ 网格：开着比关着**屏幕上真的多了那些格线** |
-| 2550 | ⑤ 数轴：水平锁 + 右端箭头 |
-| 2608 | ⑤ 格距手柄（**开网格才有**）：拖动 / 夹范围 / 一步撤销 |
-| 2691 | ⑥ 存档：v9 往返 + 真·v8 老文件 |
-| 3113 | ⑥ 运行日志（2026-10-16 用户定） |
+| 1569 | ① 映射：纯函数先钉死 |
+| 1638 | ② 上屏：对齐用户在 WPF 里画的那三条线 |
+| 1709 | 下面四条是**对着用户那三条线**比的（这就是"和 Windows Ink 对齐了没有"） |
+| 1753 | ②.5 压感开关（2026-10-01，批次 0.2） |
+| 1816 | ③ 命中与回退：按"这一笔自己的最粗处"算 |
+| 1879 | ④ 存档：v10 往返 + 真·v9 老文件 |
+| 2252 | ① 画法：真机拖一个外框 |
+| 2289 | ② 手柄：四轴端 + 原点、无旋转柄、不留后门 |
+| 2316 | ③ 屏幕：轴真的上屏、框里是空的 |
+| 2328 | 拖原点：**整组平移**（2026-11-03 用户确认；四根半轴长度一个都不变） |
+| 2370 | 四个轴端：各自只改自己那一截（正负半轴可以不一样长） |
+| 2434 | 紧框就是"定义点的外接 + 半笔宽"（**刻度取消之后不该再虚报那一截**） |
+| 2447 | ③b 原点吸附：画布中心 / 边（2026-11-03） |
+| 2525 | ④ 网格：开着比关着**屏幕上真的多了那些格线** |
+| 2559 | ⑤ 数轴：水平锁 + 右端箭头 |
+| 2617 | ⑤ 格距手柄（**开网格才有**）：拖动 / 夹范围 / 一步撤销 |
+| 2700 | ⑥ 存档：v9 往返 + 真·v8 老文件 |
+| 3122 | ⑥ 运行日志（2026-10-16 用户定） |
 
 ## src/InkTeach/SelfTests/E2E/DocMem.cs（792 行）
 
@@ -1737,7 +1738,7 @@
 | 1124 | 2026-09-26 定稿（用户挑的 A′）：**一支大笔 ＋ 两道明显断开的虚线 ＋ 一个点** |
 | 1140 | 2026-09-27：照 ClassIn 的"**笔头 ＋ 一个发光提示**" |
 
-## src/InkUi/Panels/FullUi.MorePanel.cs（2,806 行）
+## src/InkUi/Panels/FullUi.MorePanel.cs（2,808 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -1747,24 +1748,24 @@
 | --- | --- |
 | 81 | 内容是**两段式**的：形状先长，内容再交叉换 |
 | 170 | 颜色（深色主题只是一整套换过来，形状一个都不动） |
-| 1343 | 悬停提示（Tooltip；2026-10-02） |
-| 1496 | 「更多」面板（编号 = 1000 + 命中码；2026-10-02 第二批） |
-| 1734 | 自检钩子（开发期用；产品代码不碰） |
-| 1936 | A0 动作表/稳定命中的自检钩子（2026-11-08） |
-| 1971 | A1 PageHost 自检钩子（2026-11-08） |
-| 2058 | 设置页连续滚动的自检钩子（2026-11-07） |
-| 2220 | 自检用：悬停提示 |
-| 2384 | 「最近文档」页（2026-11-16：原主页那一条 ＋ 「历史板书」格合并成一个有名字的页） |
-| 2759 | 「最近文档」页自检 / 出图钩子 |
+| 1345 | 悬停提示（Tooltip；2026-10-02） |
+| 1498 | 「更多」面板（编号 = 1000 + 命中码；2026-10-02 第二批） |
+| 1736 | 自检钩子（开发期用；产品代码不碰） |
+| 1938 | A0 动作表/稳定命中的自检钩子（2026-11-08） |
+| 1973 | A1 PageHost 自检钩子（2026-11-08） |
+| 2060 | 设置页连续滚动的自检钩子（2026-11-07） |
+| 2222 | 自检用：悬停提示 |
+| 2386 | 「最近文档」页（2026-11-16：原主页那一条 ＋ 「历史板书」格合并成一个有名字的页） |
+| 2761 | 「最近文档」页自检 / 出图钩子 |
 
-## src/InkUi/Panels/FullUi.Settings.cs（3,047 行）
+## src/InkUi/Panels/FullUi.Settings.cs（3,055 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 26 | `public sealed partial class FullUi` |
 | 40 | `private enum BandAction { None = 0, SelectAll, Copy, Paste, CloseBoard, PasteImage, TextDone, AiMenu }` |
-| 2256 | `private enum SettingsCategory { Toolbar = 0, General = 1, Writing = 2, Ink = 3, Ai = 4, Backup = 5, About = 6 }` |
-| 2331 | `private enum MorePage { Home = 0, Settings = 1, Help = 2, Log = 3, Api = 4, Recent = 5 }` |
+| 2264 | `private enum SettingsCategory { Toolbar = 0, General = 1, Writing = 2, Ink = 3, Ai = 4, Backup = 5, About = 6 }` |
+| 2339 | `private enum MorePage { Home = 0, Settings = 1, Help = 2, Log = 3, Api = 4, Recent = 5 }` |
 
 | 行 | 段落 |
 | --- | --- |
@@ -1777,13 +1778,13 @@
 | 1655 | 右栏：常用色 + 最近（荧光笔再多一段 5 档浓度） |
 | 1890 | 档位与钉住（「更多」面板「工具条」那一组在用） |
 | 1957 | UI 动作表：设置行（A0） |
-| 2277 | UI 动作表（A0，2026-11-08） |
-| 2319 | 语言下拉（2026-11-13） |
-| 2445 | A1：PageHost 适配（现有绘制/命中仍读 _morePage） |
-| 2524 | 日志与反馈页 |
-| 2875 | 设置页双指纵滑（UI 自己记两根手指；见字段注释） |
+| 2285 | UI 动作表（A0，2026-11-08） |
+| 2327 | 语言下拉（2026-11-13） |
+| 2453 | A1：PageHost 适配（现有绘制/命中仍读 _morePage） |
+| 2532 | 日志与反馈页 |
+| 2883 | 设置页双指纵滑（UI 自己记两根手指；见字段注释） |
 
-## src/InkUi/Shell/FullUi.cs（1,883 行）
+## src/InkUi/Shell/FullUi.cs（1,887 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -1791,8 +1792,8 @@
 | 42 | `private enum Cell` |
 | 135 | `private enum Profile { Mini = 0, Custom = 1, Full = 2 }` |
 | 219 | `private enum BandDensity { Minimal = 0, Compact = 1, Regular = 2, Full = 3 }` |
-| 419 | `private enum Row { DarkTheme, AutoHide, RailPin, UiSize, Language, DwellShape, Pressure, Predict, TouchMode, ClearOnArrow, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart, AiApi }` |
-| 1330 | `private enum BoardSegKind { PageUp, PageLabel, PageDown, Color, Pattern, Step }` |
+| 419 | `private enum Row { DarkTheme, AutoHide, RailPin, UiSize, Language, DwellShape, Pressure, Taper, Predict, TouchMode, ClearOnArrow, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart, AiApi }` |
+| 1334 | `private enum BoardSegKind { PageUp, PageLabel, PageDown, Color, Pattern, Step }` |
 
 | 行 | 段落 |
 | --- | --- |
@@ -1802,11 +1803,11 @@
 | 279 | 悬停提示（Tooltip；2026-10-02） |
 | 300 | 工具带自定义色取色板（2026-10-23） |
 | 367 | 笔的虚实线切换（用户 2026-09-19 第 2 件） |
-| 494 | 静态底缓存：**想清楚了再做，现在没做** |
-| 630 | 界面自己的偏好（存哪儿、怎么存由引擎负责，这里只管键的含义） |
-| 1121 | 上带（当前工具的设置条） |
-| 1309 | 白板那一格的色带（2026-09-27 重排） |
-| 1480 | 字号菜单（点按钮弹出） |
+| 496 | 静态底缓存：**想清楚了再做，现在没做** |
+| 632 | 界面自己的偏好（存哪儿、怎么存由引擎负责，这里只管键的含义） |
+| 1125 | 上带（当前工具的设置条） |
+| 1313 | 白板那一格的色带（2026-09-27 重排） |
+| 1484 | 字号菜单（点按钮弹出） |
 
 ## src/InkUi/Shell/FullUi.Interaction.cs（2,301 行）
 
