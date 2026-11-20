@@ -13,7 +13,7 @@
 
 **下载**：[GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest)（`InkTeach-Setup-<版本>.exe` 双击下一步，
 或绿色版 `InkTeach-<版本>-win-x64.zip` 解压即用）｜[GitCode 国内镜像](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
-｜**官网**：<https://xuerenyi0.github.io/InkTeach/>
+｜**官网**：<https://www.inkteach.com/>
 
 > **最新 9.9.3（2026-11-17）**：拖动工具条 / 面板不再留残影（整屏上屏的帧现在真的整屏重画、
 > 界面脏区记三帧）；脏区坐标统一成窗口坐标，扩展屏 / 投影仪上浮层不再"只画不擦"；

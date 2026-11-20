@@ -13,7 +13,7 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 
 **Download**: [GitHub Releases](https://github.com/XueRenYi0/InkTeach/releases/latest) (`InkTeach-Setup-<ver>.exe`, or the portable `InkTeach-<ver>-win-x64.zip`)
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
-｜**Website**: <https://xuerenyi0.github.io/InkTeach/>
+｜**Website**: <https://www.inkteach.com/>
 
 > **Latest 9.9.3 (2026-11-17)**: dragging the toolbar or a panel no longer leaves ghost trails
 > (frames that present the whole window now really repaint the whole window, and the UI rect keeps a
