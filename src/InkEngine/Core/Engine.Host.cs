@@ -2036,6 +2036,8 @@ public partial class InkEngine
                 if (vk == 0x1B /*VK_ESCAPE*/) { CancelCapture(); return IntPtr.Zero; }
                 if (CaptureAdjusting && (vk == 0x0D || vk == 0x0A) /*VK_RETURN*/)
                 { ConfirmCapture(); return IntPtr.Zero; }
+                // B = 贴到白板（单题摘录批注的主路径：贴上就能写，Ctrl+B 回原页）
+                if (CaptureAdjusting && vk == 0x42 /*B*/) { ConfirmCaptureToBoard(); return IntPtr.Zero; }
                 if (CaptureAdjusting && (vk is 0x25 or 0x26 or 0x27 or 0x28 /*方向键*/))
                 { CaptureNudge(vk); return IntPtr.Zero; }
                 if (vk == 0x53 /*S*/ && (Native.GetAsyncKeyState(0x11 /*VK_CONTROL*/) & 0x8000) != 0)

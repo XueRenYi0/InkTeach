@@ -90,28 +90,10 @@ public partial class InkEngine
         var s = CaptureFrameScreen();
         int x = (int)MathF.Round(s.MinX), y = (int)MathF.Round(s.MinY);
         int w = (int)MathF.Round(s.MaxX - s.MinX), h = (int)MathF.Round(s.MaxY - s.MinY);
-        if (w <= 0 || h <= 0) { CancelCapture(); return false; }
-
-        byte[] pixels = CaptureFrozen
-            ? CropCaptureFrozen(x, y, w, h)
-            : GrabCaptureNow(x, y, w, h);          // 兜底：冻结没抓到 → 老路径现抓
-
-        // 状态先收干净：遮罩/框/冻结帧立刻消失（屏幕上"啪"地回到常态）
-        CaptureActive = false;
-        CaptureAdjusting = false;
-        _capDrag = CaptureDrag.None;
-        ReleaseCaptureFrozen();
-        _dirty = true;
-
-        if (pixels == null)
-        {
-            Console.WriteLine("截图失败：抓屏返回空");
-            return false;
-        }
 
         // **不再默认写系统剪贴板**（2026-11-03 用户："截图可能也会默认进剪贴板，
         // 这样就不用进剪贴板了"）：截图只落图、选中，要外发走「导出」或选中后 Ctrl+C。
-        var img = ImageData.Adopt(w, h, pixels);
+        var img = GrabAndCloseCapture();
         if (img == null) return false;
 
         // **原位落**（8.3.0，用户定的）：画布坐标 = 屏幕坐标 − 相机纵向偏移（x 不滚）。
@@ -134,6 +116,150 @@ public partial class InkEngine
         Console.WriteLine($"截图 {w}×{h} 物理像素 → 原位落在画布 ({px:F0},{py:F0})，已选中");
         RegainKeyboardFocus();          // 回到批注态：前台/键盘要回来（见那段注释）
         return placed != null;
+    }
+
+    /// <summary>
+    /// 抓图 + **立刻收干净截图状态**（<see cref="ConfirmCapture"/> 与
+    /// <see cref="ConfirmCaptureToBoard"/> 共用的前半段）。
+    ///
+    /// 抓屏路径和 8.3.0 一模一样（冻结帧优先，没冻结才现抓），只是把"遮罩/框/冻结帧
+    /// 立刻消失"这一步也收进来——两条落图路径都必须让屏幕"啪"地回到常态，
+    /// 各写一份迟早漏一条（比如漏 `_capturePressHandled`，抬手会再走一遍框选）。
+    /// 返回 null = 抓失败或框退化（失败时已经 <see cref="CancelCapture"/>）。
+    /// </summary>
+    private ImageData GrabAndCloseCapture()
+    {
+        var s = CaptureFrameScreen();
+        int x = (int)MathF.Round(s.MinX), y = (int)MathF.Round(s.MinY);
+        int w = (int)MathF.Round(s.MaxX - s.MinX), h = (int)MathF.Round(s.MaxY - s.MinY);
+        if (w <= 0 || h <= 0) { CancelCapture(); return null; }
+
+        byte[] pixels = CaptureFrozen
+            ? CropCaptureFrozen(x, y, w, h)
+            : GrabCaptureNow(x, y, w, h);          // 兜底：冻结没抓到 → 老路径现抓
+
+        // 状态先收干净：遮罩/框/冻结帧立刻消失（屏幕上"啪"地回到常态）
+        CaptureActive = false;
+        CaptureAdjusting = false;
+        _capDrag = CaptureDrag.None;
+        _capturePressHandled = false;
+        ReleaseCaptureFrozen();
+        _dirty = true;
+
+        if (pixels == null)
+        {
+            Console.WriteLine("截图失败：抓屏返回空");
+            return null;
+        }
+        return ImageData.Adopt(w, h, pixels);
+    }
+
+    /// <summary>
+    /// **贴到白板**（2026-11-22）：框出来的题目直接截到一块干净的白板页顶部居中，
+    /// 不带选中框、自动切回画笔，老师立刻能写解题批注；讲完 `Ctrl+B` 回原页。
+    ///
+    /// 顺序有讲究：
+    ///   1. 先抓图收场（<see cref="GrabAndCloseCapture"/>）——遮罩必须已经消失，
+    ///      不然判断"白板这一屏有没有内容"时相机/状态还在截图里；
+    ///   2. 不在白板槽就切过去（<see cref="SetBoardFromUi"/> 会记下来处与原页滚动位置）；
+    ///   3. 当前白板屏**已经有内容** → 自动翻到全新的空白页（上一次讲过的题不能被盖住）；
+    ///   4. 落图（顶部居中、超高自动缩到 55% 视口高，下面留出作答区）；
+    ///   5. **不选中**、切回书写工具、刷新焦点。
+    /// </summary>
+    internal bool ConfirmCaptureToBoard()
+    {
+        if (!CaptureActive) return false;
+        var img = GrabAndCloseCapture();
+        if (img == null) return false;
+
+        bool wasBoard = BoardOn && Doc.PageKey == InkDocument.BoardPageKey;
+        if (!wasBoard) SetBoardFromUi(true);
+        if (!BoardOn || Doc.PageKey != InkDocument.BoardPageKey) return false;   // 兜底：切不过去就只收场
+
+        if (CurrentBoardScreenHasContent())
+        {
+            // 上一次讲过的题还在这一屏：往下开一屏新的，别把新题压上去。
+            // 相机**直接跳**（和 FlipPage 算同一个目标偏移，只是不做 167ms 动画）。
+            int nextPage = Math.Max(ScreenIndex + 1, BoardPageCount + 1);
+            float targetOffset = _virtualY - (nextPage - 1) * PageHeightCanvas * ViewScaleSafe;
+            // ⚠ 目标页比"下一屏"更远（停在前面的页、后面几页已经有内容）时，**必须先
+            // 落到倒数第二页再跳**：`CanvasExtent` 的"视口下方一屏空白"是挂在
+            // `vp.MaxY` 下面的，相机还在前面几页时这段空白够不到 `nextPage`，
+            // `ClampOffset` 会把目标直接夹回最后一页有内容的那屏，新题就盖住旧题了
+            //（复现：第 1、2 页有内容、停在第 1 页 → nextPage=3 被夹回第 2 页）。
+            // 先跳到第 nextPage-1 页的页顶，空白屏就延伸到 nextPage，第二跳才夹不住。
+            if (nextPage > ScreenIndex + 1)
+                JumpCameraTo(_virtualY - (nextPage - 2) * PageHeightCanvas * ViewScaleSafe);
+            JumpCameraTo(targetOffset);
+        }
+        else
+        {
+            StopCameraAnimation();                   // 空屏就留在原地，动画别把刚贴的题晃走
+        }
+
+        var vp = ViewportCanvas;
+        var place = ComputeBoardCapturePlacement(vp, img.Width, img.Height, DpiScale, ViewScaleSafe);
+        var placed = Doc.AddImage(img, place.X, place.Y, place.Scale);
+
+        // **不选中**：8 个手柄会挡住刚贴上来的题目，老师下一步是写字不是摆图。
+        Doc.Selected.Clear();
+        var back = _toolBeforeCapture;
+        SwitchTool(back is Tool.Pen or Tool.Highlighter ? back : Tool.Pen);
+        Doc.InvalidateAll();
+        _dirty = true;
+        ApplyCursor();
+        NotifyUiStateChanged();
+        SetInkStatus(Loc.T("已贴到白板第 {0} 页（可直接批注，Ctrl+B 返回）", ScreenIndex));
+        Console.WriteLine($"截图贴到白板：第 {ScreenIndex} 页，落在画布 ({place.X:F0},{place.Y:F0})，"
+                          + $"缩放 {place.Scale:F2}，工具 {Tool}，未选中");
+        RegainKeyboardFocus();
+        return placed != null;
+    }
+
+    /// <summary>当前白板屏上有没有东西（任意笔画/图片的纵向范围碰到这一屏就算有）。</summary>
+    internal bool CurrentBoardScreenHasContent()
+    {
+        float h = PageHeightCanvas;
+        float screenTop = _virtualY + (Math.Max(1, ScreenIndex) - 1) * h;
+        var band = new RectF
+        {
+            MinX = float.MinValue / 4f, MinY = screenTop + 2f,
+            MaxX = float.MaxValue / 4f, MaxY = screenTop + h - 2f,
+        };
+        foreach (var s in Doc.Strokes)
+        {
+            var b = s.PaddedBounds;
+            if (b.IsEmpty) continue;
+            if (b.MinY <= band.MaxY && b.MaxY >= band.MinY) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 贴到白板时的落图位置与比例（**纯函数**，单元测试直接调）。
+    ///
+    /// 规则：
+    ///   · 水平居中；
+    ///   · 顶部留 `48` 逻辑像素；
+    ///   · 默认 **1 物理像素 = 1 画布单位**（与 <see cref="ConfirmCapture"/> 同一口径），
+    ///     画布放大时用 `1 / 缩放`，视觉大小和屏幕上框出来的一样；
+    ///   · 超高题目按"55% 视口高"缩小，下面 45% 留给板书。
+    /// </summary>
+    internal static (float X, float Y, float Scale) ComputeBoardCapturePlacement(
+        RectF vp, float imgW, float imgH, float dpiScale, float viewScale)
+    {
+        float vs = Math.Max(0.1f, viewScale);
+        float topPad = 48f * dpiScale / vs;
+        float sidePad = 32f * dpiScale / vs;
+        float availW = MathF.Max(100f, (vp.MaxX - vp.MinX) - sidePad * 2f);
+        float availH = MathF.Max(100f, (vp.MaxY - vp.MinY) * 0.55f - topPad);
+        float baseScale = 1f / vs;
+        float fit = MathF.Min(availW / MathF.Max(1f, imgW), availH / MathF.Max(1f, imgH));
+        float scale = fit < baseScale ? fit : baseScale;
+        float drawnW = imgW * scale;
+        float x = vp.MinX + ((vp.MaxX - vp.MinX) - drawnW) * 0.5f;
+        float y = vp.MinY + topPad;
+        return (x, y, scale);
     }
 
     /// <summary>
@@ -196,30 +322,49 @@ public partial class InkEngine
     internal bool CaptureCancelHit(float x, float y) => CaptureCancelRect().Contains(x, y);
 
     /// <summary>
-    /// 调整阶段的两颗按钮：「✓ 完成」「✕ 取消」。
-    /// AI 不放在这里（2026-11-11 用户定）：截完就是一张图片，选中后按 AI 即可，
-    /// 截图条只留“完成/取消”，少两颗按钮、少一次误触。
+    /// 调整阶段的三颗按钮，从左到右：`[ ✕ 取消 ] [ 贴到白板 ] [ ✓ 完成 ]`。
+    /// AI 不放在这里（2026-11-11 用户定）：截完就是一张图片，选中后按 AI 即可；
+    /// 2026-11-22 加「贴到白板」：单题摘录批注的主路径（贴上去就能写，Ctrl+B 回来）。
     /// </summary>
-    internal void CaptureButtons(out RectF ok, out RectF cancel)
+    internal void CaptureButtons(out RectF cancel, out RectF toBoard, out RectF ok)
+        => ComputeCaptureButtons(ViewportCanvas, CapMinX, CapMinY, CapMaxX, CapMaxY,
+                                 CaptureBtnWLogical * DpiScale, CaptureBtnHLogical * DpiScale,
+                                 CaptureBtnGapLogical * DpiScale,
+                                 out cancel, out toBoard, out ok);
+
+    /// <summary>
+    /// 三颗按钮的纯计算版（单元测试直接调）：贴框右下、放不下翻到框上方，
+    /// 整体夹进视口；三颗**等宽等距**，顺序固定 cancel → toBoard → ok。
+    /// </summary>
+    internal static void ComputeCaptureButtons(
+        RectF vp, float capMinX, float capMinY, float capMaxX, float capMaxY,
+        float btnW, float btnH, float gap,
+        out RectF cancel, out RectF toBoard, out RectF ok)
     {
-        float w = CaptureBtnWLogical * DpiScale, h = CaptureBtnHLogical * DpiScale;
-        float gap = CaptureBtnGapLogical * DpiScale;
-        var vp = ViewportCanvas;
-        float total = w * 2 + gap;
-        float x0 = CapMaxX - total;
-        x0 = Math.Clamp(x0, vp.MinX + 4f, MathF.Max(vp.MinX + 4f, vp.MaxX - total - 4f));
-        float y0 = CapMaxY + gap;
-        if (y0 + h > vp.MaxY) y0 = CapMinY - gap - h;              // 下方放不下 → 放框上方
-        y0 = Math.Clamp(y0, vp.MinY + 4f, MathF.Max(vp.MinY + 4f, vp.MaxY - h - 4f));
-        cancel = new RectF { MinX = x0, MinY = y0, MaxX = x0 + w, MaxY = y0 + h };
-        ok = new RectF { MinX = x0 + w + gap, MinY = y0, MaxX = x0 + w + gap + w, MaxY = y0 + h };
+        float total = btnW * 3 + gap * 2;
+        float x0 = Math.Clamp(capMaxX - total, vp.MinX + 4f,
+                              MathF.Max(vp.MinX + 4f, vp.MaxX - total - 4f));
+        float y0 = capMaxY + gap;
+        if (y0 + btnH > vp.MaxY) y0 = capMinY - gap - btnH;         // 下方放不下 → 放框上方
+        y0 = Math.Clamp(y0, vp.MinY + 4f, MathF.Max(vp.MinY + 4f, vp.MaxY - btnH - 4f));
+        cancel = new RectF { MinX = x0, MinY = y0, MaxX = x0 + btnW, MaxY = y0 + btnH };
+        toBoard = new RectF
+        {
+            MinX = x0 + btnW + gap, MinY = y0,
+            MaxX = x0 + btnW + gap + btnW, MaxY = y0 + btnH,
+        };
+        ok = new RectF
+        {
+            MinX = x0 + (btnW + gap) * 2f, MinY = y0,
+            MaxX = x0 + (btnW + gap) * 2f + btnW, MaxY = y0 + btnH,
+        };
     }
 
-    /// <summary>指针压在哪颗按钮上（✓ / ✕）——光标形状要用。</summary>
+    /// <summary>指针压在哪颗按钮上（✓ / 贴到白板 / ✕）——光标形状要用。</summary>
     internal bool CaptureButtonHit(float x, float y)
     {
-        CaptureButtons(out var ok, out var cancel);
-        return ok.Contains(x, y) || cancel.Contains(x, y);
+        CaptureButtons(out var cancel, out var toBoard, out var ok);
+        return ok.Contains(x, y) || toBoard.Contains(x, y) || cancel.Contains(x, y);
     }
 
     /// <summary>调整阶段 8 个手柄里，指针压在哪个上（没有 = None）。拖动与光标共用同一套判据。</summary>
@@ -253,8 +398,9 @@ public partial class InkEngine
         }
 
         // ---- 调整阶段 ----
-        CaptureButtons(out var ok, out var cancel);
+        CaptureButtons(out var cancel, out var toBoard, out var ok);
         if (ok.Contains(x, y)) { ConfirmCapture(); return true; }
+        if (toBoard.Contains(x, y)) { ConfirmCaptureToBoard(); return true; }
         if (cancel.Contains(x, y)) { CancelCapture(); return true; }
 
         _capDragX = x; _capDragY = y;

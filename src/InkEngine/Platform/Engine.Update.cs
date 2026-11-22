@@ -531,6 +531,20 @@ public partial class InkEngine
     }
 
     /// <summary>
+    /// 相机**直接跳**到某个纵向偏移（不做翻页动画）。
+    /// 「贴到白板」翻到新页用它：新贴上来的题目必须立刻在本页顶部，不能跟着 167ms 动画晃。
+    /// 目标偏移与 <see cref="FlipPage"/> 白板那条完全一致（`_virtualY - (页-1) × 页高 × 缩放`）。
+    /// </summary>
+    internal void JumpCameraTo(float y)
+    {
+        ViewOffsetY = ClampOffset(y);
+        _camAnimating = false;
+    }
+
+    /// <summary>停掉正在跑的翻页动画（内容原地不动，只是别让相机继续滑）。</summary>
+    internal void StopCameraAnimation() => _camAnimating = false;
+
+    /// <summary>
     /// 从白板槽退回来处（<see cref="_boardReturnKey"/>），相机按"每页一个数"切
     /// （和 <see cref="SetBoardFromUi"/> 关板那条路共用同一份逻辑）。两个调用点：
     /// 白板关（SetBoardFromUi）、"退穿透但板不恢复"（<see cref="SetPassThrough"/>）——

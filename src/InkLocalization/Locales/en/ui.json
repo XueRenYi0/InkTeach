@@ -216,6 +216,7 @@
     "再点一次，将永久删除选中的 {0} 个": "Click again to permanently delete the {0} selected items",
     "未知原因": "Unknown reason",
     "截图 {0}×{1} 已落图并选中": "Captured {0}×{1}, placed and selected",
+    "已贴到白板第 {0} 页（可直接批注，Ctrl+B 返回）": "Pasted onto whiteboard page {0} (annotate right away; Ctrl+B to go back)",
     "已选中「{0}」：点画布落下，Esc 返回": "Selected 「{0}」: click the canvas to place, Esc to go back",
     "已恢复「{0}」": "Restored 「{0}」",
     "再点一次：永久删除选中的 {0} 项": "Click again: permanently delete the {0} selected items",

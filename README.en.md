@@ -15,10 +15,10 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 ｜**Website**: <https://www.inkteach.com/>
 
-> **Latest 9.9.4 (2026-11-22)**: added end-of-stroke velocity taper ("Settings → Writing → Pen Taper");
-> fixed erratic scribbles and jumps when writing fast on a pen tablet with Windows Ink turned off
-> (buffered `WM_INPUT` segments with monotonic projection calibration, single-device locking, and
-> virtual-desktop absolute coordinate support).
+> **Latest 9.9.5 (2026-11-22)**: the screenshot crop bar now has "Paste to whiteboard" (shortcut `B`):
+> a single question is centered at the top of a blank whiteboard page, the area below is kept free for
+> working, a fresh blank page opens automatically, and the pen is selected again right away; press
+> `Ctrl+B` to go back to the original page when done.
 >
 > *This English README is a summary. The Chinese [README.md](README.md) is the authoritative, most
 > current version.*

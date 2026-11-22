@@ -108,7 +108,7 @@ internal sealed partial class OverlayWindow
             _ctx.DrawLine(new Vector2(screen.MinX, gy), new Vector2(screen.MaxX, gy), _scratch, 1f * s);
         }
 
-        // 通用胶囊按钮（调整阶段那两颗 + 右上角的「✕ 取消」共用一套画法）
+        // 通用胶囊按钮（调整阶段那三颗 + 右上角的「✕ 取消」共用一套画法）
         void PillButton(in RectF rc, string label, bool primary)
         {
             var r3 = new Vortice.RawRectF(rc.MinX, rc.MinY, rc.MaxX, rc.MaxY);
@@ -140,7 +140,7 @@ internal sealed partial class OverlayWindow
             CornerSq(fr.MaxX, fr.MaxY); CornerSq(fr.MinX, fr.MaxY);
 
             // ---- ④ 尺寸读数：框右下角外侧（贴边翻到上方/夹进屏幕）；
-            //      调整阶段画在框内右下角——框下面让给「✓ ✕」两颗按钮了。----
+            //      调整阶段画在框内右下角——框下面让给「✕ 取消 / 贴到白板 / ✓ 完成」三颗按钮了。----
             float rw = fr.MaxX - fr.MinX, rh = fr.MaxY - fr.MinY;
             if (rw >= 24f * s && rh >= 16f * s)
             {
@@ -171,7 +171,7 @@ internal sealed partial class OverlayWindow
         // ---- ⑤ 顶部提示（模式名 + 怎么操作）----
         {
             string hint = app.CaptureAdjusting
-                ? $"{modeName} · 拖动边角调整 · Enter / 双击 = 完成 · Esc / 右键 取消"
+                ? $"{modeName} · 拖动边角调整 · Enter/双击 原位完成 · B 贴到白板 · Esc/右键 取消"
                 : $"{modeName} · 拖动框选截图区域 · Ctrl+Shift+A 换模式 · Esc / 右键 取消";
             float cx = (screen.MinX + screen.MaxX) * 0.5f;
             var pill = new Vortice.RawRectF(cx - 280f * s, screen.MinY + 40f * s,
@@ -183,7 +183,7 @@ internal sealed partial class OverlayWindow
                           Brush(new Color4(1f, 1f, 1f, 0.95f)));
         }
 
-        // ---- ⑥ 调整阶段：8 个手柄 + 「✓ 完成 / ✕ 取消」；待机/拖框中：右上角「✕ 取消」----
+        // ---- ⑥ 调整阶段：8 个手柄 + 「✕ 取消 / 贴到白板 / ✓ 完成」；待机/拖框中：右上角「✕ 取消」----
         if (app.CaptureAdjusting)
         {
             app.CaptureHandles(out var tl, out var t, out var tr, out var r,
@@ -199,9 +199,10 @@ internal sealed partial class OverlayWindow
             Handle(tl); Handle(t); Handle(tr); Handle(r);
             Handle(br); Handle(b); Handle(bl); Handle(l);
 
-            app.CaptureButtons(out var okBtn, out var cancelBtn);
-            PillButton(okBtn, "✓ 完成", primary: true);
+            app.CaptureButtons(out var cancelBtn, out var boardBtn, out var okBtn);
             PillButton(cancelBtn, "✕ 取消", primary: false);
+            PillButton(boardBtn, "贴到白板", primary: false);
+            PillButton(okBtn, "✓ 完成", primary: true);
         }
         else
         {

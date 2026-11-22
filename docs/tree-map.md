@@ -23,7 +23,7 @@
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 170 行
       - `Engine.cs` 2,898 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
-      - `Engine.Host.cs` 2,391 行 — 启动、消息循环、窗口过程（WndProc）。
+      - `Engine.Host.cs` 2,393 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
       - `Engine.Selection.Gesture.cs` 1,466 行 — 框选/套索/拖动/对齐吸附/美化入口。
@@ -73,7 +73,7 @@
     **InkEngine/Input/**
       - `CurveFit.cs` 88 行
       - `DwellAssist.cs` 122 行
-      - `Engine.Capture.cs` 374 行 — 截图状态、确认/取消、手柄与读数。
+      - `Engine.Capture.cs` 520 行 — 截图状态、确认/取消、手柄与读数。
       - `Engine.Clipboard.cs` 506 行
       - `Engine.Input.cs` 2,034 行 — 指针输入、停顿成型、动态橡皮。
       - `Engine.TouchGestures.cs` 792 行 — 触摸手势：单指/双指/三指/长按/惯性。
@@ -102,7 +102,7 @@
       - `Engine.Hotkey.cs` 625 行 — 热键处理：WM_HOTKEY → 动作。
       - `Engine.Keyboard.cs` 628 行 — 键盘模式与键盘手势：工具键、色带键、滚轮/↑↓ 视野平移。
       - `Engine.Radial.cs` 683 行 — 呼出盘：按住/划向扇区/松手（清屏格单击即清，可撤销）。
-      - `Engine.Update.cs` 1,124 行 — 自动更新：检查/下载/换壳。
+      - `Engine.Update.cs` 1,138 行 — 自动更新：检查/下载/换壳。
       - `EraserTelemetry.cs` 329 行
       - `GcLatency.cs` 109 行
       - `KeyBindings.cs` 578 行 — 键位表、作用域、冲突检测、解析。
@@ -136,7 +136,7 @@
       - `GlyphFill.cs` 341 行
       - `Icons.Paths.cs` 142 行
       - `LegacyOverlayLayer.cs` 74 行
-      - `Overlay.Capture.cs` 831 行 — 截图取景框绘制：遮罩/准线/读数/手柄。
+      - `Overlay.Capture.cs` 832 行 — 截图取景框绘制：遮罩/准线/读数/手柄。
       - `Overlay.Content.cs` 766 行 — 内容层合成：分块光栅、相机变换、缩放合成、滚动条。
       - `Overlay.cs` 1,457 行 — 覆盖层主文件：窗口/初始化/生命周期。
       - `Overlay.Frame.cs` 1,724 行 — 覆盖层帧渲染：内容/界面/装饰合成。
@@ -287,7 +287,7 @@
         - `Qr.cs` 77 行
         - `SelAiShow.cs` 126 行
         - `SelBarShow.cs` 40 行
-        - `Selection.cs` 2,848 行 — 选择/套索/变换 E2E。
+        - `Selection.cs` 2,956 行 — 选择/套索/变换 E2E。
         - `SelMenuTest.cs` 215 行
         - `SettingsAudit.cs` 550 行
         - `ShapeAudit.cs` 104 行
@@ -309,9 +309,9 @@
         - `ZoomShots.cs` 776 行 — 文档缩放 E2E：出图（50/100/200/300 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
 
       **InkTeach/SelfTests/Unit/**
-        - `UnitTestRunner.cs` 147 行
+        - `UnitTestRunner.cs` 151 行
         - `UnitTests.Camera.cs` 65 行
-        - `UnitTests.Core.cs` 176 行
+        - `UnitTests.Core.cs` 228 行
         - `UnitTests.Overlay.cs` 84 行
 
     **InkUi/Ai/**

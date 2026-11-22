@@ -173,4 +173,56 @@ internal static class UnitTestsCore
             Check.True(output[i].X >= 100f && output[i].X <= 200f,
                 "tail must be emitted inside the next segment", file: "RawInputSegmentBuffer");
     }
+
+    // ---- 截图框选条：三颗按钮的布局 / 贴到白板的落图位置 ----------------------
+
+    [UnitTest]
+    internal static void CaptureButtons_ThreeButtons_OrderAndClampedInViewport()
+    {
+        // 视口 (0,0)..(1600,900)，框在右下角：按钮必须整体夹回视口内、且仍是
+        // 左→右 cancel < toBoard < ok、三颗等宽等距。
+        var vp = new RectF { MinX = 0f, MinY = 0f, MaxX = 1600f, MaxY = 900f };
+        InkEngine.InkEngine.ComputeCaptureButtons(vp, 1200f, 700f, 1590f, 890f,
+                                                  96f, 30f, 8f,
+                                                  out var cancel, out var toBoard, out var ok);
+
+        Check.True(cancel.MaxX <= toBoard.MinX && toBoard.MaxX <= ok.MinX, "从左到右必须 cancel < toBoard < ok",
+                   file: "ComputeCaptureButtons");
+        Check.Near(96f, cancel.MaxX - cancel.MinX, 0.001f, file: "按钮宽");
+        Check.Near(8f, toBoard.MinX - cancel.MaxX, 0.001f, file: "间距 1");
+        Check.Near(8f, ok.MinX - toBoard.MaxX, 0.001f, file: "间距 2");
+        Check.True(ok.MaxX <= vp.MaxX - 3.9f, "最后一颗不能出右边", file: "ComputeCaptureButtons");
+        Check.True(ok.MaxY <= vp.MaxY - 3.9f, "按钮不能出底边", file: "ComputeCaptureButtons");
+        Check.True(cancel.MinY >= vp.MinY, "按钮不能出顶边", file: "ComputeCaptureButtons");
+        // 下方放不下 → 翻到框上方
+        Check.True(ok.MaxY <= 700f, "下方放不下时应翻到框上方", file: "ComputeCaptureButtons");
+
+        // 框在左上角、下方放得下：按钮贴框下面，且不越过框的左缘太多
+        InkEngine.InkEngine.ComputeCaptureButtons(vp, 100f, 100f, 400f, 260f,
+                                                  96f, 30f, 8f,
+                                                  out var c2, out var b2, out var o2);
+        Check.True(MathF.Abs(c2.MinY - 268f) < 0.001f, "放得下时按钮贴在框下方 gap 处", file: "ComputeCaptureButtons");
+        Check.True(o2.MaxX - c2.MinX < vp.MaxX, "三颗按钮不超视口", file: "ComputeCaptureButtons");
+    }
+
+    [UnitTest]
+    internal static void BoardCapturePlacement_NormalAndTall_TopCenteredWithWriteSpace()
+    {
+        var vp = new RectF { MinX = 0f, MinY = 0f, MaxX = 1600f, MaxY = 900f };
+
+        // 普通单题 300×200（dpi 1、画布 100%）：1:1、水平居中、只留顶部距。
+        var normal = InkEngine.InkEngine.ComputeBoardCapturePlacement(vp, 300f, 200f, 1f, 1f);
+        Check.Near(1f, normal.Scale, 0.001f, file: "普通题应 1:1");
+        Check.Near(48f, normal.Y, 0.001f, file: "顶部留距");
+        Check.Near((1600f - 300f) * 0.5f, normal.X, 0.5f, file: "水平居中");
+
+        // 超高题目 300×2000：缩到 55% 视口高以内，下方仍留作答空白。
+        var tall = InkEngine.InkEngine.ComputeBoardCapturePlacement(vp, 300f, 2000f, 1f, 1f);
+        float drawnH = 2000f * tall.Scale;
+        Check.True(drawnH <= 900f * 0.55f - 48f + 0.5f, "超高题必须缩进 55% 视口高", file: "贴白板");
+        Check.True(tall.Scale < 1f, "超高题要缩小", file: "贴白板");
+        Check.True(tall.Y + drawnH <= 900f * 0.55f + 1f, "上半屏放题", file: "贴白板");
+        Check.True(900f - (tall.Y + drawnH) >= 900f * 0.44f, "下方至少留 ~45% 作答区", file: "贴白板");
+        Check.Near((1600f - 300f * tall.Scale) * 0.5f, tall.X, 0.5f, file: "缩小后仍水平居中");
+    }
 }

@@ -93,7 +93,19 @@ finally { Pop-Location }
 
 Step 4 "GitHub Release $tag"
 $assets = @($zip, $setup) + @($stableZip, $stableSetup, $manifest) | Where-Object { Test-Path $_ }
-$view = gh release view $tag -R "$ghOwner/$ghRepo" --json tagName 2>$null
+# 查询发行版是否存在：`gh` 在发行版不存在时会往 stderr 写 "release not found"，
+# 在 `$ErrorActionPreference = 'Stop'` 下 PowerShell 5.1 会把 native stderr 当终止异常，
+# 结果第 97 行的 `if (-not $view) { gh release create ... }` 根本走不到。
+# 所以这段临时放开偏好为 Continue，并显式看 $LASTEXITCODE，查完立刻恢复 Stop。
+$view = $null
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    $view = gh release view $tag -R "$ghOwner/$ghRepo" --json tagName 2>$null
+    if ($LASTEXITCODE -ne 0) { $view = $null }
+}
+catch { $view = $null }
+finally { $ErrorActionPreference = 'Stop' }
 if (-not $view) {
     Run { gh release create $tag -R "$ghOwner/$ghRepo" --title "InkTeach $ver" --notes-file $Notes }
 } else {

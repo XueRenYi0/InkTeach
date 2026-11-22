@@ -2832,6 +2832,114 @@ internal sealed partial class App
             Check("截图（连批注）：取景框/准线没被拍进去（最外一圈没有琥珀色）", frame == 0, $"{frame} 像素");
         }
 
+        // ---- ③ 贴到白板（2026-11-22）：单题摘录批注的主路径 ----
+        //
+        // 先真的切到白板槽，并在第 1 屏放一条笔迹——"这一屏已经有内容"才会
+        // 触发"自动翻到全新空白页"；否则只能验到"贴在第 1 屏"。
+        {
+            bool boardSlotWasOpen = BoardOn && Doc.PageKey == InkDocument.BoardPageKey;
+            SetBoardFromUi(true);
+            if (ScreenIndex != 1)
+            {
+                ViewOffsetY = _virtualY;
+                foreach (var w in _windows) w.ViewOffsetY = ViewOffsetY;
+            }
+            SettleFrames(200);
+
+            var probe = new Stroke
+            {
+                Tool = Tool.Pen, Kind = StrokeKind.Freehand,
+                Color = new Color4(0f, 0.2f, 1f, 1f), Width = 6f * dpi,
+            };
+            for (int i = 0; i <= 10; i++)
+                probe.AddPoint(cx - 300 + i * 20, cy - 400, 0.9f, i);
+            Doc.AddStroke(probe);
+            Doc.InvalidateAll();
+            SettleFrames(250);
+
+            var boardBtnCount = 0;
+            Host.Commands.SetTool(Tool.Pen);         // 明确"进截图之前是画笔"
+            int pageBefore = ScreenIndex;
+            int imgsBefore = Doc.Strokes.Count(s => s.IsImage);
+            DragCapture();
+            {
+                CaptureButtons(out var bCancel, out var bBoard, out var bOk);
+                boardBtnCount = (bBoard.MaxX - bBoard.MinX > 40f
+                                 && bCancel.MaxX <= bBoard.MinX && bBoard.MaxX <= bOk.MinX) ? 1 : 0;
+            }
+            PostKey(0x42);                           // B = 贴到白板
+            SettleFrames(700);
+
+            var shotBoard = Doc.Strokes.FindLast(s => s.IsImage);
+            Check("贴到白板：调整态有第 3 颗按钮（✕ / 贴到白板 / ✓ 左到右）",
+                  boardBtnCount == 1 && !CaptureAdjusting,
+                  $"三颗按钮顺序正确={boardBtnCount == 1}，调整={CaptureAdjusting}");
+            Check("贴到白板：B 键触发后落到**新的空白白板页**",
+                  BoardOn && Doc.PageKey == InkDocument.BoardPageKey && ScreenIndex >= pageBefore + 1,
+                  $"白板={BoardOn}，页键={Doc.PageKey}，屏号 {pageBefore} → {ScreenIndex}");
+            Check("贴到白板：生成图像对象",
+                  shotBoard != null && Doc.Strokes.Count(s => s.IsImage) == imgsBefore + 1,
+                  shotBoard == null ? "没有" : $"{shotBoard.Image.Width}×{shotBoard.Image.Height}，"
+                  + $"图像 {imgsBefore} → {Doc.Strokes.Count(s => s.IsImage)}");
+            Check("贴到白板：**不选中**新图片（不能有 8 个手柄挡着题目）",
+                  Doc.Selected.Count == 0, $"选中 {Doc.Selected.Count} 个");
+            Check("贴到白板：工具切回画笔（直接可写）",
+                  Tool is Tool.Pen or Tool.Highlighter, $"工具 {Tool}");
+            if (shotBoard != null)
+            {
+                float pageTop = _virtualY + (ScreenIndex - 1) * PageHeightCanvas;
+                Check("贴到白板：落在本页顶部、水平居中",
+                      shotBoard.WorldBounds.MinY - pageTop < 80f * dpi
+                      && MathF.Abs((shotBoard.WorldBounds.MinX + shotBoard.WorldBounds.MaxX) * 0.5f
+                                   - (ViewportCanvas.MinX + ViewportCanvas.MaxX) * 0.5f)
+                         < MathF.Max(6f, (shotBoard.WorldBounds.MaxX - shotBoard.WorldBounds.MinX) * 0.02f),
+                      $"落在 ({shotBoard.WorldBounds.MinX:F0},{shotBoard.WorldBounds.MinY:F0})，"
+                      + $"本页顶 {pageTop:F0}");
+                Check("贴到白板：下方留出作答空白（图底离视口底 > 40% 视口高）",
+                      ViewportCanvas.MaxY - shotBoard.WorldBounds.MaxY > PageHeightCanvas * 0.40f,
+                      $"图底 {shotBoard.WorldBounds.MaxY:F0}，视口底 {ViewportCanvas.MaxY:F0}");
+            }
+
+            // ---- ③b 回归：停在第 1 页、后面几页已有内容时，贴到白板必须真的落到新页 ----
+            //
+            // 场景（2026-11-22 修的 bug）：第 1 页有内容（上面那条探针笔迹）、第 2 页也有
+            // 内容（刚贴上去的 `shotBoard`），相机却回到第 1 页 → `nextPage = 3`。
+            // `CanvasExtent` 的"视口下方一屏空白"挂在 `vp.MaxY` 下面，从第 1 页直接跳
+            // 第 3 页会被 `ClampOffset` 夹回第 2 页，新题盖在旧题上。
+            // 修法：目标比"下一屏"更远时先落到 `nextPage-1` 页，让空白屏延伸出去再跳。
+            {
+                int imgsBefore2 = Doc.Strokes.Count(s => s.IsImage);
+                ViewOffsetY = _virtualY;                 // 相机回第 1 页（内容在第 1、2 页）
+                foreach (var w in _windows) w.ViewOffsetY = ViewOffsetY;
+                SettleFrames(250);
+                int idxBefore2 = ScreenIndex, pagesBefore2 = BoardPageCount;
+
+                Host.Commands.SetTool(Tool.Pen);
+                DragCapture();
+                PostKey(0x42);                           // B = 贴到白板
+                SettleFrames(700);
+
+                var shotP3 = Doc.Strokes.FindLast(s => s.IsImage);
+                Check("贴到白板：第 1、2 页都有内容时，从第 1 页贴到**第 3 页**（不被夹回第 2 页）",
+                      idxBefore2 == 1 && pagesBefore2 == 2 && ScreenIndex == 3,
+                      $"起手 第 {idxBefore2} 页 / 共 {pagesBefore2} 页 → 落在第 {ScreenIndex} 页，期望第 3 页");
+                Check("贴到白板：第 3 页真的落了新图（不是盖在第 2 页上）",
+                      shotP3 != null && Doc.Strokes.Count(s => s.IsImage) == imgsBefore2 + 1
+                      && shotP3.WorldBounds.MinY >= _virtualY + 2 * PageHeightCanvas - 2f,
+                      shotP3 == null ? "没有对象"
+                      : $"图顶 {shotP3.WorldBounds.MinY:F0}，第 3 页顶 {_virtualY + 2 * PageHeightCanvas:F0}");
+            }
+
+            // 收尾：回到第 1 屏、删掉探针笔迹，再把白板槽还回进来之前的样子。
+            ViewOffsetY = _virtualY;
+            foreach (var w in _windows) w.ViewOffsetY = ViewOffsetY;
+            Doc.Selected.Clear();
+            Doc.Selected.Add(probe);
+            Doc.DeleteSelected();
+            if (!boardSlotWasOpen && BoardOn) SetBoardFromUi(false);
+            SettleFrames(150);
+        }
+
         // 收尾：模式还原成默认的"隐藏窗口截图"；白板还原
         Host.Commands.SetCaptureHideInk(true);
         BoardOn = boardWas;
