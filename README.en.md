@@ -15,11 +15,10 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 ｜**Website**: <https://www.inkteach.com/>
 
-> **Latest 9.9.3 (2026-11-17)**: dragging the toolbar or a panel no longer leaves ghost trails
-> (frames that present the whole window now really repaint the whole window, and the UI rect keeps a
-> three-frame history); dirty rects are unified to window coordinates, so overlays no longer "paint but
-> never erase" on an extended display or projector; present area while dragging drops to ~39% on average;
-> the minimised timer is now as wide as its digits instead of leaving big side margins.
+> **Latest 9.9.4 (2026-11-22)**: added end-of-stroke velocity taper ("Settings → Writing → Pen Taper");
+> fixed erratic scribbles and jumps when writing fast on a pen tablet with Windows Ink turned off
+> (buffered `WM_INPUT` segments with monotonic projection calibration, single-device locking, and
+> virtual-desktop absolute coordinate support).
 >
 > *This English README is a summary. The Chinese [README.md](README.md) is the authoritative, most
 > current version.*

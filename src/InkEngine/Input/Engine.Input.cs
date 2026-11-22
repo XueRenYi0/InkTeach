@@ -639,6 +639,10 @@ public partial class InkEngine
         _rawSinceLastPtr = _rawTotalSincePtr = _ptrMsgsThisStroke = 0;
         _rawHasIntermediates = false;   // 判据要攒几条才有结论
         _rawAnchorValid = false;        // 锚点由这一笔的第一条指针消息建立
+        _rawPending.Clear();            // 分段缓冲不能跨笔（上一笔的余量跟这一笔无关）
+        _rawDevice = IntPtr.Zero;       // 设备锁定也对每一笔重新取
+        _rawIsAbs = false;
+        _rawAnchorTimeMs = NowMs;
         SetRawCapture(true);            // 原始输入：**只在这一笔期间收**（空闲必须关）
         AppendStrokeSamples(id, ptype, x, y, screenX, screenY, pressure);
         // 半径**逐点算**（见 TrailRadius）：有压感的笔，湿墨的粗细必须和干墨一致。

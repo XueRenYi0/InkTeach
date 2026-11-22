@@ -1030,10 +1030,21 @@ public partial class InkEngine
 
     /// <summary>最近一次指针消息给的**绝对屏幕坐标**（raw 填缝的锚点）。</summary>
     private float _rawAnchorX, _rawAnchorY;
-    /// <summary>自锚点以来 raw 报累计的位移。</summary>
-    private float _rawAccumX, _rawAccumY;
+    /// <summary>锚点对应的时刻（raw 补点的时间戳按投影在这一段里插值，见 RawInputSegmentBuffer）。</summary>
+    private double _rawAnchorTimeMs;
     /// <summary>锚点是否有效（没锚点就不敢用 raw 填缝）。</summary>
     private bool _rawAnchorValid;
+
+    /// <summary>
+    /// raw 报的**分段缓冲**：`WM_INPUT` 到了先攒着，等指针消息给出这一段的两端再校准发射。
+    /// 直接进点会"超前画完再往回拉"——见 <see cref="RawInputSegmentBuffer"/> 的注释。
+    /// </summary>
+    private readonly RawInputSegmentBuffer _rawPending = new();
+    /// <summary>校准发射的复用缓冲（每段 ≤ 64 点，零堆分配）。</summary>
+    private readonly List<(float X, float Y, double TimeMs)> _rawEmitBuf = new(RawInputSegmentBuffer.MaxPending);
+    /// <summary>锁定这一笔的 raw 设备句柄 / 报的是不是绝对坐标（换设备或换报法就整笔不用 raw）。</summary>
+    private IntPtr _rawDevice;
+    private bool _rawIsAbs;
 
     /// <summary>
     /// 收尾时给进程的退出码。默认 0；自检发现有 FAIL 时置 1，

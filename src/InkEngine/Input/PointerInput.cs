@@ -141,3 +141,198 @@ internal sealed class PointerSampleBuffer
     private static bool StampUsable(ulong stamp, ulong msgQpc)
         => stamp != 0 && msgQpc != 0 && stamp <= msgQpc && (msgQpc - stamp) * Qpc.TicksToMs < 2000.0;
 }
+
+/// <summary>
+/// 一条**原始鼠标报**的位移（相对位移，或绝对报换算出的差值），带自己的时刻。
+///
+/// 它进的是 <see cref="RawInputSegmentBuffer"/>：raw 报**不能**收到就立刻变成点，
+/// 必须先攒着，等指针消息给出这一段的真值两端（起点锚点 + 终点）再校准发射。
+/// </summary>
+internal struct RawDeltaSample
+{
+    public float Dx, Dy;
+    public double TimeMs;
+}
+
+/// <summary>
+/// 原始输入（`WM_INPUT`）的**分段缓冲 + 单调几何校准**。
+///
+/// 为什么要有它（2026-11-22，关 ink 快写乱画的根因）：
+/// `WM_INPUT`（约 200Hz）经常**超前**于合并后的 `WM_POINTERUPDATE`（约 100Hz）——
+/// 先到的 raw 报把笔迹画到了 N+1，随后指针消息报出真值 N，锚点回到 N 并把笔迹往回拉，
+/// 于是出现折返乱画、偶发跳点，且 raw 点用的 NowMs 会让 `Points[i].T` 倒退。
+///
+/// 做法（照搬"按段校准"这一类实现：光标插值都要先有区间两端才插值）：
+///   1. raw 报只进 `_pending`，**不进笔画**；
+///   2. 一条指针消息到达时，我们拿到区间 `[锚点, 终点]`，把 `_pending` 里
+///      **落在这一段上**的那些报按线上投影发射，剩下的留给下一段；
+///   3. 发射点必须沿线段严格单调前进（`0 < proj < 0.95`）、垂直偏移不超护栏、
+///      与首末点保持最小距离，时间戳按投影插值且不倒退。
+///
+/// 这样"超前"那一包要么被压回本段内、要么留给下一段，笔迹永远只会往前走。
+/// </summary>
+internal sealed class RawInputSegmentBuffer
+{
+    /// <summary>最多攒多少条（超出丢最老的）：一段指针间隔内的 raw 报远少于这个数。</summary>
+    public const int MaxPending = 64;
+
+    private readonly List<RawDeltaSample> _pending = new(MaxPending);
+    // 前缀累计位移（复用缓冲，零堆分配）。
+    private readonly float[] _cumX = new float[MaxPending];
+    private readonly float[] _cumY = new float[MaxPending];
+
+    public int Count => _pending.Count;
+
+    public void Clear() => _pending.Clear();
+
+    public void Add(float dx, float dy, double timeMs)
+    {
+        if (_pending.Count >= MaxPending) _pending.RemoveAt(0);
+        _pending.Add(new RawDeltaSample { Dx = dx, Dy = dy, TimeMs = timeMs });
+    }
+
+    /// <summary>
+    /// 把 `_pending` 里属于 `[start, end]` 这一段的报**校准后**发射出来。
+    /// </summary>
+    /// <param name="startX">段起点（屏幕坐标，来自上一条指针消息的锚点）</param>
+    /// <param name="startY">同上</param>
+    /// <param name="startTimeMs">段起点时刻（锚点时刻）</param>
+    /// <param name="endX">段终点（屏幕坐标，本条指针消息）</param>
+    /// <param name="endY">同上</param>
+    /// <param name="endTimeMs">段终点时刻（本条指针消息最早那一采样点的时刻）</param>
+    /// <param name="minDistPx">相邻发射点最小间距（屏幕像素）</param>
+    /// <param name="output">输出缓冲（调用方复用，方法内先 Clear）</param>
+    /// <returns>发射了几个点</returns>
+    public int EmitBetween(float startX, float startY, double startTimeMs,
+                           float endX, float endY, double endTimeMs,
+                           float minDistPx, List<(float X, float Y, double TimeMs)> output)
+    {
+        output.Clear();
+        int n = _pending.Count;
+        if (n == 0) return 0;
+
+        float vx = endX - startX, vy = endY - startY;
+        float lenSq = vx * vx + vy * vy;
+
+        // ① 前缀累计位移
+        float cx = 0f, cy = 0f;
+        for (int i = 0; i < n; i++)
+        {
+            cx += _pending[i].Dx;
+            cy += _pending[i].Dy;
+            _cumX[i] = cx;
+            _cumY[i] = cy;
+        }
+
+        // ② 指针几乎没动：raw 攒着也没意义，攒太多就当噪声清掉。
+        if (lenSq < 1f)
+        {
+            if (n > 8) _pending.Clear();
+            return 0;
+        }
+
+        int consumeCount;
+        int emitEnd;
+        int splitIdx = FindSplit(n, vx, vy, lenSq);
+        if (splitIdx >= 0)
+        {
+            float proj = (_cumX[splitIdx] * vx + _cumY[splitIdx] * vy) / lenSq;
+            emitEnd = splitIdx;                       // 发射 0 .. splitIdx-1
+            if (proj <= 1.35f)
+            {
+                // 正好这一段内到达终点：那一包本身消耗掉，其余留给下一段。
+                consumeCount = splitIdx + 1;
+            }
+            else if (proj <= 2.5f)
+            {
+                // 单个大步跨过终点：把余量改写回那一包，下一段接着用。
+                _pending[splitIdx] = new RawDeltaSample
+                {
+                    Dx = _cumX[splitIdx] - vx,
+                    Dy = _cumY[splitIdx] - vy,
+                    TimeMs = _pending[splitIdx].TimeMs,
+                };
+                consumeCount = splitIdx;
+            }
+            else
+            {
+                consumeCount = splitIdx + 1;          // 异常大跳：整包丢掉
+            }
+        }
+        else
+        {
+            // 所有点累计都没到 90%：整段还在前面 → 这一段消费完，但不发射（等下一段）。
+            consumeCount = n;
+            float dot = _cumX[n - 1] * vx + _cumY[n - 1] * vy;
+            if (dot <= 0f) return Consume(consumeCount);   // 整段反向噪声
+            emitEnd = n;
+        }
+
+        EmitCalibrated(n, emitEnd, startX, startY, startTimeMs, endX, endY, endTimeMs,
+                       vx, vy, lenSq, minDistPx, output);
+        Consume(consumeCount);
+        return output.Count;
+    }
+
+    /// <summary>按投影找"首次到达线段 90%"的那一包；没有则 -1。</summary>
+    private int FindSplit(int n, float vx, float vy, float lenSq)
+    {
+        for (int i = 0; i < n; i++)
+        {
+            float proj = (_cumX[i] * vx + _cumY[i] * vy) / lenSq;
+            if (proj >= 0.90f) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>按投影插值 + 四道护栏，把段内的点发射出去。</summary>
+    private void EmitCalibrated(int n, int emitEnd,
+                                float startX, float startY, double startTimeMs,
+                                float endX, float endY, double endTimeMs,
+                                float vx, float vy, float lenSq, float minDistPx,
+                                List<(float X, float Y, double TimeMs)> output)
+    {
+        if (emitEnd <= 0) return;
+        float len = MathF.Sqrt(lenSq);
+        if (!(len >= minDistPx) || len <= 0f) return;    // 段本身太短：不插值，等下一段
+        float maxPerp = MathF.Max(16f, len * 0.35f);
+        float minDistSq = minDistPx * minDistPx;
+        float tailGuard = minDistPx * 0.5f;
+        float tailGuardSq = tailGuard * tailGuard;
+
+        float lastProj = 0f, lastX = startX, lastY = startY;
+        double lastT = startTimeMs;
+        for (int k = 0; k < emitEnd && k < n; k++)
+        {
+            float proj = (_cumX[k] * vx + _cumY[k] * vy) / lenSq;
+            // 严格单调前进：不重复、不倒退，也不越过终点。
+            if (proj <= lastProj + 0.05f || proj >= 0.95f) continue;
+            // 垂直偏移护栏：折返/横跳造出来的噪点离这条线段很远，直接丢。
+            float perp = MathF.Abs(_cumX[k] * vy - _cumY[k] * vx) / len;
+            if (perp > maxPerp) continue;
+
+            float px = startX + _cumX[k], py = startY + _cumY[k];
+            // 距离护栏：离上一个发射点、离终点都别太近（零长段/贴终点会造退化段）。
+            float dx = px - lastX, dy = py - lastY;
+            if (dx * dx + dy * dy < minDistSq) continue;
+            dx = px - endX; dy = py - endY;
+            if (dx * dx + dy * dy < tailGuardSq) continue;
+
+            // 时间戳按投影插值，并保证单调不倒退。
+            double t = endTimeMs > startTimeMs
+                ? startTimeMs + (endTimeMs - startTimeMs) * proj
+                : endTimeMs;
+            if (t < lastT) t = lastT;
+
+            output.Add((px, py, t));
+            lastProj = proj; lastX = px; lastY = py; lastT = t;
+        }
+    }
+
+    /// <summary>从头部移除已消费的报，返回 0（让调用点统一 `return Consume(..)`）。</summary>
+    private int Consume(int consumeCount)
+    {
+        if (consumeCount > 0) _pending.RemoveRange(0, Math.Min(consumeCount, _pending.Count));
+        return 0;
+    }
+}

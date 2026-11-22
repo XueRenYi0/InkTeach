@@ -1,6 +1,6 @@
 # 目录树（自动生成，勿手改）
 
-> 生成：2026-11-18 ／ 脚本：`tools/gen-tree-map.ps1`
+> 生成：2026-11-22 ／ 脚本：`tools/gen-tree-map.ps1`
 > 用途：目录 = 功能域、文件名 = 功能块；先看树定位目录，再看行数决定读哪一段。
 > 语义导航（“某个需求该看哪 1–2 个文件”）看 `docs/module-map.md`；段落行号看 `docs/section-map.md`。
 
@@ -23,7 +23,7 @@
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 170 行
       - `Engine.cs` 2,898 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
-      - `Engine.Host.cs` 2,380 行 — 启动、消息循环、窗口过程（WndProc）。
+      - `Engine.Host.cs` 2,391 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
       - `Engine.Selection.Gesture.cs` 1,466 行 — 框选/套索/拖动/对齐吸附/美化入口。
@@ -75,7 +75,7 @@
       - `DwellAssist.cs` 122 行
       - `Engine.Capture.cs` 374 行 — 截图状态、确认/取消、手柄与读数。
       - `Engine.Clipboard.cs` 506 行
-      - `Engine.Input.cs` 2,030 行 — 指针输入、停顿成型、动态橡皮。
+      - `Engine.Input.cs` 2,034 行 — 指针输入、停顿成型、动态橡皮。
       - `Engine.TouchGestures.cs` 792 行 — 触摸手势：单指/双指/三指/长按/惯性。
       - `GoogleInkSlidingWindow.cs` 670 行 — Google Ink 滑动窗口输入。
       - `InkModel.cs` 285 行
@@ -86,7 +86,7 @@
       - `InputPrecision.cs` 75 行
       - `MotionProbe.cs` 589 行
       - `PenInput.cs` 173 行
-      - `PointerInput.cs` 143 行
+      - `PointerInput.cs` 338 行
       - `PressureSim.cs` 306 行
       - `SmoothProbe.cs` 313 行
       - `StrokeMotion.cs` 837 行 — 笔迹运动模型对照台（M0–M7）。
@@ -108,7 +108,7 @@
       - `KeyBindings.cs` 578 行 — 键位表、作用域、冲突检测、解析。
       - `Latency.cs` 216 行
       - `LogFeedback.cs` 93 行
-      - `Native.cs` 1,570 行 — Win32 P/Invoke 集合。
+      - `Native.cs` 1,573 行 — Win32 P/Invoke 集合。
       - `Privacy.cs` 62 行
       - `SelfTestCancel.cs` 140 行
       - `Toast.cs` 52 行
@@ -165,7 +165,7 @@
       - `Engine.Library.Layout.cs` 583 行 — 收藏面板插入/几何/尺寸/拖拽落位。
       - `Engine.Library.Menu.cs` 407 行 — 收藏库 ⋯ 菜单、过滤、滚动。
       - `Engine.Library.Pair.cs` 561 行 — 收藏库杂项：双支配对/隐藏配对/结束笔画。
-      - `Engine.ShapeTools.cs` 1,573 行 — 图形工具：直线/矩形/椭圆/箭头/曲线绘制。
+      - `Engine.ShapeTools.cs` 1,624 行 — 图形工具：直线/矩形/椭圆/箭头/曲线绘制。
       - `FavoriteTransfer.cs` 149 行
       - `FigureParamBar.cs` 126 行
       - `FigureRenderer.cs` 349 行
@@ -309,9 +309,9 @@
         - `ZoomShots.cs` 776 行 — 文档缩放 E2E：出图（50/100/200/300 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
 
       **InkTeach/SelfTests/Unit/**
-        - `UnitTestRunner.cs` 141 行
+        - `UnitTestRunner.cs` 147 行
         - `UnitTests.Camera.cs` 65 行
-        - `UnitTests.Core.cs` 92 行
+        - `UnitTests.Core.cs` 176 行
         - `UnitTests.Overlay.cs` 84 行
 
     **InkUi/Ai/**

@@ -1,6 +1,6 @@
 # 段落地图（自动生成，勿手改）
 
-> 生成：2026-11-18 ／ 脚本：`tools/gen-section-map.ps1` ／ 只列 >= 600 行的文件。
+> 生成：2026-11-22 ／ 脚本：`tools/gen-section-map.ps1` ／ 只列 >= 600 行的文件。
 > 用法：``Read`` 大文件前先在这里找段落标题，再只读那一段（行号漂移后重跑脚本即可）。
 
 ## src/InkEngine/Ai/AiCard.cs（2,761 行）
@@ -136,7 +136,7 @@
 | 2686 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
 | 2744 | 延时探针（见 Latency.cs） |
 
-## src/InkEngine/Core/Engine.Host.cs（2,380 行）
+## src/InkEngine/Core/Engine.Host.cs（2,391 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -161,10 +161,10 @@
 | 629 | 荧光笔的 5 个色位 + 5 档浓度 |
 | 1004 | 原始输入"被哪道门挡住的"分项计数（诊断，2026-10-07 加） |
 | 1019 | "到底有没有中间点可捞"的自适应判据（2026-10-07 加） |
-| 1235 | 放映期间的"临时全局热键"（2026-09-30 用户定方案①） |
-| 1314 | Message loop |
-| 1474 | 文档高清补丁：每帧同步一次（由引擎挑驱动窗口） |
-| 1951 | Window procedure |
+| 1246 | 放映期间的"临时全局热键"（2026-09-30 用户定方案①） |
+| 1325 | Message loop |
+| 1485 | 文档高清补丁：每帧同步一次（由引擎挑驱动窗口） |
+| 1962 | Window procedure |
 
 ## src/InkEngine/Core/Engine.Selection.Gesture.cs（1,466 行）
 
@@ -447,7 +447,7 @@
 | 903 | 墨迹文件（.inkb）的保存 / 打开（墨迹 A，2026-10-01） |
 | 1109 | "打开文档…"（图片批量 / PDF；2026-10-07，图片与 PDF 导入第一步） |
 
-## src/InkEngine/Input/Engine.Input.cs（2,030 行）
+## src/InkEngine/Input/Engine.Input.cs（2,034 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -456,9 +456,9 @@
 | 行 | 段落 |
 | --- | --- |
 | 18 | Pointer input |
-| 702 | 停顿成型：计时 / 触发 / 按住调整 / 定型（规格见 计划-图形工具.md §四十二） |
-| 1131 | 自检入口（`--dwelltest` 用；四条都是"薄封装"，不含任何逻辑） |
-| 1163 | 黑匣子（`--reclive` / `--replayinput`）用的薄钩子 |
+| 706 | 停顿成型：计时 / 触发 / 按住调整 / 定型（规格见 计划-图形工具.md §四十二） |
+| 1135 | 自检入口（`--dwelltest` 用；四条都是"薄封装"，不含任何逻辑） |
+| 1167 | 黑匣子（`--reclive` / `--replayinput`）用的薄钩子 |
 
 ## src/InkEngine/Input/Engine.TouchGestures.cs（792 行）
 
@@ -651,7 +651,7 @@
 | 691 | 面板的"接输入小窗"（方案 B） |
 | 693 | 界面回调的统一入口：**都是防弹的** |
 
-## src/InkEngine/Platform/Native.cs（1,570 行）
+## src/InkEngine/Platform/Native.cs（1,573 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -674,19 +674,19 @@
 | 658 | `public struct POINTS` |
 | 667 | `public struct GESTUREINFO` |
 | 764 | `public struct RAWINPUTDEVICE` |
-| 788 | `public struct RAWINPUTHEADER` |
-| 797 | `public struct RAWMOUSE` |
-| 815 | `public struct RAWINPUT` |
-| 879 | `public struct PROCESS_MEMORY_COUNTERS_EX2` |
-| 1048 | `public struct PAINTSTRUCT` |
-| 1278 | `public struct POINTER_TYPE_INFO` |
-| 1446 | `public struct POINTER_DEVICE_INFO` |
-| 1492 | `public struct MOUSEINPUT` |
-| 1500 | `public struct INPUT` |
-| 1522 | `public struct KEYBDINPUT` |
-| 1530 | `public struct INPUT_KBD` |
-| 1549 | `public struct BITMAPINFOHEADER` |
-| 1565 | `public struct BITMAPINFO` |
+| 791 | `public struct RAWINPUTHEADER` |
+| 800 | `public struct RAWMOUSE` |
+| 818 | `public struct RAWINPUT` |
+| 882 | `public struct PROCESS_MEMORY_COUNTERS_EX2` |
+| 1051 | `public struct PAINTSTRUCT` |
+| 1281 | `public struct POINTER_TYPE_INFO` |
+| 1449 | `public struct POINTER_DEVICE_INFO` |
+| 1495 | `public struct MOUSEINPUT` |
+| 1503 | `public struct INPUT` |
+| 1525 | `public struct KEYBDINPUT` |
+| 1533 | `public struct INPUT_KBD` |
+| 1552 | `public struct BITMAPINFOHEADER` |
+| 1568 | `public struct BITMAPINFO` |
 
 | 行 | 段落 |
 | --- | --- |
@@ -701,20 +701,20 @@
 | 609 | 系统手势：WM_GESTURE / GID_* / GC_* |
 | 749 | pointer input |
 | 754 | 原始输入（Raw Input）：`--rawprobe` 用来数"设备到底报了多少条" |
-| 847 | kernel32 |
-| 903 | keyboard/mouse state (used for modifier checks) |
-| 946 | 线程消息（PPT 轮询线程 → 主线程的唤醒） |
-| 958 | 子窗口排查（导出对话框探针用） |
-| 1045 | painting |
-| 1064 | screen capture (verification only) |
-| 1149 | 剪贴板（截图落到剪贴板、粘贴图片） |
-| 1210 | DWM：合成配速 |
-| 1238 | 合成笔输入（仅开发期实验用） |
-| 1240 | 目的：验证"委托墨迹轨迹"（IDCompositionDelegatedInkTrail）这条通道到底 |
-| 1297 | 真实触摸注入（只给自检用；产品不走这条路） |
-| 1329 | 注册表（只读，用来诊断"系统笔设置"） |
-| 1482 | synthetic input (used by the automated input-path test) |
-| 1509 | 合成键盘输入（自检用：验证全局热键真的能"按"出来） |
+| 850 | kernel32 |
+| 906 | keyboard/mouse state (used for modifier checks) |
+| 949 | 线程消息（PPT 轮询线程 → 主线程的唤醒） |
+| 961 | 子窗口排查（导出对话框探针用） |
+| 1048 | painting |
+| 1067 | screen capture (verification only) |
+| 1152 | 剪贴板（截图落到剪贴板、粘贴图片） |
+| 1213 | DWM：合成配速 |
+| 1241 | 合成笔输入（仅开发期实验用） |
+| 1243 | 目的：验证"委托墨迹轨迹"（IDCompositionDelegatedInkTrail）这条通道到底 |
+| 1300 | 真实触摸注入（只给自检用；产品不走这条路） |
+| 1332 | 注册表（只读，用来诊断"系统笔设置"） |
+| 1485 | synthetic input (used by the automated input-path test) |
+| 1512 | 合成键盘输入（自检用：验证全局热键真的能"按"出来） |
 
 ## src/InkEngine/Platform/Update.cs（994 行）
 
@@ -951,7 +951,7 @@
 | 845 | 整理模式：点击 / 框选 |
 | 906 | 整理模式：拖把手排序 |
 
-## src/InkEngine/Shapes/Engine.ShapeTools.cs（1,573 行）
+## src/InkEngine/Shapes/Engine.ShapeTools.cs（1,624 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -961,8 +961,8 @@
 | 行 | 段落 |
 | --- | --- |
 | 18 | 图形工具：直线 / 矩形 / 椭圆 / 箭头 |
-| 874 | 鼠标 / 触摸：同一个道理，读 POINTER_INFO 的合并点 |
-| 903 | 读不到合并点：退回"一个消息一个点"的老路（行为与以前完全一致） |
+| 879 | 鼠标 / 触摸：同一个道理，读 POINTER_INFO 的合并点 |
+| 918 | 读不到合并点：退回"一个消息一个点"的老路（行为与以前完全一致） |
 
 ## src/InkEngine/Shapes/ShapeLibrary.cs（829 行）
 

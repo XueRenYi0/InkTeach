@@ -781,6 +781,9 @@ internal static class Native
     public const uint RIM_TYPEMOUSE = 0;
     /// <summary>RAWMOUSE.usFlags：坐标是**绝对**的（少数设备/远程桌面会这么报）。</summary>
     public const ushort MOUSE_MOVE_ABSOLUTE = 0x01;
+    /// <summary>RAWMOUSE.usFlags：与 `MOUSE_MOVE_ABSOLUTE` 同用——归一化基准是**整个虚拟桌面**，
+    /// 不是主屏（见 `Engine.HandleRawInput` 的换算）。</summary>
+    public const ushort MOUSE_VIRTUAL_DESKTOP = 0x02;
     /// <summary>RAWMOUSE.usFlags：这一报里没有位移信息（只有按键）。</summary>
     public const ushort MOUSE_MOVE_NOCOALESCE = 0x08;
 

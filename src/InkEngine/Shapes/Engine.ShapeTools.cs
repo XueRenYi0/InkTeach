@@ -824,11 +824,6 @@ public partial class InkEngine
     {
         if (ActiveStroke == null) return;
 
-        // `--rawinput`：这一条指针消息给出的是**绝对位置** → 把它设成锚点、累计清零。
-        // 这是"误差不漂"的关键：raw 报的位移只在两条指针消息之间累加，
-        // 每来一条指针消息就重新对准一次真值。
-        ResetRawAnchor(screenX, screenY);
-
         // 顺便结算"有没有中间点可捞"：把这一段的原始报数并进累计，再看比值。
         // 阈值 1.3 是留了余量的——1:1 设备的实测比值就是 1.0，有合并的实测 2.3~4。
         _ptrMsgsThisStroke++;
@@ -837,37 +832,47 @@ public partial class InkEngine
         if (_ptrMsgsThisStroke >= 3)
             _rawHasIntermediates = _rawTotalSincePtr >= _ptrMsgsThisStroke * 1.3;
 
-        if (ptype == Native.PT_PEN && _pen.Read(id, NowMs, _lastInputMsgQpc) > 0)
+        if (ptype == Native.PT_PEN)
         {
-            LastCoalescedMessages++;
-            LastCoalescedSamples += _pen.Count;
-            PenMessages++;
-            PenSamples += _pen.Count;
-            PenSawPressureMask |= _pen.AnyPressure;
-            PenSawTiltMask |= _pen.HasTilt;
-            PenSawRotationMask |= _pen.Last.Rotation != 0;
-            for (int i = 0; i < _pen.Count; i++)
+            // 真笔：raw 补点不走这条路（笔的原始报是 digitizer 类），余量直接作废，
+            // 锚点跟着这条消息走——和以前"每条消息先对准锚点"的口径一致。
+            _rawPending.Clear();
+            ResetRawAnchor(screenX, screenY, NowMs);
+            if (_pen.Read(id, NowMs, _lastInputMsgQpc) > 0)
             {
-                var s = _pen[i];
-                float cx = s.X, cy = s.Y;
-                ScreenToCanvas(ref cx, ref cy);
-                // ⚠ **真笔这条也要净化**（2026-10-07）：用户报的是"开不开 ink 都脏"，
-                // 而开 ink 走的就是这一条。板子报的位置毛刺是**同一个来源**，
-                // 不会因为走了 Windows Ink 就自己变干净。
-                AddPointCleaned(cx, cy, s.Pressure, s.TimeMs);
-                PenTotalPoints++;
-                if (s.HasPressure) PenPressurePoints++;
+                LastCoalescedMessages++;
+                LastCoalescedSamples += _pen.Count;
+                PenMessages++;
+                PenSamples += _pen.Count;
+                PenSawPressureMask |= _pen.AnyPressure;
+                PenSawTiltMask |= _pen.HasTilt;
+                PenSawRotationMask |= _pen.Last.Rotation != 0;
+                for (int i = 0; i < _pen.Count; i++)
+                {
+                    var s = _pen[i];
+                    float cx = s.X, cy = s.Y;
+                    ScreenToCanvas(ref cx, ref cy);
+                    // ⚠ **真笔这条也要净化**（2026-10-07）：用户报的是"开不开 ink 都脏"，
+                    // 而开 ink 走的就是这一条。板子报的位置毛刺是**同一个来源**，
+                    // 不会因为走了 Windows Ink 就自己变干净。
+                    AddPointCleaned(cx, cy, s.Pressure, s.TimeMs);
+                    PenTotalPoints++;
+                    if (s.HasPressure) PenPressurePoints++;
+                }
+                ActiveStrokeHasPressure |= _pen.AnyPressure;
+                // 压感是**整笔的属性**（见 Stroke.HasPressure）：这一笔只要有一条消息报过有效压力，
+                // 它就从此刻起按压感渲染。**当场写进对象**（而不是渲染时再问一次），
+                // 因为湿墨、干墨、紧框、存档读的都是这一个标志。
+                //
+                // **压感只作用于「笔」这一支**（2026-09-20 对齐 WPF 时定的，也是官方示例的做法：
+                // 荧光笔的 `DrawingAttributes.IgnorePressure = true`）：
+                //   · 荧光笔是一支"平头马克笔"，粗细随压力变会让划出来的带子忽宽忽窄（满压还是 2 倍宽）；
+                //   · 激光笔只是指一下，没有"笔迹粗细"这回事。
+                if (ActiveStrokeHasPressure && ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
+                return;
             }
-            ActiveStrokeHasPressure |= _pen.AnyPressure;
-            // 压感是**整笔的属性**（见 Stroke.HasPressure）：这一笔只要有一条消息报过有效压力，
-            // 它就从此刻起按压感渲染。**当场写进对象**（而不是渲染时再问一次），
-            // 因为湿墨、干墨、紧框、存档读的都是这一个标志。
-            //
-            // **压感只作用于「笔」这一支**（2026-09-20 对齐 WPF 时定的，也是官方示例的做法：
-            // 荧光笔的 `DrawingAttributes.IgnorePressure = true`）：
-            //   · 荧光笔是一支"平头马克笔"，粗细随压力变会让划出来的带子忽宽忽窄（满压还是 2 倍宽）；
-            //   · 激光笔只是指一下，没有"笔迹粗细"这回事。
-            if (ActiveStrokeHasPressure && ActiveStroke.Tool == Tool.Pen) ActiveStroke.HasPressure = true;
+            // 读不到合并点：退回"一个消息一个点"的老路（与以前完全一致）。
+            AddPointCleaned(curCanvasX, curCanvasY, curPressure, NowMs);
             return;
         }
 
@@ -876,7 +881,18 @@ public partial class InkEngine
         // 这条以前不存在，代价在两类设备上同时体现：手写板**没开 Windows Ink** 时
         // 以 PT_MOUSE 上报、触摸屏是 PT_TOUCH，它们一条消息只取最新那一个点，
         // 快写时轨迹被静默抽稀，而且预测器拿不到足够密的速度估计。
-        if (ptype != Native.PT_PEN && _ptr.Read(id, NowMs, _lastInputMsgQpc) > 0)
+        //
+        // ⚠ **顺序很重要**（2026-11-22）：先把这一条消息的合并点读出来，拿到"这一段"
+        // 的两个时刻；然后把上一条指针消息之后攒下的 raw 报**按这一段校准发射**
+        // （见 <see cref="RawInputSegmentBuffer"/>），最后才把锚点移到这一条的末尾。
+        // 反过来（先移锚点再发射）就会把 raw 的余量算到下一段里，正是"乱画/跳点"的来源。
+        int ptrCount = _ptr.Read(id, NowMs, _lastInputMsgQpc);
+        double segEndTimeMs = ptrCount > 0 ? _ptr[0].TimeMs : NowMs;
+        double nextAnchorTimeMs = ptrCount > 0 ? _ptr[ptrCount - 1].TimeMs : NowMs;
+        EmitCalibratedRawIntermediates(screenX, screenY, segEndTimeMs);
+        ResetRawAnchor(screenX, screenY, nextAnchorTimeMs);
+
+        if (ptrCount > 0)
         {
             LastCoalescedMessages++;
             LastCoalescedSamples += _ptr.Count;
@@ -886,8 +902,7 @@ public partial class InkEngine
             // 就是被合并掉的中间点（合并率就是它除以 HistoryCount）。
             PtrCoalescedExtra += Math.Max(0, _ptr.HistoryCount - 1);
 
-            int nPtr = _ptr.Count;
-            for (int i = 0; i < nPtr; i++)
+            for (int i = 0; i < ptrCount; i++)
             {
                 var s = _ptr[i];
                 float cx = s.X, cy = s.Y;
@@ -905,14 +920,82 @@ public partial class InkEngine
     }
 
     /// <summary>
+    /// 把上一条指针消息之后攒下的 raw 报，按 `[锚点, 这条消息的终点]` 这一段**校准发射**。
+    ///
+    /// 两道最小距离都要过：段内按**屏幕**像素挡（raw 位移本身是屏幕口径），
+    /// 转成画布坐标后再对 `ActiveStroke.Points[^1]` 挡一次（画布可能带缩放）。
+    /// 压力沿用这一笔最后一个点（第一个点还没有邻居时才用 0.5 这个中点）：
+    ///   · 真笔：最后一个点的压力就是真实压力 → raw 点无缝接上 ✓
+    ///   · 真鼠标：`HasPressure` 始终为假，这个值根本不参与渲染 → 等宽不变 ✓
+    /// </summary>
+    private void EmitCalibratedRawIntermediates(float endX, float endY, double endTimeMs)
+    {
+        var s = ActiveStroke;
+        if (s == null || !_rawAnchorValid || !_rawHasIntermediates || _rawPending.Count == 0) return;
+        if (s.Tool != Tool.Pen && s.Tool != Tool.Highlighter) return;
+        if (SelDragging || _dwell.State == DwellState.Armed) return;
+
+        _rawPending.EmitBetween(_rawAnchorX, _rawAnchorY, _rawAnchorTimeMs,
+                                endX, endY, endTimeMs, RawMinDistPx, _rawEmitBuf);
+
+        int n = _rawEmitBuf.Count;
+        for (int i = 0; i < n; i++)
+        {
+            var item = _rawEmitBuf[i];
+            float cx = item.X, cy = item.Y;
+            ScreenToCanvas(ref cx, ref cy);
+            // ① 每笔上限（第二道保险）
+            if (_rawPointsAdded >= RawMaxPerStroke) { _rawSkipCap++; break; }
+            // ② 最小距离：零长段会多出退化段（raw 可以到 1000Hz）。
+            if (s.Points.Count > 0)
+            {
+                var last = s.Points[^1];
+                float ddx = cx - last.X, ddy = cy - last.Y;
+                if (ddx * ddx + ddy * ddy < RawMinDistPx * RawMinDistPx) { _rawSkipNear++; continue; }
+            }
+            float rawP = s.Points.Count > 0 ? s.Points[^1].P : 0.5f;
+            AddPointCleaned(cx, cy, rawP, item.TimeMs);
+            _rawPointsAdded++;
+        }
+    }
+
+    private void ResetRawAnchor(float screenX, float screenY, double timeMs)
+    {
+        _rawAnchorX = screenX; _rawAnchorY = screenY;
+        _rawAnchorTimeMs = timeMs;
+        _rawAnchorValid = true;
+    }
+
+    /// <summary>
+    /// 按笔开关原始输入（**空闲时必须关**，见 <see cref="OverlayWindow.SetRawInput"/> 那段注释：
+    /// 不关的话空闲会持续收到鼠标轮询空报，主循环被顶成 46fps 空转、单核 26%）。
+    /// </summary>
+    private void SetRawCapture(bool on)
+    {
+        if (!RawProbeEnabled && !RawInputCapture) return;
+        if (on == _rawRegistered) return;
+        if (_windows.Count == 0) return;
+        _rawRegistered = on && _windows[0].SetRawInput(true);
+        if (!on)
+        {
+            _windows[0].SetRawInput(false);
+            // 关采集时余量和设备锁定一起作废：下一笔是"新的一段"，不能带上这一笔的尾巴。
+            _rawPending.Clear();
+            _rawDevice = IntPtr.Zero;
+        }
+    }
+
+    /// <summary>
     /// 处理一条原始输入（`--rawprobe` / `--rawinput`）。
     ///
     /// `--rawprobe`：只数条数（用来量"设备到底报了多少"，见 `[笔画]` 那一栏）。
-    /// `--rawinput`：在"正在写一笔"时，把 raw 的相对位移换算成绝对位置**补成采样点**。
+    /// `--rawinput`：在"正在写一笔"时，把 raw 的相对位移**攒进分段缓冲**，
+    /// 等指针消息给出这一段的两端再校准发射（见 <see cref="RawInputSegmentBuffer"/>）。
     ///
-    /// 门槛卡得很保守——只要有一条不满足就**只计数、不加点**，绝不影响既有行为：
+    /// 门槛卡得很保守——只要有一条不满足就**只计数、不进缓冲**，绝不影响既有行为：
     ///   · 必须是鼠标类型的报（笔的原始报是 digitizer 类、厂商私有格式，不走这里）；
     ///   · 必须正在写一笔，且这一笔是**自由笔迹**（图形/橡皮/框选/截图/激光都不碰）；
+    ///   · 必须是**同一个设备、同一种报法**（换设备/换报法的位移不能相加）；
     ///   · 必须有**有效的绝对锚点**（没锚点就没法把相对位移变绝对——宁可不加也不猜）。
     /// </summary>
     private void HandleRawInput(IntPtr lParam)
@@ -927,13 +1010,22 @@ public partial class InkEngine
         { _rawSkipApi++; return; }
         if (ri.header.dwType != Native.RIM_TYPEMOUSE) { _rawSkipType++; return; }
 
-        int dx = ri.mouse.lLastX, dy = ri.mouse.lLastY;
-
         // 只有"自由笔迹 + 手写工具"才补点：和 OnPointerMove 那条分流保持同一张口径
         if (ActiveStroke.Kind != StrokeKind.Freehand) { _rawSkipKind++; return; }
         var tool = ActiveStroke.Tool;
         if (tool != Tool.Pen && tool != Tool.Highlighter) { _rawSkipKind++; return; }
         if (SelDragging || _dwell.State == DwellState.Armed) { _rawSkipGate++; return; }
+
+        // **设备锁定**：笔/板上同时挂了鼠标设备时，两路的位移混在一起会造出跳点。
+        if (_rawDevice == IntPtr.Zero) { _rawDevice = ri.header.hDevice; _rawIsAbs = IsAbsRaw(ri); }
+        else if (ri.header.hDevice != _rawDevice || IsAbsRaw(ri) != _rawIsAbs)
+        { _rawSkipType++; return; }
+
+        int dx = ri.mouse.lLastX, dy = ri.mouse.lLastY;
+        // 位移要**先算出来**（含绝对报的 `_rawAbsX/_rawAbsY` 初始化），再过后面的门：
+        // 否则这一笔的前几条报会被 `_rawHasIntermediates` 挡掉，绝对报的"上一条"永远不建立。
+        if (!TryRawDelta(ri, dx, dy, out float mx, out float my)) return;
+
         // **只有"确实有中间点可捞"才补**（见 _rawHasIntermediates 那段注释）：
         // 1:1 的设备上补进去的全是重复点（零长段），纯噪声。
         if (!_rawHasIntermediates) { _rawSkipNoInter++; return; }
@@ -941,89 +1033,48 @@ public partial class InkEngine
         // "这一报是真的在附近，还是换算错了"，宁可不加也不猜。
         if (!_rawAnchorValid) { _rawSkipAnchor++; return; }
 
-        float sx, sy;
-        bool isAbs = (ri.mouse.usFlags & Native.MOUSE_MOVE_ABSOLUTE) != 0;
-        if (isAbs)
-        {
-            // **绝对报**（2026-10-07 补，实测手写板在鼠标模式上报的就是这种，
-            // 连 SendInput 注入的也是——原来那句"遇到绝对就跳过"把**每一条**都跳掉了）。
-            //
-            // ⚠ **绝对报也要取"差值"再累加，不能拿绝对值当位置直接用**——第一版就是直接
-            // 用，结果被测出来：绝对值的归一化映射有微小偏差 → 补进去的点有偏移 →
-            // **细线的抗锯齿被摊开、覆盖率掉到阈值以下**（`--widthtest` 最细那档
-            // 从合格掉到 0.69）。而且本机合成输入是 1:1（原始报和指针消息是同一批位置），
-            // 直接当位置用等于**往笔迹里塞噪声**。
-            //
-            // 取差值就对了：
-            //   · 1:1 时差值 = 指针消息那条位移 → 累加出来正好是指针点 → 被最小距离过滤掉 → 零噪声；
-            //   · 有合并时（真机 2.3:1）差值 = 沿路径的中间位移 → 累加出来是真正的插值点。
-            // 而且它**每次指针消息都被重新对准**（锚点），映射偏一点也不漂。
-            if (!_rawAbsValid) { _rawAbsX = dx; _rawAbsY = dy; _rawAbsValid = true; _rawSkipAbs++; return; }
-            float pw = _primaryW / 65535f, ph = _primaryH / 65535f;
-            float mx = (dx - _rawAbsX) * pw;
-            float my = (dy - _rawAbsY) * ph;
-            _rawAbsX = dx; _rawAbsY = dy;
-            // 多屏/虚拟桌面时归一化基准不是主屏，差值会被放大或缩小——用一个宽松但有效的
-            // 上限挡掉病态值（正常的报单步位移不会超过半个屏）。
-            if (MathF.Abs(mx) > _primaryW * 0.5f || MathF.Abs(my) > _primaryH * 0.5f) { _rawSkipAbs++; return; }
-            _rawAccumX += mx;
-            _rawAccumY += my;
-            sx = _rawAnchorX + _rawAccumX;
-            sy = _rawAnchorY + _rawAccumY;
-        }
-        else
-        {
-            if (dx == 0 && dy == 0) { _rawSkipZero++; return; }   // 不动时也会发空报，丢掉
-            _rawAccumX += dx;
-            _rawAccumY += dy;
-            sx = _rawAnchorX + _rawAccumX;
-            sy = _rawAnchorY + _rawAccumY;
-        }
-
-        float cx = sx, cy = sy;
-        ScreenToCanvas(ref cx, ref cy);
-
-        // ① 每笔上限（第二道保险）
-        if (_rawPointsAdded >= RawMaxPerStroke) { _rawSkipCap++; return; }
-
-        // ② 最小距离：把零长段挡在门外。鼠标 raw 可以到 1000Hz，不移开的话
-        //    相邻两点差不到 1 像素——几何那边明确讲过零长段会多出退化段。
-        if (ActiveStroke.Points.Count > 0)
-        {
-            var last = ActiveStroke.Points[^1];
-            float ddx = cx - last.X, ddy = cy - last.Y;
-            if (ddx * ddx + ddy * ddy < RawMinDistPx * RawMinDistPx) { _rawSkipNear++; return; }
-        }
-
-        // 压力**沿用这一笔最后一个点**（第一个点还没有邻居时才用 0.5 这个中点）。
-        //
-        // 教训（两次都栽在"拿常数代表有状态的事"上）：写死 0.5 → 真笔的 raw 补点被拉粗；
-        // 写死 0 → 有压感的笔画上全是细口子（看起来"脏"）。沿用到目前为止的值才对：
-        //   · 真笔：最后一个点的压力就是真实压力 → raw 点无缝接上 ✓
-        //   · 真鼠标：`HasPressure` 始终为假，这个值根本不参与渲染 → 等宽不变 ✓
-        float rawP = ActiveStroke.Points.Count > 0 ? ActiveStroke.Points[^1].P : 0.5f;
-        AddPointCleaned(cx, cy, rawP, NowMs);
-        _rawPointsAdded++;
+        // 攒着，不进笔画：由 AppendStrokeSamples 在拿到这一段两端后校准发射。
+        _rawPending.Add(mx, my, NowMs);
     }
 
-    private void ResetRawAnchor(float screenX, float screenY)
-    {
-        _rawAnchorX = screenX; _rawAnchorY = screenY;
-        _rawAccumX = _rawAccumY = 0;
-        _rawAnchorValid = true;
-    }
+    /// <summary>这一报是不是绝对坐标（绝对/虚拟桌面标志）。</summary>
+    private static bool IsAbsRaw(in Native.RAWINPUT ri)
+        => (ri.mouse.usFlags & Native.MOUSE_MOVE_ABSOLUTE) != 0;
 
     /// <summary>
-    /// 按笔开关原始输入（**空闲时必须关**，见 <see cref="OverlayWindow.SetRawInput"/> 那段注释：
-    /// 不关的话空闲会持续收到鼠标轮询空报，主循环被顶成 46fps 空转、单核 26%）。
+    /// 把一条 raw 报换算成**位移**（屏幕像素）。返回 false 表示这一报被丢弃（已计入分项）。
+    ///
+    /// 绝对报也要取差值再累加，不能拿绝对值当位置：归一化映射的微小偏差会让补进去的点
+    /// 整体偏移，细线的抗锯齿被摊开（`--widthtest` 最细那档曾因此从合格掉到 0.69）。
+    /// 取差值还顺带让"1:1 的设备"差值 = 指针位移 → 被最小距离过滤掉 → 零噪声。
     /// </summary>
-    private void SetRawCapture(bool on)
+    private bool TryRawDelta(in Native.RAWINPUT ri, int dx, int dy, out float mx, out float my)
     {
-        if (!RawProbeEnabled && !RawInputCapture) return;
-        if (on == _rawRegistered) return;
-        if (_windows.Count == 0) return;
-        _rawRegistered = on && _windows[0].SetRawInput(true);
-        if (!on) _windows[0].SetRawInput(false);
+        mx = my = 0f;
+        if (IsAbsRaw(ri))
+        {
+            if (!_rawAbsValid)
+            { _rawAbsX = dx; _rawAbsY = dy; _rawAbsValid = true; _rawSkipAbs++; return false; }
+            if (dx == _rawAbsX && dy == _rawAbsY) { _rawSkipZero++; return false; }
+            // 虚拟桌面模式下归一化基准是整个虚桌面，不是主屏；用错基准位移会被放大/缩小。
+            bool vdesk = (ri.mouse.usFlags & Native.MOUSE_VIRTUAL_DESKTOP) != 0;
+            float refW = MathF.Max(1f, vdesk ? _virtualW : _primaryW);
+            float refH = MathF.Max(1f, vdesk ? _virtualH : _primaryH);
+            mx = (dx - _rawAbsX) * (refW / 65535f);
+            my = (dy - _rawAbsY) * (refH / 65535f);
+            _rawAbsX = dx; _rawAbsY = dy;
+            // 单步跳变护栏（收紧到 20% 屏宽/高，下限 250）：正常单步位移不会超过它。
+            float maxStepX = MathF.Max(250f, refW * 0.2f);
+            float maxStepY = MathF.Max(250f, refH * 0.2f);
+            if (MathF.Abs(mx) > maxStepX || MathF.Abs(my) > maxStepY)
+            { _rawSkipAbs++; return false; }
+            return true;
+        }
+
+        if (dx == 0 && dy == 0) { _rawSkipZero++; return false; }   // 不动时也会发空报
+        mx = dx; my = dy;
+        if (MathF.Abs(mx) > 400f || MathF.Abs(my) > 400f) { _rawSkipAbs++; return false; }
+        return true;
     }
 
     private bool _rawRegistered;
