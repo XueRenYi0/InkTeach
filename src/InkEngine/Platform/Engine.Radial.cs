@@ -300,39 +300,63 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 在**活色带**里按当前笔色找位置再前后挪一格。
+    /// 在**活色带**里按"当前槽位"找起点再前后挪一格（纯函数，可单测）。
+    ///
+    /// **为什么优先用槽位而不是按颜色找**（2026-11-23 修的真 bug）：色带里可以有重复色
+    /// （红 / 黑 / 红 / 白 / 红 / 蓝）。以前每次都从 0 按 RGB 匹配 `CurrentColor`，
+    /// 切到第 2 个红（槽 2）后下一次又匹配到槽 0，永远在 0 ↔ 1 之间打转，
+    /// 后面的白 / 蓝切不到。现在先用 `selectedSlot` 当起点（并核对它颜色确实等于当前色，
+    /// 防止槽位和颜色脱节），对不上才回退到首个相近色的线性扫描。
+    ///
     /// 不着色带（主条自定义色）时：下一色从第一格开始、上一色从最后一格开始
     /// （语义和改版前一致，只是颜色换成活色带的那一份）。
     /// </summary>
-    private int PenBandOffsetIndex(int dir)
+    internal static int StepPenBandIndex(
+        IReadOnlyList<Color4> band, int selectedSlot, Color4 currentColor, int dir)
     {
-        int n = LivePenBand.Length;
+        int n = band.Count;
+        if (n == 0) return 0;
+
         int idx = -1;
-        for (int i = 0; i < n; i++)
-        {
-            if (ColorNear(CurrentColor, LivePenBand[i], 0.02f)) { idx = i; break; }
-        }
+        if (selectedSlot >= 0 && selectedSlot < n && ColorNear(currentColor, band[selectedSlot], 0.02f))
+            idx = selectedSlot;
+        else
+            for (int i = 0; i < n; i++)
+                if (ColorNear(currentColor, band[i], 0.02f)) { idx = i; break; }
+
         if (idx < 0) idx = dir > 0 ? -1 : 0;
         return ((idx + dir) % n + n) % n;
     }
+
+    /// <summary>活色带上"上一色 / 下一色"的槽位（委托 <see cref="StepPenBandIndex"/>）。</summary>
+    private int PenBandOffsetIndex(int dir) =>
+        StepPenBandIndex(LivePenBand, PenSwatchSelected, CurrentColor, dir);
 
     private Color4 PenBandColorAtOffset(int dir) => LivePenBand[PenBandOffsetIndex(dir)];
 
     /// <summary>
     /// 呼出盘“上一色 / 下一色”：切到笔 + 在**主条活色带**里前后挪一格（2026-10-25 v3，
     /// 2026-11-16 起读活色带）。
+    ///
+    /// 2026-11-23：走 `SelectPenSwatchFromUi`（和 `Ctrl+P` 同一条路）——必须同步
+    /// `PenSwatchSelected` 并持久化，否则重复色色带里下一轮又回退到槽 0（切不过去）。
     /// </summary>
     private void CyclePenColor(int dir)
     {
         if (Tool != Tool.Pen) SwitchTool(Tool.Pen);
-        SetColorFromUi(PenBandColorAtOffset(dir));
+        int nextSlot = PenBandOffsetIndex(dir);
+        if (nextSlot >= 0 && nextSlot < PenSwatchColors.Length) SelectPenSwatchFromUi(nextSlot);
+        else SetColorFromUi(LivePenBand[ClampBandIndex(nextSlot)]);
     }
 
     /// <summary>颜色扇区 = "给我这支颜色的笔"（活色带第 bandIndex 格；不在笔上就切到笔）。</summary>
     private void PickPenColorFromPalette(int bandIndex)
     {
         if (Tool != Tool.Pen) SwitchTool(Tool.Pen);
-        SetColorFromUi(LivePenBand[ClampBandIndex(bandIndex)]);
+        // 点色格也要把 PenSwatchSelected 指到所选槽位（同 CyclePenColor 的理由）。
+        int slot = ClampBandIndex(bandIndex);
+        if (slot >= 0 && slot < PenSwatchColors.Length) SelectPenSwatchFromUi(slot);
+        else SetColorFromUi(LivePenBand[ClampBandIndex(slot)]);
     }
 
     private void CancelRadialPalette(string why)

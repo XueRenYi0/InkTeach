@@ -10,6 +10,13 @@
     .\tools\release.ps1 -Notes dist\release-notes-9.9.3.md -SkipChecks   # 已跑过 check-all
     .\tools\release.ps1 -Notes ... -DryRun                                # 只打包，不提交/不发布
 
+  2026-11-23 起加的两个省时开关（用户拍板，只影响本机流程，不改产物）：
+    -ReuseDist   第 2 步发现 dist 里 zip / Setup / update.json 都在（版本号一致）时
+                 **跳过 AOT 重建**，直接走 2b / 3。重跑一次失败的发版时最省时间。
+    -WithLegacy  第 6 步（往 InkTeach-Releases 推过渡清单）**默认不跑**；
+                 老客户端还没升完、确实要补那一份清单时才显式传它。
+                 `-NoLegacy` 保留只为兼容旧命令行，语义现在和默认一致（跳第 6 步）。
+
   顺序：
     ① sync-site  官网 release.json / JSON-LD / sitemap 跟上版本
     ② publish    打包（AOT + zip + Setup + update.json）
@@ -26,7 +33,11 @@ param(
     [Parameter(Mandatory = $true)][string]$Notes,
     [switch]$SkipChecks,
     [switch]$DryRun,
-    # 老客户端过渡清单：默认写；确认老用户升完之后可以 -NoLegacy
+    # 第 2 步：dist 里这一版的产物都在就跳过 AOT 重建（重跑发版时用）
+    [switch]$ReuseDist,
+    # 第 6 步：只有显式传它才往 InkTeach-Releases 推过渡清单（2026-11-23 起默认不跑）
+    [switch]$WithLegacy,
+    # 兼容旧命令行：语义等于默认（跳第 6 步）
     [switch]$NoLegacy
 )
 
@@ -54,9 +65,22 @@ Step 1 "官网跟随版本（docs\release.json + JSON-LD + sitemap）"
 Run { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'sync-site.ps1') -Version $ver }
 
 Step 2 "打包（AOT + zip + Setup + update.json）"
-$pubArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $root 'publish.ps1'))
-if ($SkipChecks) { $pubArgs += '-SkipChecks' }
-Run { & powershell @pubArgs }
+$distArtifacts = @(
+    @{ Path = $zip; Name = 'zip' },
+    @{ Path = $setup; Name = 'Setup' },
+    @{ Path = $manifest; Name = 'update.json' }
+)
+$missing = @($distArtifacts | Where-Object { -not (Test-Path $_.Path) } | ForEach-Object { $_.Name })
+if ($ReuseDist -and $missing.Count -eq 0) {
+    Write-Host "  -ReuseDist：dist 里 $ver 的 zip / Setup / update.json 都在，跳过重建" -ForegroundColor DarkGray
+} else {
+    if ($ReuseDist) {
+        Write-Host "  -ReuseDist：缺 $($missing -join ' / ')，照常重建" -ForegroundColor Yellow
+    }
+    $pubArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $root 'publish.ps1'))
+    if ($SkipChecks) { $pubArgs += '-SkipChecks' }
+    Run { & powershell @pubArgs }
+}
 foreach ($f in @($zip, $setup, $manifest)) {
     if (-not (Test-Path $f)) { throw "打包没产出：$f" }
 }
@@ -84,6 +108,10 @@ try {
     else {
         Run { git commit -m "release: $ver 更新清单与官网" }
     }
+    # `git diff --quiet` 返回 1 = "有改动"，是**正常分支**，不是失败；但它会把
+    # $LASTEXITCODE 留成 1，脚本末尾就带着 1 退出（Step 6 被跳过时没人再覆盖它）。
+    # 这里显式归零，避免"发版成功却报失败"。
+    $global:LASTEXITCODE = 0
     Run { git push upstream main }
     $hasTag = git tag --list $tag
     if (-not $hasTag) { Run { git tag $tag } }
@@ -117,7 +145,7 @@ Run { gh release edit $tag -R "$ghOwner/$ghRepo" --title "InkTeach $ver" --notes
 Step 5 "GitCode 国内镜像"
 Run { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'gitcode-release.ps1') -Version $ver -Notes "InkTeach $ver" }
 
-if (-not $NoLegacy) {
+if ($WithLegacy -and -not $NoLegacy) {
     Step 6 "旧仓库过渡清单（给 9.7–9.9.2 老客户端）"
     $legacyDir = Join-Path (Split-Path $root -Parent) 'InkTeach-Releases'
     if (-not (Test-Path (Join-Path $legacyDir '.git'))) {
@@ -138,8 +166,11 @@ if (-not $NoLegacy) {
         }
         finally { Pop-Location }
     }
+} else {
+    Step 6 '跳过（默认不推旧仓库过渡清单；要推请传 -WithLegacy）'
 }
 
+$global:LASTEXITCODE = 0
 Write-Host "`n完成：$ver" -ForegroundColor Green
 Write-Host "  GitHub  https://github.com/$ghOwner/$ghRepo/releases/tag/$tag"
 Write-Host "  GitCode https://gitcode.com/XueRenYI0/InkTeach-Releases/releases/tag/$tag"

@@ -1202,6 +1202,10 @@ internal sealed partial class App
             Check("退出放映后：条不再命中（它是放映时才有的）",
                   !PptMode && !PptBarContains(bar.MinX + 10f, bar.MinY + 10f),
                   $"PptMode={PptMode}");
+            // 2026-11-23：**不在白板**退出放映 = 回桌面，鼠标要还给下层（不留透明挡板）。
+            Check("退出放映（不在白板）：自动回到鼠标穿透", PassThrough, $"穿透={PassThrough}");
+            SetPassThroughFromUi(false);
+            Step();
         }
 
         // ---- 兜底：读不到 SlideID 时用负页码当键（参考 Ultra 的 GetStrokeCacheKey）----
@@ -1291,6 +1295,8 @@ internal sealed partial class App
             Check("PPT 结束放映：白板不自动退出",
                   BoardOn && !PptMode && Doc.PageKey == InkDocument.BoardPageKey,
                   $"板开={BoardOn} PPT={PptMode} slot={Doc.PageKey}");
+            // 2026-11-23：白板开着时**不**进穿透（留白板 = 老师要继续在板上写）。
+            Check("PPT 结束放映（在白板）：不进穿透", !PassThrough, $"穿透={PassThrough} 板开={BoardOn}");
             // 从白板页码条菜单的「退出白板」退出：只关白板，不关 PPT / 软件。
             var endBar = PptBarRect();
             var endMenu = PptBar.MenuCell(endBar, DpiScale);

@@ -477,6 +477,11 @@ public partial class InkEngine
         else
         {
             GotoPage(0);
+            // **退出放映、回到桌面就交还鼠标**（2026-11-23）：放映期间我们盖在 WPS 上，
+            // 收场后如果还留着"白板关、穿透关"的全屏透明窗，下层程序谁也点不到。
+            // 白板开着时不进穿透——留白板就是老师要继续在板上写（下面的 NotifyUiStateChanged
+            // 顺手刷新顶部 / 悬浮条上的穿透按钮状态）。
+            if (!PassThrough) SetPassThrough(true);
         }
         NotifyUiStateChanged();
         Console.WriteLine(BoardOn

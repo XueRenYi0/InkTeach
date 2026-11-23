@@ -101,7 +101,7 @@
       - `DiagLog.cs` 1,270 行 — 运行日志、设备卡、日志上传同意。
       - `Engine.Hotkey.cs` 625 行 — 热键处理：WM_HOTKEY → 动作。
       - `Engine.Keyboard.cs` 628 行 — 键盘模式与键盘手势：工具键、色带键、滚轮/↑↓ 视野平移。
-      - `Engine.Radial.cs` 683 行 — 呼出盘：按住/划向扇区/松手（清屏格单击即清，可撤销）。
+      - `Engine.Radial.cs` 707 行 — 呼出盘：按住/划向扇区/松手（清屏格单击即清，可撤销）。
       - `Engine.Update.cs` 1,138 行 — 自动更新：检查/下载/换壳。
       - `EraserTelemetry.cs` 329 行
       - `GcLatency.cs` 109 行
@@ -118,7 +118,7 @@
       - `UpdateProbe.cs` 364 行
 
     **InkEngine/Ppt/**
-      - `Ppt.cs` 1,920 行 — PPT 批注：放映联动、按页落盘、翻页。
+      - `Ppt.cs` 1,925 行 — PPT 批注：放映联动、按页落盘、翻页。
       - `PptBar.cs` 407 行
       - `PptComLate.cs` 319 行
       - `PptComSource.cs` 440 行
@@ -255,7 +255,7 @@
         - `Diagnostics.cs` 3,304 行 — 诊断/环境/性能 E2E。
         - `DocMem.cs` 792 行 — PDF 缩放内存归因诊断（--docmem）：WS/私有/托管/LOH/GPU/页位图/分块，含 100ms 峰值与回收后快照。
         - `DocResume.cs` 194 行 — 文档「上次看到第 N 页」恢复提示 E2E（挂在 --doctest 末尾的 F 组）。
-        - `Documents.cs` 1,575 行 — 文档导入 E2E。
+        - `Documents.cs` 1,585 行 — 文档导入 E2E。
         - `Erasers.cs` 1,003 行 — 橡皮擦 E2E（整笔/像素/动态）。
         - `FacesProbe.cs` 282 行
         - `GlyphEraseTest.cs` 59 行
@@ -282,7 +282,7 @@
         - `PhotoBeautifyShow.cs` 80 行
         - `PlotFromCard.cs` 174 行
         - `PlotSuiteTest.cs` 205 行
-        - `PptStorage.cs` 1,783 行 — PPT 批注落盘 E2E。
+        - `PptStorage.cs` 1,789 行 — PPT 批注落盘 E2E。
         - `PredictLinear.cs` 167 行
         - `Qr.cs` 77 行
         - `SelAiShow.cs` 126 行
@@ -309,9 +309,9 @@
         - `ZoomShots.cs` 776 行 — 文档缩放 E2E：出图（50/100/200/300 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
 
       **InkTeach/SelfTests/Unit/**
-        - `UnitTestRunner.cs` 153 行
+        - `UnitTestRunner.cs` 157 行
         - `UnitTests.Camera.cs` 65 行
-        - `UnitTests.Core.cs` 272 行
+        - `UnitTests.Core.cs` 333 行
         - `UnitTests.Overlay.cs` 84 行
 
     **InkUi/Ai/**

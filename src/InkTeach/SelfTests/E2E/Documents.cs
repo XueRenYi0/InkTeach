@@ -606,6 +606,11 @@ internal sealed partial class App
         Check("关闭后页位图全放（回基线）",
               DocView.Count == 0 && ImageData.LiveImages == imgBefore && ImageData.LiveBytes == bytesBefore,
               $"LiveImages {imgBefore} ⇐ {ImageData.LiveImages}");
+        // 2026-11-23：关文档 = 回桌面穿透（见 CloseDocument）。后面的用例直接调 OpenDocuments
+        // 走的是**内核路径**（不含 PrepareAnnotateAfterOpen 的"退穿透"），所以这里先把穿透收掉，
+        // 让 C1/C2 从一个明确的"非穿透"基线起跑（产品入口本身会自动退穿透）。
+        Check("关文档：自动回到鼠标穿透（块不留透明挡板）", PassThrough, $"穿透={PassThrough}");
+        SetPassThroughFromUi(false);
 
         try { Directory.Delete(dir, true); } catch { /* 有意忽略：清理/删除失败不影响主流程（ADR-005 D5） */ }
 
@@ -718,6 +723,9 @@ internal sealed partial class App
             Doc.Clear();
             Doc.ClearHistory();
             if (BoardOn) SetBoardFromUi(false);          // 干净起点：板关（好验"开文档不碰白板"）
+            // 2026-11-23：关文档会自动进穿透（下面的 OpenDocuments 是内核路径，不含产品那步退穿透），
+            // 所以这里显式退回非穿透——否则穿透会把页位图整层放掉，C3 的像素判据全部落空。
+            if (PassThrough) SetPassThroughFromUi(false);
             ViewOffsetY = 0f;
             foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = 0f; }
 
@@ -895,6 +903,8 @@ internal sealed partial class App
             SetAutoSaveIntervalForTest(15000);
             Check("关闭：回桌面页空间 + 条收走", !PageBarActive && Doc.PageKey == 0, $"slot={Doc.PageKey}");
             Check("关闭：桌面板书没被污染", Doc.Strokes.Count == 0, $"{Doc.Strokes.Count} 个对象");
+            // 2026-11-23：关文档自动进穿透；下面用内核路径重开（不含产品那步退穿透），先退回非穿透。
+            if (PassThrough) SetPassThroughFromUi(false);
 
             var errRe = OpenDocuments(new[] { pPdf2 });
             Check("重开同一份：批注读回、槽还原",

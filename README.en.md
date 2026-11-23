@@ -15,10 +15,10 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 ｜**Website**: <https://www.inkteach.com/>
 
-> **Latest 9.9.6 (2026-11-23)**: the document-mode bottom `[☰]` menu gains **Dark eye-care**: white-background
-> PDFs and images are re-rendered on a soft dark-grey background (`#1A1C20`) with hue-preserving lightness
-> inversion, so coloured figures keep their colours and the zoom sharpening patches are inverted too. Turning
-> it on switches a black pen to white; pasting from a dark document to the whiteboard also darkens the board.
+> **Latest 9.9.7 (2026-11-23)**: the `Ctrl+Shift+Alt+Q` radial palette no longer gets stuck looping between
+> two slots when the pen band contains **duplicate colours** — "previous / next colour" now steps through every
+> slot. Leaving a PDF/document, or leaving PowerPoint/WPS slideshow without the whiteboard open, now **hands the
+> mouse back** (click-through) instead of leaving an invisible full-screen blocker.
 >
 > *This English README is a summary. The Chinese [README.md](README.md) is the authoritative, most
 > current version.*

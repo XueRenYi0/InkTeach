@@ -783,10 +783,10 @@ public partial class InkEngine
 
         LeaveDocPageSpace();                // 回桌面（含相机位置恢复）
 
-        // 关文档时课堂窗（计时 / 点名）还开着（文档模式里没强制穿透）→ 补回普通穿透路径：
-        // 否则整块全屏浮层留在桌面上，下层程序谁也点不到（2026-11-16；
-        // 和"开文档时退穿透"配对，见 PrepareAnnotateAfterOpen）。
+        // 关文档时课堂窗（计时 / 点名）还开着 → 补回普通穿透路径（2026-11-16）；关文档即回桌面穿透
+        // （2026-11-23）——不留"白板关、穿透也关"那块点不到下层的透明全屏窗。顺序要在下面那句之前：
         if ((_timerCardOpen || _rollCardOpen) && !PassThrough) ClassroomWantPassThrough(true);
+        if (!PassThrough) SetPassThrough(true);
 
         // **纸随文档一起收**：文档的"纸"是按 DocView.IsOpen 现判的，关文档自然就收了。
         // 白板是**另一张纸**：文档的开关不动它——打开时替你把它收过一次（好让你看见文档），

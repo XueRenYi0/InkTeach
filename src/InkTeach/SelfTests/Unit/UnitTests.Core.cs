@@ -226,6 +226,67 @@ internal static class UnitTestsCore
         Check.Near((1600f - 300f * tall.Scale) * 0.5f, tall.X, 0.5f, file: "缩小后仍水平居中");
     }
 
+    // ---- 呼出盘色带轮切：重复色不能打转（2026-11-23 修的真 bug）-------------------
+
+    [UnitTest]
+    internal static void RadialBandStep_DuplicateColors_VisitsEverySlot()
+    {
+        // 用户实测的色带：红 / 黑 / 红 / 白 / 红 / 蓝（3 个红）。
+        Color4 red = new(1f, 0f, 0f, 1f);
+        Color4 black = new(0f, 0f, 0f, 1f);
+        Color4 white = new(1f, 1f, 1f, 1f);
+        Color4 blue = new(0f, 0f, 1f, 1f);
+        var band = new[] { red, black, red, white, red, blue };
+
+        // 正向：0 → 1(黑) → 2(红) → 3(白) → 4(红) → 5(蓝) → 0(红)
+        int slot = 0;
+        var forward = new List<int>();
+        for (int i = 0; i < band.Length; i++)
+        {
+            slot = InkEngine.InkEngine.StepPenBandIndex(band, slot, band[slot], +1);
+            forward.Add(slot);
+        }
+        Check.Equal("1,2,3,4,5,0", string.Join(',', forward), file: "RadialBandStep");
+
+        // 反向：0 → 5(蓝) → 4(红) → 3(白) → 2(红) → 1(黑) → 0(红)
+        slot = 0;
+        var backward = new List<int>();
+        for (int i = 0; i < band.Length; i++)
+        {
+            slot = InkEngine.InkEngine.StepPenBandIndex(band, slot, band[slot], -1);
+            backward.Add(slot);
+        }
+        Check.Equal("5,4,3,2,1,0", string.Join(',', backward), file: "RadialBandStep");
+    }
+
+    [UnitTest]
+    internal static void RadialBandStep_FallsBackWhenSlotUnusable()
+    {
+        Color4 red = new(1f, 0f, 0f, 1f);
+        Color4 black = new(0f, 0f, 0f, 1f);
+        Color4 white = new(1f, 1f, 1f, 1f);
+        Color4 blue = new(0f, 0f, 1f, 1f);
+        Color4 green = new(0f, 1f, 0f, 1f);
+        var band = new[] { red, black, red, white, red, blue };
+
+        // 没有选中槽位（-1）：按颜色回退到首个相近色（槽 2 的红 → 命中槽 0），再正向挪一格。
+        Check.Equal(1, InkEngine.InkEngine.StepPenBandIndex(band, -1, band[2], +1), file: "RadialBandStep");
+        // 槽位越界（99）也走同一条回退。
+        Check.Equal(1, InkEngine.InkEngine.StepPenBandIndex(band, 99, band[2], +1), file: "RadialBandStep");
+
+        // 槽位和颜色脱节（槽 3 是白，当前色却是蓝）：不能信槽位，改按颜色找到槽 5，再正向到 0。
+        Check.Equal(0, InkEngine.InkEngine.StepPenBandIndex(band, 3, blue, +1), file: "RadialBandStep");
+        Check.Equal(4, InkEngine.InkEngine.StepPenBandIndex(band, 3, blue, -1), file: "RadialBandStep");
+
+        // 当前色不在色带里：正向从第一格开始、反向从最后一格开始（旧语义）。
+        Check.Equal(0, InkEngine.InkEngine.StepPenBandIndex(band, -1, green, +1), file: "RadialBandStep");
+        Check.Equal(5, InkEngine.InkEngine.StepPenBandIndex(band, -1, green, -1), file: "RadialBandStep");
+
+        // 空色带不能除零、不能抛。
+        Check.Equal(0, InkEngine.InkEngine.StepPenBandIndex(Array.Empty<Color4>(), 0, red, +1),
+            file: "RadialBandStep");
+    }
+
     [UnitTest]
     internal static void DocColorInvert_PreservesHue_And_SoftensBlackWhite()
     {
