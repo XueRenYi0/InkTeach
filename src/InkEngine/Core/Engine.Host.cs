@@ -1272,12 +1272,14 @@ public partial class InkEngine
         // ⚠ 2026-10-04：呼出盘**不再进这张表**——它已升为常驻全局键 `Ctrl+Alt+Shift+Q`
         // （见 KeyBindings.Default），放映时前台是 PPT/WPS 也照样生效；临时表里再挂一遍
         // 就等于"同一个动作两把全局键"，正是这次改键要消掉的东西。
-        // 放映时方向键也归我们：**有选中 → 微调；没选中 → ←→ 代 WPS 翻页**
-        // （键盘在我们手里，不拦的话 WPS 收不到 ←→，什么都不发生——用户 2026-09-30 实测）。
+        // 放映时方向键也归我们：**有选中 → 微调；没选中 → 翻页**。
+        // 键盘在我们手里，不拦的话 WPS 收不到方向键，什么都不发生（用户 2026-09-30 实测）。
+        // **2026-11-23**：↑↓ 也从"滚画布"改成翻页——有线/无线翻页笔上下翻键的实际
+        // VK 常是 ↑/↓，四个方向键在放映态统一给 PPT（兼容翻页笔）。
         (0u, 0x25 /*←*/, KeyAction.PptPrev),
         (0u, 0x27 /*→*/, KeyAction.PptNext),
-        (0u, 0x26 /*↑*/, KeyAction.PanUp),
-        (0u, 0x28 /*↓*/, KeyAction.PanDown),
+        (0u, 0x26 /*↑*/, KeyAction.PptPrev),
+        (0u, 0x28 /*↓*/, KeyAction.PptNext),
     };
     private bool _pptHotkeysOn;
 

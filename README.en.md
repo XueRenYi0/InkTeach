@@ -15,10 +15,11 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 ｜**Website**: <https://www.inkteach.com/>
 
-> **Latest 9.9.7 (2026-11-23)**: the `Ctrl+Shift+Alt+Q` radial palette no longer gets stuck looping between
-> two slots when the pen band contains **duplicate colours** — "previous / next colour" now steps through every
-> slot. Leaving a PDF/document, or leaving PowerPoint/WPS slideshow without the whiteboard open, now **hands the
-> mouse back** (click-through) instead of leaving an invisible full-screen blocker.
+> **Latest 9.9.8 (2026-11-23)**: slide-transition **animations no longer get lost** (the overlay no longer steals
+> the foreground during a slideshow, and jumping back to an already played slide replays its animation); opening
+> PowerPoint after WPS was opened and closed now **shows the paging bar again**; paging no longer stutters (writes
+> moved to the background, empty slides never touch the disk); and **↑↓←→ all page the slideshow**, so presenter
+> remotes work too.
 >
 > *This English README is a summary. The Chinese [README.md](README.md) is the authoritative, most
 > current version.*

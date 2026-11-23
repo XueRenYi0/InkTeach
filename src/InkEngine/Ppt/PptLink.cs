@@ -116,17 +116,24 @@ internal sealed class PptWatcher
         while (!_stop)
         {
             // ① 先执行命令（按钮点下去最多等一个醒来周期，而不是一个轮询周期）
+            bool paged = false;
             while (_cmds.TryDequeue(out var c))
             {
                 try
                 {
-                    if (c.cmd == 0) _src.Next();
-                    else if (c.cmd == 1) _src.Prev();
+                    if (c.cmd == 0) { _src.Next(); paged = true; }
+                    else if (c.cmd == 1) { _src.Prev(); paged = true; }
                     else if (c.cmd == 2) _src.ExitShow();
-                    else if (c.cmd == 3) _src.GotoSlide(c.arg);
+                    else if (c.cmd == 3) { _src.GotoSlide(c.arg); paged = true; }
                 }
                 catch { /* 命令失败不许把轮询线程带走 */ }
             }
+
+            // ①.5 翻页/跳页之后**先让 PPT 主线程画动画**（2026-11-23）：
+            // PowerPoint/WPS 的换页动画由放映进程的主线程逐帧推进；如果命令刚返回就
+            // 紧贴着一串跨进程 COM 读取（每轮 20+ 次），会把动画那一帧卡住。
+            // 150ms 足够动画启动，又远小于人能感知的"条没反应"。
+            if (paged && !_stop) _wake.WaitOne(150);
 
             // ② 读一次状态；变了就存快照 + 唤醒主循环
             try

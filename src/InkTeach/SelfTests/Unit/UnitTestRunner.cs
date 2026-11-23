@@ -96,6 +96,12 @@ internal static class UnitTestRunner
             UnitTestsOverlay.OverlayCoords_SecondaryScreen_VisibleCanvas_NoDoubleOrigin),
         (nameof(UnitTestsOverlay.OverlayCoords_SecondaryScreen_Clip_And_ScreenToWindow),
             UnitTestsOverlay.OverlayCoords_SecondaryScreen_Clip_And_ScreenToWindow),
+        (nameof(UnitTestsPpt.PptComSource_NativePowerPointMoniker_IsRecognized),
+            UnitTestsPpt.PptComSource_NativePowerPointMoniker_IsRecognized),
+        (nameof(UnitTestsPpt.ComLate_TwoArgOrder_IsReversed),
+            UnitTestsPpt.ComLate_TwoArgOrder_IsReversed),
+        (nameof(UnitTestsPpt.PptStore_HasPageFile_TracksDisk),
+            UnitTestsPpt.PptStore_HasPageFile_TracksDisk),
     };
 
     public static int Run(string[] args)

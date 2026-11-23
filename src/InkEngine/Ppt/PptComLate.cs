@@ -249,6 +249,34 @@ internal static unsafe class ComLate
         return true;
     }
 
+    /// <summary>`msoTrue`（MsoTriState）——PowerPoint/WPS 的 `GotoSlide(Index, ResetSlide)` 用。</summary>
+    public const int MsoTrue = -1;
+
+    /// <summary>
+    /// IDispatch 的 `rgvarg` 按**倒序**排：数组里第 0 个是**最后一个**参数。
+    /// 抽成纯函数，`--unittest` 才能不碰 COM 直接钉住"别排反"。
+    /// </summary>
+    internal static (int Last, int First) ReverseTwoArgs(int first, int second) => (second, first);
+
+    /// <summary>
+    /// 调一个带 2 个 int 参数的方法（`GotoSlide(Index, ResetSlide)`）。
+    /// 传 2 个参数是为了带上 `ResetSlide = msoTrue`：从页号面板跳回已播过的页面时，
+    /// 只有重置才重新播放该页动画（2026-11-23）。
+    /// </summary>
+    public static bool Invoke2Int(IntPtr obj, string name, int arg1, int arg2)
+    {
+        if (obj == IntPtr.Zero || GetId(obj, name, out int id) != 0) return false;
+        var (last, first) = ReverseTwoArgs(arg1, arg2);      // rgvarg 倒序：args[0] = 第 2 个
+        Variant* args = stackalloc Variant[2];
+        args[0] = default; args[0].vt = VT_I4; args[0].lVal = last;
+        args[1] = default; args[1].vt = VT_I4; args[1].lVal = first;
+        int hr = Invoke(obj, id, DISPATCH_METHOD, (IntPtr)args, 2, out var v);
+        D($"Invoke2(\"{name}\", {arg1}, {arg2}) hr=0x{hr:X8} vt={v.vt}");
+        Clear(ref v);
+        if (hr != 0) return false;
+        return true;
+    }
+
     // ---- 建实例 + 带 BSTR 的多参调用（2026-10-09，PPT 直映用）------------------------
     //
     // 原来的用法是"ROT 里找个已经开着的 PPT 连上去读状态"；直映要反过来：

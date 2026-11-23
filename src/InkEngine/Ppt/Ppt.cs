@@ -63,11 +63,24 @@ internal static class PptStore
     private static string FileOf(string key, int pageKey)
         => Path.Combine(DirOf(key), pageKey.ToString("D8", CultureInfo.InvariantCulture) + ".inkb");
 
+    /// <summary>这一页在盘上到底有没有文件（空页翻页据此**一次磁盘 IO 都不做**，2026-11-23）。</summary>
+    public static bool HasPageFile(string key, int pageKey)
+    {
+        try { return File.Exists(FileOf(key, pageKey)); }
+        catch { return false; }
+    }
+
+    /// <summary>自检用：真正排进写盘队列的次数（证明空页翻页没触发写/删）。</summary>
+    private static int _diskOps;
+    internal static int DiskOpsForTest => _diskOps;
+    internal static void ResetDiskOpsForTest() => _diskOps = 0;
+
     /// <summary>写一页（同步：排入统一写盘队列并等它落完——顺序与"周期后台写"有保证）。
     /// 先写 .tmp 再换名：写一半断电不能留下一个坏文件（同 Recovery）。</summary>
     public static void SavePage(string key, int pageKey, byte[] blob)
     {
         if (blob == null || blob.Length == 0) { DeletePage(key, pageKey); return; }
+        _diskOps++;
         BackgroundSaver.WriteBlocking("PPT 批注", FileOf(key, pageKey), blob);
     }
 
@@ -77,6 +90,7 @@ internal static class PptStore
     public static void SavePageDeferred(string key, int pageKey, byte[] blob)
     {
         if (blob == null || blob.Length == 0) return;
+        _diskOps++;
         BackgroundSaver.Post("PPT 批注", FileOf(key, pageKey), blob);
     }
 
@@ -139,7 +153,22 @@ internal static class PptStore
     /// （阻塞模式）——保证不会出现"删完之后，在途的旧快照又把它写回来"。</summary>
     public static void DeletePage(string key, int pageKey)
     {
-        try { BackgroundSaver.WriteBlocking("PPT 批注", FileOf(key, pageKey), null); }
+        try
+        {
+            _diskOps++;
+            BackgroundSaver.WriteBlocking("PPT 批注", FileOf(key, pageKey), null);
+        }
+        catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
+    }
+
+    /// <summary>后台删一页（翻页时"曾经画过、后来整页清空"那条路用；空页没文件时不调）。</summary>
+    public static void DeletePageDeferred(string key, int pageKey)
+    {
+        try
+        {
+            _diskOps++;
+            BackgroundSaver.Post("PPT 批注", FileOf(key, pageKey), null);
+        }
         catch { /* 有意忽略：失败不影响主流程（ADR-005 D5） */ }
     }
 
@@ -379,8 +408,9 @@ public partial class InkEngine
             }
 
             // 翻页：**离开的页先落盘**（参考 ICC "退出时统一存"，这里多一道保险：
-            // 一节课中途崩了，前面的页不会丢）。
-            SaveCurrentPptPage();
+            // 一节课中途崩了，前面的页不会丢）。2026-11-23 起改**后台写**：
+            // 翻页那一瞬间不能让磁盘/杀软扫描卡住画面（退出放映仍走同步，见 ExitPptMode）。
+            SaveCurrentPptPage(deferred: true);
             PptSlide = s.Slide;
             PptTotal = s.Total;
             GotoPage(want);
@@ -561,13 +591,21 @@ public partial class InkEngine
             // 空页**不写空文件**：把已有文件删掉就完了（同 InkClass 的 `length > 8` 那个判断）。
             // 不这么写的话，"清空"之后再退出放映会在盘上留一串 0 字节文件——下次读回来还是空的，
             // 但目录里一堆空文件很难看，也让"盘上还剩几页"这个诊断失去意义。
+            //
+            // 2026-11-23：**盘上本来就没这一页时一次 IO 都不做**。翻页经过的空页占绝大多数，
+            // 以前每翻一页都排一次删除（同步等在途写盘），慢盘上就是可感知的顿挫。
             if (strokes.Count > 0)
             {
                 var blob = InkSerializer.SaveStrokes(strokes);
                 if (deferred) PptStore.SavePageDeferred(_pptKey, key, blob);
                 else PptStore.SavePage(_pptKey, key, blob);
             }
-            else PptStore.DeletePage(_pptKey, key);
+            else if (PptStore.HasPageFile(_pptKey, key))
+            {
+                // 只有"曾经画过并落盘、后来整页清空"的极少数情况才真删。
+                if (deferred) PptStore.DeletePageDeferred(_pptKey, key);
+                else PptStore.DeletePage(_pptKey, key);
+            }
         }
         catch (Exception ex) { Console.WriteLine("PPT 批注写盘失败：" + ex.Message); }
     }

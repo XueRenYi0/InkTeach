@@ -113,8 +113,12 @@ public partial class InkEngine
                 break;
             // ↑↓：**有选中 → 微调；没选中 → 上下滚画布**（用户 2026-09-30 定："任何情况下
             // 都能上下滑动画布"，一格 = 屏幕高的 1/10，照 ClassIn 的手感）。
+            // **2026-11-23**：放映且**没开白板**时 ↑↓ 也交给 PPT 翻页——翻页笔的上下翻键
+            // 实际发 VK ↑/↓，这样无论焦点在覆盖层还是 WPS 都统一（白板仍滚画布）。
             case KeyAction.NudgeUp:
-                if (Doc.Selected.Count > 0) Nudge(0f, -1f); else ScrollCanvasBy(+ScrollStepLogical);
+                if (Doc.Selected.Count > 0) Nudge(0f, -1f);
+                else if (PptMode && !BoardOn) PptPrevFromUi();
+                else ScrollCanvasBy(+ScrollStepLogical);
                 break;
             case KeyAction.NudgeRight:
                 if (Doc.Selected.Count > 0) Nudge(1f, 0f);
@@ -123,7 +127,9 @@ public partial class InkEngine
                 else FlipPageFromUi(true);
                 break;
             case KeyAction.NudgeDown:
-                if (Doc.Selected.Count > 0) Nudge(0f, 1f); else ScrollCanvasBy(-ScrollStepLogical);
+                if (Doc.Selected.Count > 0) Nudge(0f, 1f);
+                else if (PptMode && !BoardOn) PptNextFromUi();
+                else ScrollCanvasBy(-ScrollStepLogical);
                 break;
             case KeyAction.NudgeLeftFar: Nudge(-10f, 0f); break;
             case KeyAction.NudgeUpFar: Nudge(0f, -10f); break;

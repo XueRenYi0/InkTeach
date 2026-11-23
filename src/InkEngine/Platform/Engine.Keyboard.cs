@@ -41,7 +41,11 @@ public partial class InkEngine
             Native.SetWindowPos(w.Hwnd, IntPtr.Zero, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOZORDER
                 | Native.SWP_NOACTIVATE | 0x0020 /*SWP_FRAMECHANGED*/);
-            if (on)
+            // ⚠ 放映期间**不许抢前台**（2026-11-23）：PPT/WPS 一丢前台就停掉翻页动画
+            // （真机症状：动画第一帧被卡住/直接跳页）。放映期的工具键与方向键由
+            // `RegisterPptHotkeys` 的临时全局热键接管，不需要键盘焦点；这里只落样式。
+            // 退出放映时 `ExitPptMode` 已先把 `PptMode` 置 false 再调本方法，正常要回焦点。
+            if (on && !PptMode)
             {
                 // 覆盖层平时是 WS_EX_NOACTIVATE，直接 SetForegroundWindow 可能被系统拒绝；
                 // 借前台线程的输入队列（和分类改名输入框同一套）才能保证键盘焦点真的过来。
@@ -85,6 +89,8 @@ public partial class InkEngine
     /// </summary>
     private void RegainKeyboardFocus()
     {
+        // 放映期间前台必须留给 PPT/WPS（抢一次就打断翻页动画，见 SetKeyboardMode）。
+        if (PptMode) return;
         if (!KeyboardMode || _windows.Count == 0) return;
         foreach (var w in _windows)
         {

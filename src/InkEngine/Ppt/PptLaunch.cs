@@ -201,6 +201,9 @@ internal static class PptLaunch
             Native.GetClassNameW(h, cls, cls.Capacity);
             if (cls.ToString() != "screenClass")
             {
+                // 先看标题长度：空标题的窗口（大量隐藏辅助窗 / 输入法窗）连
+                // GetWindowTextW 的跨进程拷贝都不用发（2026-11-23 卡顿收口）。
+                if (Native.GetWindowTextLengthW(h) <= 0) return true;
                 var title = new System.Text.StringBuilder(256);
                 Native.GetWindowTextW(h, title, title.Capacity);
                 var t = title.ToString();

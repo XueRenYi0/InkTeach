@@ -23,7 +23,7 @@
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 170 行
       - `Engine.cs` 2,921 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
-      - `Engine.Host.cs` 2,396 行 — 启动、消息循环、窗口过程（WndProc）。
+      - `Engine.Host.cs` 2,398 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
       - `Engine.Selection.Gesture.cs` 1,466 行 — 框选/套索/拖动/对齐吸附/美化入口。
@@ -99,8 +99,8 @@
       - `AutoStart.cs` 196 行
       - `Backup.cs` 457 行
       - `DiagLog.cs` 1,270 行 — 运行日志、设备卡、日志上传同意。
-      - `Engine.Hotkey.cs` 625 行 — 热键处理：WM_HOTKEY → 动作。
-      - `Engine.Keyboard.cs` 628 行 — 键盘模式与键盘手势：工具键、色带键、滚轮/↑↓ 视野平移。
+      - `Engine.Hotkey.cs` 631 行 — 热键处理：WM_HOTKEY → 动作。
+      - `Engine.Keyboard.cs` 634 行 — 键盘模式与键盘手势：工具键、色带键、滚轮/↑↓ 视野平移。
       - `Engine.Radial.cs` 707 行 — 呼出盘：按住/划向扇区/松手（清屏格单击即清，可撤销）。
       - `Engine.Update.cs` 1,138 行 — 自动更新：检查/下载/换壳。
       - `EraserTelemetry.cs` 329 行
@@ -118,12 +118,12 @@
       - `UpdateProbe.cs` 364 行
 
     **InkEngine/Ppt/**
-      - `Ppt.cs` 1,925 行 — PPT 批注：放映联动、按页落盘、翻页。
+      - `Ppt.cs` 1,963 行 — PPT 批注：放映联动、按页落盘、翻页。
       - `PptBar.cs` 407 行
-      - `PptComLate.cs` 319 行
-      - `PptComSource.cs` 440 行
-      - `PptLaunch.cs` 236 行
-      - `PptLink.cs` 193 行
+      - `PptComLate.cs` 347 行
+      - `PptComSource.cs` 561 行
+      - `PptLaunch.cs` 239 行
+      - `PptLink.cs` 200 行
 
     **InkEngine/Prediction/**
       - `InkPredictorLinear.cs` 452 行
@@ -282,7 +282,7 @@
         - `PhotoBeautifyShow.cs` 80 行
         - `PlotFromCard.cs` 174 行
         - `PlotSuiteTest.cs` 205 行
-        - `PptStorage.cs` 1,789 行 — PPT 批注落盘 E2E。
+        - `PptStorage.cs` 1,850 行 — PPT 批注落盘 E2E。
         - `PredictLinear.cs` 167 行
         - `Qr.cs` 77 行
         - `SelAiShow.cs` 126 行
@@ -309,10 +309,11 @@
         - `ZoomShots.cs` 776 行 — 文档缩放 E2E：出图（50/100/200/300 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
 
       **InkTeach/SelfTests/Unit/**
-        - `UnitTestRunner.cs` 157 行
+        - `UnitTestRunner.cs` 163 行
         - `UnitTests.Camera.cs` 65 行
         - `UnitTests.Core.cs` 333 行
         - `UnitTests.Overlay.cs` 84 行
+        - `UnitTests.Ppt.cs` 68 行
 
     **InkUi/Ai/**
       - `FullUi.Ai.cs` 399 行

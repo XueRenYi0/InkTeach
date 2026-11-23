@@ -29,6 +29,21 @@ internal sealed class PptComSource : IPptSource
     private string _appProgId = "";           // 记一下是哪家的（PowerPoint / WPS）
     private long _nextProcessProbeMs;         // 下一次允许"枚举全机进程"的时刻
     private long _nextHealMs;                 // 下一次允许"连接自愈重连"的时刻（见 TryHealConnection）
+    private long _nextPresRecoverMs;          // 下一次允许"ActivePresentation 读空 → 重扫 ROT"的时刻
+    private long _nextRotRescanMs;            // 下一次允许"不在放映 → 看别家是否在放映"的时刻
+
+    // ---- 身份 / 页号缓存（2026-11-23：削减 200ms 轮询的跨进程 RPC）----
+    // 同一个 pres 下，1 秒内重复读 Name/FullName/Slides.Count 没有意义（只会卡动画）；
+    // 页号缓存按 (pres, CurrentShowPosition) 命中，位置变了立即重读。
+    private IntPtr _metaPres;
+    private string _metaName = "";
+    private string _metaFull = "";
+    private int _metaTotal;
+    private long _metaUntilMs;
+    private IntPtr _idPres;
+    private int _idSlide;
+    private int _idSlideId;
+    private long _idUntilMs;
 
     /// <summary>`--pptdebug`：把 ROT 扫描每一步打出来（排查连接问题用，平时关）。</summary>
     internal static bool Debug;
@@ -75,66 +90,151 @@ internal sealed class PptComSource : IPptSource
             D("Poll: Application 已连接");
 
             var pres = ComLate.GetObject(app, "ActivePresentation");
-            if (pres == IntPtr.Zero && TryReconnect())
+            if (pres == IntPtr.Zero && RecoverLostPresentation())
             {
-                // WPS 兼容连接的"前台一抢就永久读空"：重连一次就好了（见 TryReconnect）。
+                // 旧连接已经没用了（例如 WPS 文档关了但进程还吊着）：放掉后重扫 ROT。
                 app = _app;
                 pres = ComLate.GetObject(app, "ActivePresentation");
             }
             if (pres == IntPtr.Zero) return default;
             D("Poll: ActivePresentation 拿到了");
-            try
-            {
-                ComLate.TryGetString(pres, "Name", out string name);
-                ComLate.TryGetString(pres, "FullName", out string full);
-
-                int total = 0;
-                var slides = ComLate.GetObject(pres, "Slides");
-                if (slides != IntPtr.Zero)
-                {
-                    ComLate.TryGetInt(slides, "Count", out total);
-                    ComLate.Release(slides);
-                }
-
-                var snap = new PptSnapshot
-                {
-                    Connected = true,
-                    Key = MakeKey(name, full),
-                    Total = total,
-                };
-
-                // 放映窗口存在 = 正在全屏放映（非放映时属性为空）。
-                var ssw = ComLate.GetObject(pres, "SlideShowWindow");
-                if (ssw == IntPtr.Zero) return snap;
-                try
-                {
-                    int slide = 0, slideId = 0;
-                    var view = ComLate.GetObject(ssw, "View");
-                    if (view != IntPtr.Zero)
-                    {
-                        ComLate.TryGetInt(view, "CurrentShowPosition", out slide);
-                        var slideObj = ComLate.GetObject(view, "Slide");
-                        if (slideObj != IntPtr.Zero)
-                        {
-                            ComLate.TryGetInt(slideObj, "SlideID", out slideId);
-                            ComLate.Release(slideObj);
-                        }
-                        ComLate.Release(view);
-                    }
-                    return new PptSnapshot
-                    {
-                        Connected = true, Showing = true, Slide = slide, Total = total,
-                        SlideId = slideId, Key = snap.Key,
-                    };
-                }
-                finally { ComLate.Release(ssw); }
-            }
+            try { return ReadSnapshot(pres); }
             finally { ComLate.Release(pres); }
         }
         catch
         {
             return default;
         }
+    }
+
+    /// <summary>读一份文稿的当前状态（身份/页数走 1 秒缓存，页号按位置缓存）。</summary>
+    private PptSnapshot ReadSnapshot(IntPtr pres)
+    {
+        EnsureMeta(pres, out int total);
+        string key = MakeKey(_metaName, _metaFull);
+
+        // 放映窗口存在 = 正在全屏放映（非放映时属性为空）。
+        var ssw = ComLate.GetObject(pres, "SlideShowWindow");
+        if (ssw == IntPtr.Zero)
+        {
+            // 这家没在放映：每秒看一眼别家是不是正在放（不能被编辑态的 WPS 挡住 PowerPoint）。
+            TrySwitchToShowing();
+            return new PptSnapshot { Connected = true, Key = key, Total = total };
+        }
+        try
+        {
+            int slide = 0, slideId = 0;
+            var view = ComLate.GetObject(ssw, "View");
+            if (view != IntPtr.Zero)
+            {
+                ComLate.TryGetInt(view, "CurrentShowPosition", out slide);
+                slideId = ReadSlideId(pres, view, slide);
+                ComLate.Release(view);
+            }
+            return new PptSnapshot
+            {
+                Connected = true, Showing = true, Slide = slide, Total = total,
+                SlideId = slideId, Key = key,
+            };
+        }
+        finally { ComLate.Release(ssw); }
+    }
+
+    /// <summary>Name / FullName / Slides.Count：同一个 pres 下 1 秒最多读一次。</summary>
+    private void EnsureMeta(IntPtr pres, out int total)
+    {
+        long now = Environment.TickCount64;
+        if (pres == _metaPres && now < _metaUntilMs)
+        {
+            total = _metaTotal;
+            return;
+        }
+
+        total = 0;
+        ComLate.TryGetString(pres, "Name", out _metaName);
+        ComLate.TryGetString(pres, "FullName", out _metaFull);
+        var slides = ComLate.GetObject(pres, "Slides");
+        if (slides != IntPtr.Zero)
+        {
+            ComLate.TryGetInt(slides, "Count", out total);
+            ComLate.Release(slides);
+        }
+        _metaPres = pres;
+        _metaTotal = total;
+        _metaUntilMs = now + 1000;
+    }
+
+    /// <summary>SlideID：同一 pres + 同一放映位置下 1 秒内不重读（换讲稿/换页会立即失效）。</summary>
+    private int ReadSlideId(IntPtr pres, IntPtr view, int slide)
+    {
+        long now = Environment.TickCount64;
+        if (pres == _idPres && slide == _idSlide && now < _idUntilMs) return _idSlideId;
+
+        int slideId = 0;
+        var slideObj = ComLate.GetObject(view, "Slide");
+        if (slideObj != IntPtr.Zero)
+        {
+            ComLate.TryGetInt(slideObj, "SlideID", out slideId);
+            ComLate.Release(slideObj);
+        }
+        if (slideId > 0)
+        {
+            _idPres = pres;
+            _idSlide = slide;
+            _idSlideId = slideId;
+            _idUntilMs = now + 1000;
+        }
+        return slideId;
+    }
+
+    /// <summary>
+    /// `ActivePresentation` 读空 = 旧连接已经没用了（WPS 文档关了 / 进程还吊着）。
+    /// 立即放掉 `_app` 与启动时抱住的引用，再扫一次 ROT 找当前真正开着的实例；
+    /// 1 秒最多一次，避免"只开了编辑器没开文稿"时每 200ms 扫一圈 ROT。
+    /// </summary>
+    private bool RecoverLostPresentation()
+    {
+        long now = Environment.TickCount64;
+        if (now < _nextPresRecoverMs) return false;
+        _nextPresRecoverMs = now + 1000;
+
+        D("ActivePresentation 读空：放掉旧连接，重扫 ROT");
+        PptLaunch.ReleaseHeldRefs();
+        ComLate.Release(_app);
+        _app = IntPtr.Zero;
+        _appProgId = "";
+        InvalidateCaches();
+
+        _app = RotFindApplication(out _appProgId);
+        if (_app == IntPtr.Zero) { _appProgId = ""; return false; }
+        D($"重新连上：{_appProgId}");
+        return true;
+    }
+
+    /// <summary>
+    /// 当前实例有文稿但没在放映（例如 WPS 停在编辑态）时，每秒看一次 ROT：
+    /// 若另一家 PowerPoint/WPS 正在全屏放映，立刻切过去——不能被未放映的那家挡住。
+    /// </summary>
+    private void TrySwitchToShowing()
+    {
+        long now = Environment.TickCount64;
+        if (now < _nextRotRescanMs) return;
+        _nextRotRescanMs = now + 1000;
+
+        var found = RotFindApplication(out string progId);
+        if (found == IntPtr.Zero) return;
+        if (PriorityOf(found) < 2) { ComLate.Release(found); return; }   // 不是"有放映窗"的
+        D($"发现正在放映的实例（{progId}）：切换连接");
+        ComLate.Release(_app);
+        _app = found;
+        _appProgId = progId;
+        InvalidateCaches();
+    }
+
+    private void InvalidateCaches()
+    {
+        _metaPres = IntPtr.Zero; _metaUntilMs = 0;
+        _idPres = IntPtr.Zero; _idUntilMs = 0;
     }
 
     public void Next() => InvokeView("Next");
@@ -158,7 +258,8 @@ internal sealed class PptComSource : IPptSource
                 {
                     var view = ComLate.GetObject(ssw, "View");
                     if (view == IntPtr.Zero) return;
-                    try { ComLate.Invoke1Int(view, "GotoSlide", slide); }
+                    // 带 ResetSlide = msoTrue：从页号面板跳回已播过的页时，动画会重新播放。
+                    try { ComLate.Invoke2Int(view, "GotoSlide", slide, ComLate.MsoTrue); }
                     finally { ComLate.Release(view); }
                 }
                 finally { ComLate.Release(ssw); }
@@ -204,6 +305,8 @@ internal sealed class PptComSource : IPptSource
             if (ComLate.TryGetString(_app, "Name", out _)) return _app;
             ComLate.Release(_app);
             _app = IntPtr.Zero;
+            _appProgId = "";
+            InvalidateCaches();
         }
 
         _app = RotFindApplication(out _appProgId);
@@ -235,7 +338,14 @@ internal sealed class PptComSource : IPptSource
         ComLate.Release(_app);
         _app = IntPtr.Zero;
         _appProgId = "";
+        InvalidateCaches();
 
+        // **先连系统里已经在跑的那一家**：ROT 扫描不经过注册表，不会被 WPS 的
+        // `PowerPoint.Application` 劫持带偏（先开 WPS 再关、再开 PowerPoint 的场景）。
+        _app = RotFindApplication(out _appProgId);
+        if (_app != IntPtr.Zero) { D($"ROT 重连成功：{_appProgId}"); return true; }
+
+        // ROT 里没有（自动化实例没注册）：才退回 CoCreateInstance。
         if (ProcRunning("wpp") && TryAttach("KWPP.Application")) return true;
         if (ProcRunning("POWERPNT") && TryAttach("PowerPoint.Application")) return true;
         return false;
@@ -367,10 +477,21 @@ internal sealed class PptComSource : IPptSource
         return best;
     }
 
+    /// <summary>微软 PowerPoint 原生 Application CLSID（`!{CLSID}` 形态）。</summary>
+    private const string PowerPointNativeMoniker = "!{91493441-5A91-11CF-8700-00AA0060263B}";
+
     /// <summary>这个名字是不是"某个 PPT 应用实例"的 moniker（!{CLSID}）。</summary>
-    private static bool IsAppMoniker(string display, out string progId)
+    internal static bool IsAppMoniker(string display, out string progId)
     {
         progId = null;
+        // **微软 PowerPoint 原生 CLSID 硬编码**（2026-11-23）：WPS 装过以后常把
+        // `PowerPoint.Application` 的注册表指向自己；按 ProgID 反查 CLSID 就认不出
+        // 已经开着的微软 PowerPoint（症状：先开 WPS 再关、再开 PowerPoint，条不来）。
+        if (string.Equals(display, PowerPointNativeMoniker, StringComparison.OrdinalIgnoreCase))
+        {
+            progId = "PowerPoint.Application";
+            return true;
+        }
         foreach (var id in ProgIds)
         {
             try

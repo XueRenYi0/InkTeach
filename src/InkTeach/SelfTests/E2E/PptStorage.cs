@@ -458,6 +458,21 @@ internal sealed partial class App
         Check("进放映：切到第 1 页（键 = SlideID）", Doc.PageKey == 256, $"页键 {Doc.PageKey}");
         Check("进放映：桌面批注**看不见了**（完全隔离）", Doc.Strokes.Count == 0, $"{Doc.Strokes.Count} 条");
 
+        // ---- ①.1 空页翻页：**一次盘都不碰**（2026-11-23 卡顿收口）----
+        // 以前每翻一页都排一次同步删除（哪怕盘上根本没有这一页）；现在先问 HasPageFile。
+        {
+            PptStore.ResetDiskOpsForTest();
+            fake.Slide = 2; fake.SlideId = 257;
+            Step();
+            fake.Slide = 1; fake.SlideId = 256;
+            Step();
+            Check("空页来回翻：写/删盘 0 次", PptStore.DiskOpsForTest == 0,
+                  $"盘操作 {PptStore.DiskOpsForTest} 次");
+            Check("空页来回翻：盘上没留下空文件",
+                  !PptStore.HasPageFile(fake.Key, 256) && !PptStore.HasPageFile(fake.Key, 257),
+                  $"256={PptStore.HasPageFile(fake.Key, 256)}，257={PptStore.HasPageFile(fake.Key, 257)}");
+        }
+
         // ---- ①.2 危险顺序：**面板先开着，PptMode 才打开**——第一次定位不许被顶走 ----
         //
         // 用户 2026-10-01 实测："先开放映、再开「更多」"条不动——那是**安全顺序**：
@@ -694,6 +709,32 @@ internal sealed partial class App
         Check("点了“下一页”之后页跟着变（第 3 页）", Doc.PageKey == 258, $"页键 {Doc.PageKey}");
         Check("到末页再点“下一页”不越界（PPT 自己夹住）",
               fake.Slide == 3, $"PPT 第 {fake.Slide} 页");
+
+        // ---- ⑧.2 放映 + 未开白板：**↑↓←→ 全部给 PPT 翻页**（兼容翻页笔，2026-11-23）----
+        // 翻页笔的"上一页/下一页"常发 ↑/↓；以前 ↑↓ 被当成滚画布，翻页笔只成功一半。
+        {
+            Doc.Selected.Clear();
+            int prev0 = fake.PrevCalls, next0 = fake.NextCalls;
+            RunActionForTest(KeyAction.NudgeUp);
+            Step();
+            Check("放映中 ↑：翻上一页（PPT Prev）", fake.PrevCalls == prev0 + 1,
+                  $"PrevCalls={fake.PrevCalls}（应 {prev0 + 1}）");
+
+            RunActionForTest(KeyAction.NudgeDown);
+            Step();
+            Check("放映中 ↓：翻下一页（PPT Next）", fake.NextCalls == next0 + 1,
+                  $"NextCalls={fake.NextCalls}（应 {next0 + 1}）");
+
+            RunActionForTest(KeyAction.NudgeLeft);
+            Step();
+            Check("放映中 ←：翻上一页（PPT Prev）", fake.PrevCalls == prev0 + 2,
+                  $"PrevCalls={fake.PrevCalls}（应 {prev0 + 2}）");
+
+            RunActionForTest(KeyAction.NudgeRight);
+            Step();
+            Check("放映中 →：翻下一页（PPT Next）", fake.NextCalls == next0 + 2,
+                  $"NextCalls={fake.NextCalls}（应 {next0 + 2}）");
+        }
 
         // ---- ⑧.5 PPT 控件条（PptBar）：2026-09-26 定形态，2026-11-15 拆出 ☰ ----
         //      一条、默认屏幕左下角、可拖可记；点箭头翻页、点页码开页号面板、
@@ -1228,6 +1269,26 @@ internal sealed partial class App
                   && PptMenuItemText(2) == "历史板书"
                   && PptMenuItemText(3) == "退出白板",
                   $"板开={BoardOn} slot={Doc.PageKey} 菜单={PptMenuItemText(1)} / {PptMenuItemText(2)} / {PptMenuItemText(3)}");
+
+            // 白板开着时 ↑↓ 仍然是滚白板，绝不翻 PPT（2026-11-23 的方向键改动不能带偏它）。
+            {
+                Doc.Selected.Clear();
+                int prevB = fake.PrevCalls, nextB = fake.NextCalls;
+                float camB = ViewOffsetY;
+                RunActionForTest(KeyAction.NudgeDown);
+                SettleFrames(80);
+                Check("白板 + 放映：↓ 滚白板、不翻 PPT",
+                      fake.NextCalls == nextB && fake.PrevCalls == prevB
+                      && Doc.PageKey == InkDocument.BoardPageKey
+                      && ViewOffsetY < camB - 0.5f,
+                      $"Next/Prev={fake.NextCalls}/{fake.PrevCalls}，相机 {camB:F0}→{ViewOffsetY:F0}");
+                RunActionForTest(KeyAction.NudgeUp);
+                SettleFrames(80);
+                Check("白板 + 放映：↑ 滚回白板、也不翻 PPT",
+                      fake.NextCalls == nextB && fake.PrevCalls == prevB
+                      && MathF.Abs(ViewOffsetY - camB) < 1f,
+                      $"Next/Prev={fake.NextCalls}/{fake.PrevCalls}，相机 {ViewOffsetY:F0}");
+            }
 
             var boardMark = new Stroke { Tool = Tool.Pen, Kind = StrokeKind.Freehand,
                                          Color = new Color4(0f, 0f, 0f, 1f), Width = 8f };
