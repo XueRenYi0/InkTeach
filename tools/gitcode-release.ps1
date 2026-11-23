@@ -84,7 +84,11 @@ foreach ($f in $uploads) {
     if ($existing -contains $leaf) { Write-Host "  附件已在：$leaf" -ForegroundColor DarkGray; continue }
     $up = curl.exe -s --max-time 60 "$api/releases/$tag/upload_url?access_token=$tok&file_name=$leaf" | ConvertFrom-Json
     if (-not $up.url) { throw "取 upload_url 失败：$leaf" }
-    $cargs = @('-s', '-o', 'NUL', '-w', '%{http_code}', '--max-time', '1800', '-X', 'PUT', '--data-binary', "@$f")
+    # **必须关掉 Expect: 100-continue**（2026-11-23 发 9.9.8 踩到）：curl 对 >1KB 的 PUT 默认先发
+    # `Expect: 100-continue` 等服务器放行，GitCode 的 OBS 上传端点会先回一个 `HTTP/1.1 100 Continue`
+    # 就断在这——`%{http_code}` 只剩 `100`，脚本报"上传失败（http=100）"，其实一个字节都没传上去。
+    # `-H 'Expect:'`（空值）= 直接发 body，实测回 200。
+    $cargs = @('-s', '-o', 'NUL', '-w', '%{http_code}', '-H', 'Expect:', '--max-time', '1800', '-X', 'PUT', '--data-binary', "@$f")
     if ($up.headers) { foreach ($p in $up.headers.PSObject.Properties) { $cargs += @('-H', ("{0}: {1}" -f $p.Name, $p.Value)) } }
     $cargs += $up.url
     $code = & curl.exe @cargs
