@@ -1,14 +1,14 @@
 {
-    "version":  "9.9.7",
+    "version":  "9.9.8",
     "date":  "2026-11-23",
     "setup":  {
                   "gh":  "https://github.com/XueRenYi0/InkTeach/releases/latest/download/InkTeach-Setup.exe",
-                  "cn":  "https://gitcode.com/XueRenYI0/InkTeach-Releases/releases/download/v9.9.7/InkTeach-Setup.exe",
+                  "cn":  "https://gitcode.com/XueRenYI0/InkTeach-Releases/releases/download/v9.9.8/InkTeach-Setup.exe",
                   "mb":  14
               },
     "zip":  {
                 "gh":  "https://github.com/XueRenYi0/InkTeach/releases/latest/download/InkTeach-win-x64.zip",
-                "cn":  "https://gitcode.com/XueRenYI0/InkTeach-Releases/releases/download/v9.9.7/InkTeach-win-x64.zip",
+                "cn":  "https://gitcode.com/XueRenYI0/InkTeach-Releases/releases/download/v9.9.8/InkTeach-win-x64.zip",
                 "mb":  16.8
             },
     "highlights":  [
