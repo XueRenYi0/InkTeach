@@ -96,6 +96,7 @@ internal sealed class DocPatchCache : IDisposable
     private bool _disposed;
 
     private float _scale = 1f;
+    private volatile bool _invert;  // 深色护眼：补丁块渲完也要反色（见 SetInvert）
     private bool _suspended;        // 穿透/板不透明：别问、别渲
     private bool _needsMore;        // 上一拍结论：还有页缺补丁（含"等落稳"）
     private RectF _lastVisible;
@@ -108,10 +109,8 @@ internal sealed class DocPatchCache : IDisposable
     /// <summary>
     /// 空闲内存清理的到点时刻（毫秒，0 = 没有待办）。**只在 UI 线程读写**；
     /// 只在 **&gt;100% → ≤100%** 那一下排（`InkEngine.SetDocZoomCore` 调 <see cref="ScheduleIdleTrim"/>）。
-    /// 缩回 100% 时补丁位图整层放掉，但那一块 ~25MB 的 LOH 和 D2D/DXGI 驱动缓存不会立刻
-    /// 还给系统；停手 800ms 后再收一次，回到**稳定但不清零**（单槽照留，见 <see cref="_spare"/>）。
-    /// 归这个组合对象管（ADR-005 D3）；文档关掉 / 页让位时由 <see cref="ReleaseAll"/> /
-    /// <see cref="Dispose"/> 一并清掉。
+    /// 缩回 100% 时补丁位图整层放掉，但那块 ~25MB 的 LOH 和 D2D/DXGI 驱动缓存不会立刻还给系统；
+    /// 停手 800ms 后再收一次，回到**稳定但不清零**（单槽照留，见 <see cref="_spare"/>）。
     /// </summary>
     private double _trimAtMs;
 
@@ -119,23 +118,15 @@ internal sealed class DocPatchCache : IDisposable
     private int _trimCount;
 
     /// <summary>
-    /// 补丁位图的**单槽复用缓冲**（2026-11-16 内存抖动修复）。
-    ///
-    /// 为什么：每块补丁是一块 ~25MB 的 `byte[]`（2520×1680×4），走 LOH；缩放来回一轮就
-    /// 新分配一块，而 LOH 空闲时不回收 → 私有字节每轮 +40~50MB。补丁的 CPU 像素只活到
-    /// "上传 GPU"那一刻（`Overlay.Content` 的 `DropCpuBytes`），之后什么都不读它，
-    /// 所以**一块就够**：worker 取走 → 渲 → 采纳/丢弃时原地还回来。
-    ///
+    /// 补丁位图的**单槽复用缓冲**（2026-11-16 内存抖动修复）：一块 ~25MB 的 `byte[]` 走 LOH，
+    /// 每轮新分配会让私有字节 +40~50MB；CPU 像素只活到上传 GPU，所以**一块就够**。
     /// 只在 <see cref="_gate"/> 里读写（worker 与 UI 的释放路径都碰它）。
     /// </summary>
     private byte[] _spare;
 
     private int _reuseCount;
 
-    /// <summary>
-    /// 补丁变了哪几块（画布矩形）。渲染层照单 MarkDirty，**由引擎在所有窗口都渲染完之后清**
-    /// （每个窗口都要铺一遍自己那块分块；哪个窗口先清，后面的窗口就漏铺）。
-    /// </summary>
+    /// <summary>补丁变了哪几块（画布矩形）。渲染层照单 MarkDirty，由引擎在所有窗口渲染完之后清。</summary>
     internal readonly List<RectF> DirtyRects = new();
 
     /// <summary>提交/撤销计数（自检口径：同一倍率不该反复重做）。</summary>
@@ -144,10 +135,7 @@ internal sealed class DocPatchCache : IDisposable
     public int RenderCount { get; private set; }
     public int FailCount { get; private set; }
 
-    /// <summary>
-    /// 诊断口径：`TakeBuffer` **命中单槽**的次数（= 没有新分配那块 ~25MB）。
-    /// 第二次 100→200 起就该一直涨；不涨说明池子没接上（`--zoomtest` 会断言）。
-    /// </summary>
+    /// <summary>诊断口径：`TakeBuffer` **命中单槽**的次数（= 没有新分配那块 ~25MB）。`--zoomtest` 会断言。</summary>
     public int PatchBufferReuseCount => Volatile.Read(ref _reuseCount);
 
     /// <summary>诊断口径：空闲内存清理实际执行了几次（每次 `&gt;100% → ≤100%` 的跨档最多 1 次）。</summary>
@@ -244,15 +232,9 @@ internal sealed class DocPatchCache : IDisposable
     // ======================================================================
 
     /// <summary>
-    /// 换倍率。
-    ///
-    /// **不立刻放掉当前补丁**（2026-11-16 评审 P1-3）：代次 +1（排队/在飞/等采纳的旧倍率结果
-    /// 全部作废），但已经采纳的补丁**继续画着**——`CanvasRect` 与倍率无关，旧像素被拉伸一点，
-    /// 至少不会出现"既没补丁也没高清"的灰闪。它只是**不再算作覆盖**（`Covered` 认倍率），
-    /// 所以落稳后会按新倍率另渲一块，采纳那一刻才把旧的换掉。
-    ///
-    /// 100%（及以下）仍然**全部放掉**：补丁没有意义，底图就是目标分辨率，
-    /// 绘制路径和以前逐字节一致。
+    /// 换倍率。**不立刻放掉当前补丁**（2026-11-16 评审 P1-3）：代次 +1（排队/在飞/等采纳的旧倍率
+    /// 结果全部作废），已采纳的继续画着（旧像素被拉伸一点，总比灰闪好）；它不再算覆盖，
+    /// 落稳后按新倍率另渲一块，采纳时才换掉。100% 及以下仍全部放掉（底图就是目标分辨率）。
     /// </summary>
     public void SetScale(float scale)
     {
@@ -265,6 +247,16 @@ internal sealed class DocPatchCache : IDisposable
         _needsMore = scale > 1.0001f;
         if (scale > 1.0001f) _failed.Clear();  // 换倍率后允许重试一次（失败过的块这次也许渲得出来）
         else DropPatches();                    // ≤100%：补丁全放（脏区照记，渲染层重铺底图）
+    }
+
+    /// <summary>深色护眼：补丁块渲完要不要反色。代次 +1 作废在途 / 排队的块；
+    /// 已采纳的块交给 <see cref="ReleaseAll"/> 放掉（否则底图深了、中间一块还是白的）。</summary>
+    public void SetInvert(bool on)
+    {
+        if (_invert == on) return;
+        if (_disposed) { _invert = on; return; }
+        lock (_gate) { _invert = on; _generation++; _queued = null; _ready?.Image?.Release(); _ready = null; }
+        ReleaseAll();
     }
 
     /// <summary>
@@ -688,12 +680,14 @@ internal sealed class DocPatchCache : IDisposable
         while (true)
         {
             Request req;
+            bool invert;
             lock (_gate)
             {
                 if (_stop) break;
                 req = _queued;
                 _queued = null;
                 _inFlight = req;
+                invert = _invert;      // 与请求同一把锁里读：开关翻转时代次也会 +1，这份结果自己会作废
             }
             if (req == null)
             {
@@ -720,6 +714,8 @@ internal sealed class DocPatchCache : IDisposable
             bool adopted = false;
             if (bgra != null && bgra.Length >= (long)need)
             {
+                // 深色护眼：只反这一块自己的区域（buf 可能比 need 大——单槽复用）。
+                if (invert) DocColorInvert.ApplyInPlace(bgra, need);
                 // 回调 = 这一块 CPU 像素被丢掉的那一刻（上传后 / 没采纳就作废）还回单槽。
                 var img = ImageData.Adopt(req.Rw, req.Rh, bgra, false, ReturnBuffer);
                 if (img != null)

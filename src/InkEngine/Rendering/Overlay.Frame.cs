@@ -95,7 +95,7 @@ internal sealed partial class OverlayWindow
                 app.BoardOn && app.DocView.IsOpen && app.BoardOpacity < 0.999f;
             _ctx.PrimitiveBlend = PrimitiveBlend.Copy;
             _ctx.FillRectangle(box, boardOverDocTranslucentDbg
-                ? Brush(app.DocPaperColor) : BoardBrush(app));
+                ? Brush(app.ActiveDocPaperColor) : BoardBrush(app));
             _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
 
             if (app.NoContentCache)

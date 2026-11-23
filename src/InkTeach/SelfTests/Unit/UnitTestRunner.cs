@@ -80,6 +80,8 @@ internal static class UnitTestRunner
             UnitTestsCore.CaptureButtons_ThreeButtons_OrderAndClampedInViewport),
         (nameof(UnitTestsCore.BoardCapturePlacement_NormalAndTall_TopCenteredWithWriteSpace),
             UnitTestsCore.BoardCapturePlacement_NormalAndTall_TopCenteredWithWriteSpace),
+        (nameof(UnitTestsCore.DocColorInvert_PreservesHue_And_SoftensBlackWhite),
+            UnitTestsCore.DocColorInvert_PreservesHue_And_SoftensBlackWhite),
         (nameof(UnitTestsCamera.Camera_Helpers_RoundTrip_At_Scale1),
             UnitTestsCamera.Camera_Helpers_RoundTrip_At_Scale1),
         (nameof(UnitTestsCamera.Camera_Helpers_ScaleFormula_IsSymmetric),

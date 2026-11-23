@@ -1,6 +1,6 @@
 # 目录树（自动生成，勿手改）
 
-> 生成：2026-11-22 ／ 脚本：`tools/gen-tree-map.ps1`
+> 生成：2026-11-23 ／ 脚本：`tools/gen-tree-map.ps1`
 > 用途：目录 = 功能域、文件名 = 功能块；先看树定位目录，再看行数决定读哪一段。
 > 语义导航（“某个需求该看哪 1–2 个文件”）看 `docs/module-map.md`；段落行号看 `docs/section-map.md`。
 
@@ -22,8 +22,8 @@
     **InkEngine/Core/**
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 170 行
-      - `Engine.cs` 2,898 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
-      - `Engine.Host.cs` 2,393 行 — 启动、消息循环、窗口过程（WndProc）。
+      - `Engine.cs` 2,921 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
+      - `Engine.Host.cs` 2,396 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
       - `Engine.Selection.Gesture.cs` 1,466 行 — 框选/套索/拖动/对齐吸附/美化入口。
@@ -49,11 +49,11 @@
 
     **InkEngine/Doc/**
       - `DocImageSource.cs` 292 行
-      - `DocImport.cs` 793 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
+      - `DocImport.cs` 800 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
       - `DocImport.Pan.cs` 506 行 — 文档「手掌」拖页 + 双指捏合缩放 / 放大后平移 / 触控板捏合缩放（文档相机）。
       - `DocMemory.cs` 86 行
-      - `DocPages.cs` 602 行 — 文档页底层：页配方、惰性生成、视口窗口回收；缩放只记相机倍率（页位图恒 1×）。
-      - `DocPatch.cs` 800 行 — PDF 页的**视口高清补丁**：1× 整页底图之上，只为可见区域渲一块设备分辨率小图（单 worker、单在飞、落稳 120ms）。
+      - `DocPages.cs` 690 行 — 文档页底层：页配方、惰性生成、视口窗口回收；缩放只记相机倍率（页位图恒 1×）。
+      - `DocPatch.cs` 796 行 — PDF 页的**视口高清补丁**：1× 整页底图之上，只为可见区域渲一块设备分辨率小图（单 worker、单在飞、落稳 120ms）。
       - `DocResume.cs` 340 行 — 文档「上次看到第 N 页」恢复提示：读写位置、卡片命中、继续/从头、落盘节流。
       - `DocResumeLayout.cs` 97 行 — 文档恢复提示卡的几何：卡片 / 两行字 / 两个按钮的矩形（画与命中同一份）。
       - `DocResumeStore.cs` 135 行 — 文档「上次看到第几页」的落盘：一文档一目录一小文本文件（跨会话恢复用）。
@@ -73,7 +73,7 @@
     **InkEngine/Input/**
       - `CurveFit.cs` 88 行
       - `DwellAssist.cs` 122 行
-      - `Engine.Capture.cs` 520 行 — 截图状态、确认/取消、手柄与读数。
+      - `Engine.Capture.cs` 533 行 — 截图状态、确认/取消、手柄与读数。
       - `Engine.Clipboard.cs` 506 行
       - `Engine.Input.cs` 2,034 行 — 指针输入、停顿成型、动态橡皮。
       - `Engine.TouchGestures.cs` 792 行 — 触摸手势：单指/双指/三指/长按/惯性。
@@ -112,13 +112,13 @@
       - `Privacy.cs` 62 行
       - `SelfTestCancel.cs` 140 行
       - `Toast.cs` 52 行
-      - `Tooltip.cs` 269 行
+      - `Tooltip.cs` 285 行
       - `UiScale.cs` 63 行
       - `Update.cs` 994 行 — 自动更新：版本比较、清单解析、下载/换壳。
       - `UpdateProbe.cs` 364 行
 
     **InkEngine/Ppt/**
-      - `Ppt.cs` 1,844 行 — PPT 批注：放映联动、按页落盘、翻页。
+      - `Ppt.cs` 1,920 行 — PPT 批注：放映联动、按页落盘、翻页。
       - `PptBar.cs` 407 行
       - `PptComLate.cs` 319 行
       - `PptComSource.cs` 440 行
@@ -137,10 +137,10 @@
       - `Icons.Paths.cs` 142 行
       - `LegacyOverlayLayer.cs` 74 行
       - `Overlay.Capture.cs` 832 行 — 截图取景框绘制：遮罩/准线/读数/手柄。
-      - `Overlay.Content.cs` 766 行 — 内容层合成：分块光栅、相机变换、缩放合成、滚动条。
+      - `Overlay.Content.cs` 774 行 — 内容层合成：分块光栅、相机变换、缩放合成、滚动条。
       - `Overlay.cs` 1,457 行 — 覆盖层主文件：窗口/初始化/生命周期。
       - `Overlay.Frame.cs` 1,724 行 — 覆盖层帧渲染：内容/界面/装饰合成。
-      - `Overlay.PptBar.cs` 790 行 — PPT 条/回放条/滚动条绘制。
+      - `Overlay.PptBar.cs` 794 行 — PPT 条/回放条/滚动条绘制。
       - `Overlay.Radial.cs` 651 行 — 呼出盘绘制。
       - `Overlay.Readout.cs` 1,572 行 — 读数、收藏面板、滚动条、回放/PPT 条绘制。
       - `Overlay.SelectionBar.cs` 1,064 行 — 选中操作条/色板/字体/图层/菜单的绘制。
@@ -255,7 +255,7 @@
         - `Diagnostics.cs` 3,304 行 — 诊断/环境/性能 E2E。
         - `DocMem.cs` 792 行 — PDF 缩放内存归因诊断（--docmem）：WS/私有/托管/LOH/GPU/页位图/分块，含 100ms 峰值与回收后快照。
         - `DocResume.cs` 194 行 — 文档「上次看到第 N 页」恢复提示 E2E（挂在 --doctest 末尾的 F 组）。
-        - `Documents.cs` 1,524 行 — 文档导入 E2E。
+        - `Documents.cs` 1,575 行 — 文档导入 E2E。
         - `Erasers.cs` 1,003 行 — 橡皮擦 E2E（整笔/像素/动态）。
         - `FacesProbe.cs` 282 行
         - `GlyphEraseTest.cs` 59 行
@@ -309,9 +309,9 @@
         - `ZoomShots.cs` 776 行 — 文档缩放 E2E：出图（50/100/200/300 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
 
       **InkTeach/SelfTests/Unit/**
-        - `UnitTestRunner.cs` 151 行
+        - `UnitTestRunner.cs` 153 行
         - `UnitTests.Camera.cs` 65 行
-        - `UnitTests.Core.cs` 228 行
+        - `UnitTests.Core.cs` 272 行
         - `UnitTests.Overlay.cs` 84 行
 
     **InkUi/Ai/**

@@ -747,6 +747,9 @@ public partial class InkEngine
                 UiScale = UiScalePresets.Snap(usArg);
         // 上次用的选择方式（矩形 / 套索）
         if (GetUiPref("selMode") == "lasso") SelMode = SelectMode.Lasso;
+        // **文档「深色护眼」**（2026-11-23）：跨文档记住（"1" = 开；关就不写键）。
+        // 在偏好这一层读、不在"进文档"时读——开了护眼的老师下次直接打开 PDF 就该是深色。
+        DocDarkEye = GetUiPref("docDarkEye") == "1";
         // 触摸手势的旋钮（8.4.0）：双指总闸 / 手掌擦 / 三指擦 / 长按选择 / 两指点选 / 单指漫游。
         LoadTouchPrefs();
         // --notouch：触摸手势总开关**临时关掉**（保险丝 / A-B 对照；不写偏好）。

@@ -225,4 +225,48 @@ internal static class UnitTestsCore
         Check.True(900f - (tall.Y + drawnH) >= 900f * 0.44f, "下方至少留 ~45% 作答区", file: "贴白板");
         Check.Near((1600f - 300f * tall.Scale) * 0.5f, tall.X, 0.5f, file: "缩小后仍水平居中");
     }
+
+    [UnitTest]
+    internal static void DocColorInvert_PreservesHue_And_SoftensBlackWhite()
+    {
+        static (int B, int G, int R, int A) One(byte b, byte g, byte r, byte a = 255)
+        {
+            var buf = new byte[] { b, g, r, a };
+            InkEngine.DocColorInvert.ApplyInPlace(buf);
+            return (buf[0], buf[1], buf[2], buf[3]);
+        }
+
+        // 纯白 → 护眼底 #1A1C20（B=32, G=28, R=26）；alpha 原样。
+        var white = One(255, 255, 255);
+        Check.Equal(32, white.B, file: "白→底 B");
+        Check.Equal(28, white.G, file: "白→底 G");
+        Check.Equal(26, white.R, file: "白→底 R");
+        Check.Equal(255, white.A, file: "alpha 不动");
+
+        // 纯黑 → 护眼字 #E8EAED（B=237, G=234, R=232）。
+        var black = One(0, 0, 0);
+        Check.Equal(237, black.B, file: "黑→字 B");
+        Check.Equal(234, black.G, file: "黑→字 G");
+        Check.Equal(232, black.R, file: "黑→字 R");
+
+        // 纯红 / 纯蓝：色相、饱和度不变（明度反转对它们 delta = 0），仍以本色为主。
+        var red = One(0, 0, 255);
+        Check.True(red.R > 200 && red.G < 40 && red.B < 40,
+                   $"纯红必须还是红：({red.R},{red.G},{red.B})", file: "保色反色");
+        var blue = One(255, 0, 0);
+        Check.True(blue.B > 200 && blue.R < 40 && blue.G < 40,
+                   $"纯蓝必须还是蓝：({blue.R},{blue.G},{blue.B})", file: "保色反色");
+
+        // byteCount 之外一个字节都不许动（补丁缓冲是单槽复用的，尾巴上是上一块的数据）。
+        var tail = new byte[8] { 255, 255, 255, 255, 7, 8, 9, 10 };
+        InkEngine.DocColorInvert.ApplyInPlace(tail, 4);
+        Check.Equal((byte)7, tail[4], file: "越界 4");
+        Check.Equal((byte)8, tail[5], file: "越界 5");
+        Check.Equal((byte)9, tail[6], file: "越界 6");
+        Check.Equal((byte)10, tail[7], file: "越界 7");
+
+        // 非 4 倍数 / null 不能抛（尾巴按半像素丢弃）。
+        InkEngine.DocColorInvert.ApplyInPlace(new byte[3], 3);
+        InkEngine.DocColorInvert.ApplyInPlace(null);
+    }
 }

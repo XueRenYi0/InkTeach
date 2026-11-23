@@ -1432,7 +1432,7 @@ internal sealed partial class OverlayWindow : IDisposable
         var want = app.BoardOn
             ? new Color4(app.BoardColor.R, app.BoardColor.G, app.BoardColor.B,
                          app.BoardColor.A * app.BoardOpacity)
-            : (app.DocView.IsOpen && !app.PassThrough ? app.DocPaperColor : Transparent);
+            : (app.DocView.IsOpen && !app.PassThrough ? app.ActiveDocPaperColor : Transparent);
         if (want.R != _boardBrushColor.R || want.G != _boardBrushColor.G
             || want.B != _boardBrushColor.B || want.A != _boardBrushColor.A)
         {

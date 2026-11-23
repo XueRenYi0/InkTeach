@@ -497,6 +497,24 @@ internal sealed class DocPages
         foreach (var p in _pages) ReleasePage(p);
     }
 
+    /// <summary>
+    /// **外观变了**（深色护眼开 / 关）：已生成的页位图全是旧外观，必须整层重来。
+    ///
+    /// 三件事一起做，缺一不可：
+    ///   · <see cref="ReleaseAll"/>：旧像素留在内存里也画不出来（下一拍会按新外观重生成）；
+    ///   · <see cref="FullDirty"/> + 清脏区：分块缓存里烘着旧外观的像素，不整层作废会留着上一张；
+    ///   · <see cref="_renderGeneration"/> +1：**在途的后台渲染**是按旧外观渲的，落地即丢
+    ///     （否则切开关那一刻正好渲完的一页会把"没反色"的那页贴上来）。
+    /// </summary>
+    public void InvalidateForAppearance()
+    {
+        ReleaseAll();
+        DirtyRects.Clear();
+        FullDirty = true;
+        Version++;
+        _renderGeneration++;
+    }
+
     /// <summary>白板冻结页用：只留钉住的那一页，其余位图放掉（板不透明时也不白占内存）。</summary>
     public void ReleaseAllExceptPinned()
     {
@@ -600,3 +618,73 @@ internal sealed class DocPages
         return lo;
     }
 }
+
+/// <summary>
+/// **柔和保色反色**（深色护眼）：把白底 PDF / 图片页在内存里换成"深灰黑底 + 保色明度反转"。
+///
+/// ## 为什么不是简单取反
+/// `255 - v` 会把纯红 `(255,0,0)` 变成青色 `(0,255,255)`——彩色插图整幅偏色，
+/// 老师看到的图和打印出来的不是一张。这里用的是 **HSL 明度反转**：
+/// 保持色相与饱和度不变，只把明度 L 换成 `1-L`。代数上的等价比换算是
+/// `delta = 255 - max - min`，三个通道同加 `delta`（越界由 byte 强制转换自然截断到 0..255）：
+///   · 纯白 `(255,255,255)` → `delta = -255` → `(0,0,0)`；
+///   · 纯黑 `(0,0,0)` → `delta = 255` → `(255,255,255)`；
+///   · 纯红 `(255,0,0)` → `delta = 0` → 原样（色相/饱和度不变）。
+///
+/// ## 为什么映射到护眼区间
+/// 纯黑底 `#000` 在教室大屏上仍然刺眼（大面积高对比），而且和"没加载"的占位块分不清。
+/// 反色结果再线性压进 `[#1A1C20, #E8EAED]`（底 → 字）：黑变成柔和的深灰黑底，
+/// 白变成略暖的高亮字，页缝与占位块之间有明确的层次。
+///
+/// ## 为什么用查找表
+/// 一页 2520×1680 = 4.2M 像素，逐像素算乘除在后台线程上也够贵；三张 `byte[256]`
+/// 静态表把"每通道一次除法"降成一次数组读，且 `byteCount` 内**零堆分配**。
+///
+/// 输入是全不透明的 BGRA（`ImageData` 的约定，alpha 恒 255）：这里**不动 alpha**。
+/// </summary>
+internal static class DocColorInvert
+{
+    /// <summary>底 `#1A1C20` 的 B/G/R 分量（映射下界）。</summary>
+    private const int BaseB = 32, BaseG = 28, BaseR = 26;
+    /// <summary>区间跨度：`#E8EAED - #1A1C20` = (205, 206, 206)（映射上界）。</summary>
+    private const int SpanB = 205, SpanG = 206, SpanR = 206;
+
+    /// <summary>通道值 → 护眼区间内的新值（只读，进程内共享）。</summary>
+    private static readonly byte[] MapB = BuildMap(BaseB, SpanB);
+    private static readonly byte[] MapG = BuildMap(BaseG, SpanG);
+    private static readonly byte[] MapR = BuildMap(BaseR, SpanR);
+
+    private static byte[] BuildMap(int baseV, int span)
+    {
+        var t = new byte[256];
+        for (int v = 0; v < 256; v++) t[v] = (byte)(baseV + (v * span + 127) / 255);
+        return t;
+    }
+
+    /// <summary>
+    /// 原地反色前 <paramref name="byteCount"/> 字节（-1 = 整块）。
+    /// 不是 4 的倍数的尾巴**不动**（半像素没法反色）；`null` 直接返回。
+    /// </summary>
+    public static void ApplyInPlace(byte[] bgra, int byteCount = -1)
+    {
+        if (bgra == null) return;
+        int len = byteCount < 0 ? bgra.Length : Math.Min(byteCount, bgra.Length);
+        len &= ~3;                                  // 只处理完整的 BGRA 像素
+        for (int i = 0; i < len; i += 4)
+        {
+            int b = bgra[i], g = bgra[i + 1], r = bgra[i + 2];
+            int max = Math.Max(r, Math.Max(g, b));
+            int min = Math.Min(r, Math.Min(g, b));
+            int delta = 255 - max - min;
+            // 明度反转后的通道值（byte 函数式转换自动截断，不需要额外 clamp）
+            int r1 = (byte)(r + delta);
+            int g1 = (byte)(g + delta);
+            int b1 = (byte)(b + delta);
+            bgra[i] = MapB[b1];
+            bgra[i + 1] = MapG[g1];
+            bgra[i + 2] = MapR[r1];
+            // alpha（i+3）保持原样
+        }
+    }
+}
+

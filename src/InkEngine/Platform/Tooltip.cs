@@ -106,7 +106,9 @@ public partial class InkEngine
             {
                 EngineTooltipHover(13, "菜单", null,
                     BoardOn ? "播放本屏 / 清空白板 / 历史板书 / 退出白板"
-                            : "自动保存 / 回放 / 清空 / 退出", PptBar.MenuCell(bar, DpiScale));
+                            : (!PptMode && DocView.IsOpen
+                                ? "自动保存 / 深色护眼 / 回放 / 清空 / 退出"
+                                : "自动保存 / 回放 / 清空 / 退出"), PptBar.MenuCell(bar, DpiScale));
                 return;
             }
             if ((PptBarZone)PptBarHover == PptBarZone.ZoomOut)
@@ -198,8 +200,22 @@ public partial class InkEngine
             };
         }
 
-        // 第 2 项（清除全部墨迹）的说明要**按模式说**：PPT 是整副演示，文档是整份文档
-        //（2026-10-14 改名时一起修的；别的几项文案本来就通用）。
+        // 文档菜单（2026-11-23 起五项：多了「深色护眼」）。**整张单独说**——
+        // 和 PPT 的下标从前三项就不一样（回放是第 3 项、清空第 4 项），
+        // 混在一个 switch 里写 ""i == 2 按模式说"迟早错位。
+        if (!PptMode && DocView.IsOpen)
+        {
+            return i switch
+            {
+                0 => ("自动保存墨迹", "翻页 / 退出时自动把这一份的批注存到本机"),
+                1 => ("深色护眼", "白底试卷换成柔和深灰黑底（文字反白、彩色插图不偏色）"),
+                2 => ("回放这一屏墨迹", "把这一屏的板书重演一遍"),
+                3 => ("清除全部墨迹", "整份文档的全部页面，点两次才清（可撤销）"),
+                _ => ("退出文档", "关掉文档页层，批注留在画布上"),
+            };
+        }
+
+        // 第 2 项（清除全部墨迹）的说明要**按模式说**：PPT 是整副演示。
         if (i == 2)
             return PptMode
                 ? ("清除全部墨迹", "这份演示文稿的全部页面，点两次才清（可撤销）")

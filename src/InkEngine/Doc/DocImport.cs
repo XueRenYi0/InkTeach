@@ -698,14 +698,20 @@ public partial class InkEngine
     private static float PrimaryScreenCenterX()
         => Native.GetSystemMetrics(0 /*SM_CXSCREEN*/) * 0.5f;
 
-    /// <summary>页生成的分派：图片走 GDI+（解码+裁切+缩放），PDF 走 PDFium（渲染进缓冲）。</summary>
+    /// <summary>页生成的分派：图片走 GDI+（解码+裁切+缩放），PDF 走 PDFium（渲染进缓冲）。
+    /// **深色护眼**在这里统一收口：两条路产出的都是 BGRA 底图，反一次就够
+    /// （后台线程渲完、直通模式当场渲，都经过这个方法）。</summary>
     private byte[] DocRenderSpec(DocPages.Spec spec)
-        => spec.Kind switch
+    {
+        byte[] buf = spec.Kind switch
         {
             0 => DocImageSource.RenderSpec(spec),
             1 => _pdfDoc?.RenderPage(spec.SourceIndex, spec.BitmapW, spec.BitmapH),
             _ => null,
         };
+        if (DocDarkEye && buf != null) DocColorInvert.ApplyInPlace(buf);
+        return buf;
+    }
 
     /// <summary>
     /// 停掉高清补丁线程（并放掉补丁位图）。**必须在 `_pdfDoc.Dispose()` 之前调**：
@@ -732,6 +738,7 @@ public partial class InkEngine
             () => DocView.Count,
             WakeForDocPage);
         DocPatch.SetScale(ViewScale);
+        DocPatch.SetInvert(DocDarkEye);     // 深色护眼：补丁块也要反（顺序在 SetScale 之后无所谓，代次都会 +1）
     }
 
     /// <summary>

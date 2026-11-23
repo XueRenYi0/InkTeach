@@ -50,6 +50,14 @@ internal sealed partial class OverlayWindow
         if (start < 0 || start >= pages.Count) return;
 
         ID2D1SolidColorBrush placeholder = null, failed = null, border = null;
+        // 深色护眼：占位块用比深色纸略亮一档的灰（浅灰在深底上是一块刺眼的白斑），
+        // 页边框改白线（黑线在 `#1A1C20` 上看不见）。
+        var placeholderColor = app.DocDarkEye
+            ? InkEngine.DarkEyePlaceholderColor
+            : new Color4(0.94f, 0.94f, 0.94f, 1f);
+        var borderColor = app.DocDarkEye
+            ? new Color4(1f, 1f, 1f, 0.14f)
+            : new Color4(0f, 0f, 0f, 0.22f);
         for (int i = start; i < end; i++)
         {
             var p = pages.At(i);
@@ -75,7 +83,7 @@ internal sealed partial class OverlayWindow
                 }
                 else
                 {
-                    placeholder ??= Brush(new Color4(0.94f, 0.94f, 0.94f, 1f));
+                    placeholder ??= Brush(placeholderColor);
                     _ctx.FillRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY),
                                        placeholder);
                 }
@@ -87,7 +95,7 @@ internal sealed partial class OverlayWindow
             }
             else
             {
-                placeholder ??= Brush(new Color4(0.94f, 0.94f, 0.94f, 1f));
+                placeholder ??= Brush(placeholderColor);
                 _ctx.FillRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY),
                                    placeholder);
             }
@@ -114,7 +122,7 @@ internal sealed partial class OverlayWindow
                 }
             }
 
-            border ??= Brush(new Color4(0f, 0f, 0f, 0.22f));
+            border ??= Brush(borderColor);
             _ctx.DrawRectangle(new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY),
                                border, 1f);
         }
@@ -424,7 +432,7 @@ internal sealed partial class OverlayWindow
             canvas.MinX - 1f, canvas.MinY - 1f, canvas.MaxX + 1f, canvas.MaxY + 1f);
         _ctx.PrimitiveBlend = PrimitiveBlend.Copy;
         _ctx.FillRectangle(clearRect,
-            boardOverDocTranslucent ? Brush(app.DocPaperColor) : BoardBrush(app));
+            boardOverDocTranslucent ? Brush(app.ActiveDocPaperColor) : BoardBrush(app));
         _ctx.PrimitiveBlend = PrimitiveBlend.SourceOver;
 
         // 白板模式：画**底纹**（方格/横线）。页界线的一屏一页逻辑仍保留在

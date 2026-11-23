@@ -173,8 +173,21 @@ public partial class InkEngine
         if (img == null) return false;
 
         bool wasBoard = BoardOn && Doc.PageKey == InkDocument.BoardPageKey;
+        // **深色护眼文档贴到白板**（2026-11-23）：先记下来处，切过去之后把白板一起调深——
+        // 否则一块亮白板突然接在深色试卷下面，眼睛要先"闪"一下才有对比。
+        bool fromDarkDoc = !wasBoard && !PptMode && DocView.IsOpen && DocDarkEye;
         if (!wasBoard) SetBoardFromUi(true);
         if (!BoardOn || Doc.PageKey != InkDocument.BoardPageKey) return false;   // 兜底：切不过去就只收场
+
+        if (fromDarkDoc)
+        {
+            // 老师自己选过深色板就别覆盖（只把"还是浅色"的那种换成护眼底）。
+            float boardLuma = 0.299f * BoardColor.R + 0.587f * BoardColor.G + 0.114f * BoardColor.B;
+            if (boardLuma > 0.5f) SetBoardColorFromUi(DarkEyeBoardColor);
+            // 黑笔在深底上等于隐身：直接换白笔（老师下一步就是写批注）。
+            float penLuma = 0.299f * CurrentColor.R + 0.587f * CurrentColor.G + 0.114f * CurrentColor.B;
+            if (penLuma < 0.25f) SetColorFromUi(new Color4(1f, 1f, 1f, 1f));
+        }
 
         if (CurrentBoardScreenHasContent())
         {

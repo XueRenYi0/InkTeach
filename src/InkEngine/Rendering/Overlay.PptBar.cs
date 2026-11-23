@@ -707,12 +707,12 @@ internal sealed partial class OverlayWindow
         var fmt = ReadoutFormatSmall(dpi);
         float padX = 16f * dpi;
 
-        for (int i = 0; i < InkEngine.PptMenuItemCount; i++)
+        for (int i = 0; i < app.PptMenuItemCount; i++)
         {
             app.PptMenuItemRectAt(i, out var item);
 
             // 分隔线画在"这一项和上一项之间"（一眼看出分组）
-            if (InkEngine.PptMenuDividerBefore(i) && i > 0)
+            if (app.PptMenuDividerBefore(i) && i > 0)
             {
                 app.PptMenuItemRectAt(i - 1, out var prev);
                 float y = (prev.MaxY + item.MinY) * 0.5f;
@@ -749,9 +749,13 @@ internal sealed partial class OverlayWindow
             if (st != null)
             {
                 float sw = MeasureTextWidth(st, fmt);
-                // 自动保存"开"用强调色（白板菜单的 0 是"播放本屏"，没有开关，不上色）
-                _scratch.Color = i == 0 && !app.BoardOn && app.PptAutoSaveOn
-                    ? theme.ActiveBg : theme.TextMuted;
+                // 开关处于"开"时用强调色（白板菜单的 0 是"播放本屏"，没有开关，不上色）。
+                // 文档菜单多一个「深色护眼」开关（第 2 项）。
+                bool docMode = !app.BoardOn && !app.PptMode && app.DocView.IsOpen;
+                bool on = docMode
+                    ? (i == 0 && app.PptAutoSaveOn) || (i == 1 && app.DocDarkEye)
+                    : i == 0 && !app.BoardOn && app.PptAutoSaveOn;
+                _scratch.Color = on ? theme.ActiveBg : theme.TextMuted;
                 _ctx.DrawText(st, fmt,
                               new Rect(item.MaxX - padX - sw, item.MinY, sw, item.MaxY - item.MinY),
                               _scratch);

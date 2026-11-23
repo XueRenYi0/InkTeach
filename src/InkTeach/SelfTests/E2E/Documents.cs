@@ -260,7 +260,17 @@ internal sealed partial class App
         int onP2 = ScreenProbe.CountNear(1000, 900, 100, 100, cr, cg, cb, 10);
         Check("第 2 页画上屏", onP2 > 9000, $"{onP2}/10000 像素");
         // 失败页（bad.png）→ 浅红占位 (252,230,230)
-        int onBad = ScreenProbe.CountNear(1000, 1620, 40, 40, 252, 230, 230, 8);
+        // ⚠ 探针读的是**屏幕**：低分辨率屏（高 < 1700）第三页整页在屏外，先滚到它进屏再采样
+        //   （1707×960 这类本子上不滚永远是 0 像素——测出来的是"屏不够高"，不是"占位没画"）。
+        float badProbeY = 1620f;
+        if (_virtualH < 1700f)
+        {
+            ViewOffsetY = -(1596f - 300f);
+            foreach (var w in _windows) { w.ViewOffsetX = 0f; w.ViewOffsetY = ViewOffsetY; }
+            SettleFrames(200);
+            badProbeY = 1596f + ViewOffsetY + 24f;
+        }
+        int onBad = ScreenProbe.CountNear(1000, (int)badProbeY, 40, 40, 252, 230, 230, 8);
         Check("失败页是浅红占位", onBad > 1400, $"{onBad}/1600 像素");
 
         // 滚下去：第 2 页到视口顶仍在（屏幕 y = 画布 y + ViewOffsetY）
@@ -721,8 +731,9 @@ internal sealed partial class App
 
             Check("条上页码 1/3", BarPageNow == 1 && BarTotal == 3, $"{BarPageNow}/{BarTotal}");
 
-            // 文档模式的底部条菜单（2026-11-15 起：☰ 打开、四项，末项改叫「退出文档」）。
-            // 只验名单和"同一颗键开、同一颗键收"；动作（保存/回放/清空/退出）在 PPT 那条
+            // 文档模式的底部条菜单（2026-11-23 起：☰ 打开、**五项**——第 2 项是「深色护眼」，
+            // 末项仍叫「退出文档」）。
+            // 只验名单和"同一颗键开、同一颗键收"；动作（保存/护眼/回放/清空/退出）在 PPT 那条
             // 同名分支里验过，这里不重复清文档。
             {
                 var dbar = PptBarRect();
@@ -730,14 +741,54 @@ internal sealed partial class App
                 float dmx = (dmc.MinX + dmc.MaxX) * 0.5f;
                 float dmy = (dbar.MinY + dbar.MaxY) * 0.5f;
                 PptBarPointerDown(dmx, dmy);
-                Check("文档菜单：四项、「关闭文档」已改名「退出文档」",
-                      PptMenuOpen && PptMenuItemCount == 4
-                      && PptMenuItemText(0) == "自动保存墨迹" && PptMenuItemText(1) == "回放这一屏墨迹"
-                      && PptMenuItemText(2) == "清除全部墨迹" && PptMenuItemText(3) == "退出文档",
-                      $"{PptMenuItemText(0)} / {PptMenuItemText(1)} / "
-                      + $"{PptMenuItemText(2)} / {PptMenuItemText(3)}");
+                Check("文档菜单：五项、「深色护眼」在第二项、「关闭文档」已改名「退出文档」",
+                      PptMenuOpen && PptMenuItemCount == 5
+                      && PptMenuItemText(0) == "自动保存墨迹" && PptMenuItemText(1) == "深色护眼"
+                      && PptMenuItemText(2) == "回放这一屏墨迹"
+                      && PptMenuItemText(3) == "清除全部墨迹" && PptMenuItemText(4) == "退出文档",
+                      $"{PptMenuItemText(0)} / {PptMenuItemText(1)} / {PptMenuItemText(2)} / "
+                      + $"{PptMenuItemText(3)} / {PptMenuItemText(4)}");
                 PptBarPointerDown(dmx, dmy);
                 Check("文档菜单：再点 ☰ 收起", !PptMenuOpen, $"菜单={PptMenuOpen}");
+            }
+
+            // ---- 深色护眼（2026-11-23）：菜单第 2 项开 / 关 ----
+            // 验三件事：① 状态位翻；② 屏幕上的红页变成"柔和护眼红"（保色反色 + 压进护眼区间）；
+            //          ③ 再点一次回到原样（页位图整层重生，不是只改一层颜色）。
+            {
+                SettleFrames(400);       // 页位图惰性生成：一帧一页，等它真上屏再采样
+                var deRect = DocView.At(0).Rect;
+                int px = (int)deRect.MinX + 200, py = (int)deRect.MinY + 200;
+                int before = ScreenProbe.CountNear(px, py, 50, 50, 255, 0, 0, 24);
+                Check("（准备）护眼前第 1 页是纯红", before > 2000, $"{before}/2500 像素");
+
+                var dbar2 = PptBarRect();
+                var dmc2 = PptBar.MenuCell(dbar2, DpiScale);
+                PptBarPointerDown((dmc2.MinX + dmc2.MaxX) * 0.5f, (dbar2.MinY + dbar2.MaxY) * 0.5f);
+                PptMenuItemRectAt(1, out var darkItem);
+                PptBarPointerDown((darkItem.MinX + darkItem.MaxX) * 0.5f,
+                                  (darkItem.MinY + darkItem.MaxY) * 0.5f);
+                SettleFrames(400);
+                // 纯红 (255,0,0) → R 26+(255*206+127)/255=232，G 28，B 32（见 DocColorInvert）
+                int dark = ScreenProbe.CountNear(px, py, 50, 50, 232, 28, 32, 12);
+                Check("深色护眼：菜单点开、红页变柔和护眼红、蓝底不偏色",
+                      DocDarkEye && PptMenuOpen && dark > 2000,
+                      $"开={DocDarkEye} 菜单={PptMenuOpen} 护眼像素={dark}/2500");
+
+                // 再点一次关掉（菜单还在）：页位图按新外观整层重生
+                PptMenuItemRectAt(1, out var darkItem2);
+                PptBarPointerDown((darkItem2.MinX + darkItem2.MaxX) * 0.5f,
+                                  (darkItem2.MinY + darkItem2.MaxY) * 0.5f);
+                SettleFrames(400);
+                if (PptMenuOpen)
+                {
+                    var dbar3 = PptBarRect();
+                    var dmc3 = PptBar.MenuCell(dbar3, DpiScale);
+                    PptBarPointerDown((dmc3.MinX + dmc3.MaxX) * 0.5f, (dbar3.MinY + dbar3.MaxY) * 0.5f);
+                }
+                int restored = ScreenProbe.CountNear(px, py, 50, 50, 255, 0, 0, 24);
+                Check("深色护眼：关掉后回到原样（页位图重生成）",
+                      !DocDarkEye && restored > 2000, $"开={DocDarkEye} 红像素={restored}/2500");
             }
 
             BarNext();

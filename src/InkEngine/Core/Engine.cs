@@ -2730,6 +2730,29 @@ public partial class InkEngine
     /// </summary>
     internal Color4 DocPaperColor = new(0.99f, 0.99f, 0.98f, 1f);
     internal Color4 BoardColor = new(0.99f, 0.99f, 0.98f, 1f);
+
+    /// <summary>
+    /// **深色护眼**（2026-11-23）：文档模式的白底 PDF / 图片反色成"柔和深灰黑底"。
+    ///
+    /// 为什么需要它：教室大屏看白底试卷刺眼，而把整屏调暗会连带把笔迹、界面一起压暗。
+    /// 这里只动**页位图**（导入时反色 + 补丁渲完反色），界面与墨迹一个像素都不改。
+    ///
+    /// 它是**跨文档记住的偏好**（`docDarkEye`），深色底需要的白笔也会一起记住。
+    /// 见 <c>Ppt.ToggleDocDarkEye</c>（开关与刷新）与 <see cref="ActiveDocPaperColor"/>。
+    /// </summary>
+    internal bool DocDarkEye { get; private set; }
+
+    /// <summary>深色护眼时"文档的纸"：`#1A1C20`（与页位图反色的底一致，页缝才接得上）。</summary>
+    internal static readonly Color4 DarkEyePaperColor = new(0.071f, 0.075f, 0.090f, 1f);
+
+    /// <summary>深色护眼文档「贴到白板」时自动切的板色：`#1A1C20`（与纸同色，贴过来不跳）。</summary>
+    internal static readonly Color4 DarkEyeBoardColor = new(0.102f, 0.110f, 0.125f, 1f);
+
+    /// <summary>深色护眼时未加载页的占位块：比纸略亮一档（"这里马上有内容"看得出边界）。</summary>
+    internal static readonly Color4 DarkEyePlaceholderColor = new(0.118f, 0.125f, 0.149f, 1f);
+
+    /// <summary>文档背景当前该用的颜色（深色护眼 = 深灰黑纸，否则浅色纸）。</summary>
+    internal Color4 ActiveDocPaperColor => DocDarkEye ? DarkEyePaperColor : DocPaperColor;
     internal double _lastRebuildMs;
     internal double _lastRecordMs;
     internal double _lastPresentMs;

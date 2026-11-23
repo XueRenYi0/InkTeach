@@ -4,6 +4,7 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
+using Vortice.Mathematics;
 
 namespace InkEngine;
 
@@ -793,11 +794,15 @@ public partial class InkEngine
     private static readonly string[] BoardMenuItems =
         { "播放本屏墨迹", "清空白板全部墨迹", "历史板书", "退出白板" };
 
-    /// <summary>文档模式的菜单：和 PPT 只差两处文案（"这一屏" / "退出文档"），
+    /// <summary>文档模式的菜单：和 PPT 差两处文案（"这一屏" / "退出文档"）＋一个「深色护眼」开关，
     /// 所以单独一张表，而不是在 <see cref="PptMenuItemText"/> 里写 switch
-    /// （两个名单并存时，改一边漏一边的坑见 2026-10-14 那次改名）。</summary>
+    /// （两个名单并存时，改一边漏一边的坑见 2026-10-14 那次改名）。
+    ///
+    /// **2026-11-23 加「深色护眼」**（第 2 项）：白底 PDF 在教室大屏上刺眼，
+    /// 一键换"柔和深灰黑底 + 保色反色"。它只对文档有意义，所以只在文档这张表里。
+    /// 分组 = [保存/护眼] | [回放] | [清空] | [退出]（分隔线见 <see cref="PptMenuDividerBefore"/>）。</summary>
     private static readonly string[] DocMenuItems =
-        { "自动保存墨迹", "回放这一屏墨迹", "清除全部墨迹", "退出文档" };
+        { "自动保存墨迹", "深色护眼", "回放这一屏墨迹", "清除全部墨迹", "退出文档" };
 
     // =================================================================================
     //  文档缩放档位浮层（2026-11-16）：点百分比格弹出来
@@ -856,18 +861,30 @@ public partial class InkEngine
         SetDocZoomFromUi(DocZoomPresetZooms[i]);
     }
 
-    internal static int PptMenuItemCount => PptMenuItems.Length;
+    /// <summary>
+    /// 菜单这一刻有几项。**实例属性**（不是常量）：文档那张表五项、PPT / 白板四项。
+    /// 绘制、命中、悬停、菜单矩形全部读它——写死 4 的话文档菜单最后一项会被裁掉
+    /// （矩形按 4 行算高、第 5 项落在面板外面）。
+    /// </summary>
+    internal int PptMenuItemCount => MenuItemsNow.Length;
 
     /// <summary>这一模式下的菜单名单（绘制、命中、执行都从这里取）。</summary>
     private string[] MenuItemsNow
         => BoardOn ? BoardMenuItems : (!PptMode && DocView.IsOpen) ? DocMenuItems : PptMenuItems;
 
-    /// <summary>菜单项之间画分隔线的位置（在第 i 项**之前**画）。[存/放] | [清空] | [退出]。</summary>
-    internal static bool PptMenuDividerBefore(int i) => i is 2 or 3;
+    /// <summary>菜单项之间画分隔线的位置（在第 i 项**之前**画）。
+    /// PPT / 白板四项：`[存/放] | [清空] | [退出]` → 2、3；
+    /// 文档五项（多了「深色护眼」）：`[存/护眼] | [回放] | [清空] | [退出]` → 3、4。</summary>
+    internal bool PptMenuDividerBefore(int i)
+    {
+        bool doc = !BoardOn && !PptMode && DocView.IsOpen;
+        return doc ? i is 3 or 4 : i is 2 or 3;
+    }
 
-    /// <summary>"清除全部墨迹"是第几项（三种模式里都是倒数第二项，但白板少一项历史之前
-    /// 的偏移 —— 写成属性而不是散在几处 `i == 3`，改名单时只改这里）。</summary>
-    internal int PptMenuDangerIndex => BoardOn ? 1 : 2;
+    /// <summary>"清除全部墨迹"是第几项（文档多一项「深色护眼」，所以是 3；白板是 1、PPT 是 2）。
+    /// 写成属性而不是散在几处 `i == 3`，改名单时只改这里。</summary>
+    internal int PptMenuDangerIndex
+        => BoardOn ? 1 : (!PptMode && DocView.IsOpen ? 3 : 2);
 
     /// <summary>这一项是危险动作吗（"清除全部墨迹"）——绘制据此上强调色（等确认时也用它）。</summary>
     internal bool PptMenuItemDanger(int i) => i == PptMenuDangerIndex;
@@ -880,10 +897,19 @@ public partial class InkEngine
         return i == PptMenuDangerIndex && PptClearConfirm ? "再点确认" : items[i];
     }
 
-    /// <summary>第 i 项右边的状态文字（开关 = 开/关；回放 = N 笔）。其余返回 null。</summary>
+    /// <summary>第 i 项右边的状态文字（开关 = 开/关；回放 = N 笔）。其余返回 null。
+    /// 文档菜单：0 自动保存、1 深色护眼（都是开关）、2 回放；PPT：0 保存、1 回放。</summary>
     internal string PptMenuItemStatus(int i)
     {
         if (BoardOn) return i == 0 ? $"{BoardScreenStrokeCount()} 笔" : null;
+        if (!PptMode && DocView.IsOpen)
+            return i switch
+            {
+                0 => PptAutoSaveOn ? "开" : "关",
+                1 => DocDarkEye ? "开" : "关",
+                2 => $"{Doc.Strokes.Count} 笔",
+                _ => null,
+            };
         return i == 0 ? (PptAutoSaveOn ? "开" : "关")
              : i == 1 ? $"{Doc.Strokes.Count} 笔"
              : null;
@@ -902,10 +928,14 @@ public partial class InkEngine
     }
 
     /// <summary>这一项这一刻能不能点。"回放本页墨迹"没笔迹时**置灰**——
-    /// 点是老师最自然的动作，"点了没反应"最伤人（右邻的"0 笔"顺便把原因说清）。</summary>
+    /// 点是老师最自然的动作，"点了没反应"最伤人（右邻的"0 笔"顺便把原因说清）。
+    /// 文档菜单回放在第 2 项（前面多了「深色护眼」）。</summary>
     internal bool PptMenuItemEnabled(int i)
-        => BoardOn ? (i != 0 || BoardScreenStrokeCount() > 0)
-                   : (i != 1 || Doc.Strokes.Count > 0);
+    {
+        if (BoardOn) return i != 0 || BoardScreenStrokeCount() > 0;
+        if (!PptMode && DocView.IsOpen) return i != 2 || Doc.Strokes.Count > 0;
+        return i != 1 || Doc.Strokes.Count > 0;
+    }
 
     /// <summary>虚拟桌面矩形（物理像素）。</summary>
     private RectF ScreenRectPhysical() => new()
@@ -1720,9 +1750,10 @@ public partial class InkEngine
     }
 
     /// <summary>
-    /// 文档模式的菜单四项（*同一套壳、换名换动作*，2026-10-07 用户定；见 计划-文档模式-状态模型.md §2）：
-    ///   0 自动保存墨迹 / 1 回放这一屏墨迹 / 2 清除全部墨迹（两段确认）/ 3 退出文档。
-    /// 两处**故意不关菜单**的理由同 PPT 版（开关要看状态变化；清空要等第二次点）。
+    /// 文档模式的菜单五项（*同一套壳、换名换动作*，2026-10-07 用户定；见 计划-文档模式-状态模型.md §2；
+    /// 2026-11-23 插入第 2 项「深色护眼」）：
+    ///   0 自动保存墨迹 / 1 深色护眼 / 2 回放这一屏墨迹 / 3 清除全部墨迹（两段确认）/ 4 退出文档。
+    /// 三处**故意不关菜单**的理由同 PPT 版（开关要看状态变化；清空要等第二次点；护眼同理）。
     /// </summary>
     private void RunDocBarMenuItem(int index)
     {
@@ -1732,12 +1763,15 @@ public partial class InkEngine
                 TogglePptAutoSave();
                 return;                              // 菜单留着，让老师看见"开 → 关"
             case 1:
+                ToggleDocDarkEye();
+                return;                              // 同上：菜单留着，让老师看见"关 → 开"
+            case 2:
                 PptMenuOpen = false;
                 PptClearConfirm = false;
                 _dirty = true;
                 StartReplay();                       // 与中央面板「墨迹回放」同一个入口
                 return;
-            case 2:
+            case 3:
                 if (!PptClearConfirm)
                 {
                     PptClearConfirm = true;
@@ -1751,11 +1785,53 @@ public partial class InkEngine
                 PptMenuOpen = false;
                 _dirty = true;
                 return;
-            case 3:
+            case 4:
                 PptMenuOpen = false;
                 CloseDocumentFromUi();
                 return;
         }
+    }
+
+    /// <summary>
+    /// 「深色护眼」开关（文档菜单第 2 项）：白底 PDF / 图片换"柔和深灰黑底 + 保色反色"。
+    ///
+    /// 三件事必须一起做，少一件屏幕上就是"新旧外观叠着"：
+    ///   ① 页位图整层作废（<see cref="DocPages.InvalidateForAppearance"/>：放位图 + 整层脏 + 代次 +1）；
+    ///   ② 高清补丁换外观并放掉旧块（<see cref="DocPatchCache.SetInvert"/> 之后再来一次
+    ///      <see cref="DocPatchCache.ReleaseAll"/> 是幂等的保护：没开高清补丁时它什么都不做）；
+    ///   ③ 分块缓存整层作废（<see cref="InkDocument.InvalidateAll"/>）——缓存里烘着旧像素。
+    ///
+    /// **黑笔防隐身**：深底上黑笔等于没写，所以开启时当前笔色若偏暗就自动换白（老师不用自己找）。
+    /// 偏好落盘用 `docDarkEye`（"1" = 开；关就不写键，配置只留和默认不一样的）。
+    /// </summary>
+    private void ToggleDocDarkEye()
+    {
+        DocDarkEye = !DocDarkEye;
+        SetUiPref("docDarkEye", DocDarkEye ? "1" : null);
+
+        bool penToWhite = false;
+        if (DocDarkEye)
+        {
+            float penLuma = 0.299f * CurrentColor.R + 0.587f * CurrentColor.G + 0.114f * CurrentColor.B;
+            if (penLuma < 0.25f)
+            {
+                SetColorFromUi(new Color4(1f, 1f, 1f, 1f));
+                penToWhite = true;
+            }
+        }
+
+        DocView.InvalidateForAppearance();
+        DocPatch?.SetInvert(DocDarkEye);
+        DocPatch?.ReleaseAll();
+        Doc.InvalidateAll();
+        _dirty = true;
+        NotifyUiStateChanged();
+
+        if (DocDarkEye)
+            SetInkStatus(penToWhite ? "深色护眼：已开启（黑笔已自动切为白色）" : "深色护眼：已开启");
+        else
+            SetInkStatus("深色护眼：已关闭");
+        Console.WriteLine($"[文档] 深色护眼 → {(DocDarkEye ? "开" : "关")}");
     }
 
     /// <summary>
