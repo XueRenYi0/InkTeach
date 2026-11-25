@@ -265,6 +265,7 @@ internal sealed partial class OverlayWindow
             DrawSelection(app);
             DrawSelectionCenterCross(app);
             DrawAlignSnapPulse(app);
+            DrawShapeAnchorSnap(app);
             // 图库面板：它从工具条上沿往上长，压在内容之上（不压界面——界面比它更靠下）
             DrawLibraryGhost(app);
             DrawLibraryPanel(app);
@@ -946,6 +947,15 @@ internal sealed partial class OverlayWindow
             _stepPillRectPrev = cur;
         }
 
+        // 关键点吸附的那颗小圆环（2026-11-25 阶段 2）：它跟着指针每帧换位置，
+        // 抬笔 / 取消那一帧就消失 —— 靠 `_transientNow` + `_transientHistory` 那三帧兜住，
+        // **不另开"上一帧"字段**（ADR-005：不给 Overlay 新增私有字段）。
+        if (ShapeAnchorSnap.Active)
+        {
+            var box = ShapeAnchorSnapBoxCanvas(app.FurnitureDpi);
+            if (!box.IsEmpty) r.Add(CanvasRectToWindow(box));
+        }
+
         if (app.ShowHud)
         {
             // 面板区域每帧都要进脏区：后缓冲里躺着的是两帧前的画面，不重贴就会闪。
@@ -1318,6 +1328,58 @@ internal sealed partial class OverlayWindow
             tb = new Vector2(b.X + 5f * dpi, b.Y);
             _ctx.DrawLine(ta, tb, _scratch, 1.8f * dpi);
         }
+    }
+
+    /// <summary>
+    /// **关键点吸附的反馈**（2026-11-25 阶段 2）：吸住已有图形的顶点 / 圆心 / 中点 / 原点时，
+    /// 在那个位置上画一个克制的小圆环。
+    ///
+    /// 两种画法对应两类锚点，老师的语言本来就分得开：
+    ///   · `Center` / `Origin` → **双环 ＋ 中心小点**（"这是一个心"）；
+    ///   · `Vertex` / `Midpoint` → **空心单环**（"这是一个点"）。
+    ///
+    /// 尺寸走 `FurnitureDpi`（= `UiUnit ÷ ViewScale`）：**屏幕上恒定大小**，
+    /// 画布放大缩小时环不跟着变粗变糊（和选中手柄同一条口径）。
+    /// 颜色用暖橙（和对象吸附的短亮同一族），在深色 PPT 和白色板书上都能立住。
+    /// </summary>
+    private void DrawShapeAnchorSnap(InkEngine app)
+    {
+        if (app.PassThrough || app.TextBoxEditing) return;
+        if (!ShapeAnchorSnap.Active || ShapeAnchorSnap.Kind == ShapeAnchorKind.None) return;
+
+        float dpi = app.FurnitureDpi;
+        var p = ShapeAnchorSnap.Point;
+        float r = 5.5f * dpi;
+        float w = 1.6f * dpi;
+        var accent = new Color4(1f, 0.55f, 0.08f, 0.95f);
+        var halo = new Color4(1f, 1f, 1f, 0.75f);
+
+        // 底色描一圈白，深色背景上才看得见（和胶囊、手柄同一套"先白后色"）。
+        _scratch.Color = halo;
+        _ctx.DrawEllipse(new Ellipse(p, r + 0.7f * dpi, r + 0.7f * dpi), _scratch, w + 1.2f * dpi);
+        _scratch.Color = accent;
+        _ctx.DrawEllipse(new Ellipse(p, r, r), _scratch, w);
+
+        if (ShapeAnchorSnap.Kind is ShapeAnchorKind.Vertex or ShapeAnchorKind.Midpoint) return;
+
+        // 圆心 / 原点：再套一环 ＋ 正中心一个小点（"这个位置是中心"）。
+        _ctx.DrawEllipse(new Ellipse(p, r * 0.45f, r * 0.45f), _scratch, w * 0.9f);
+        _ctx.FillEllipse(new Ellipse(p, 1.1f * dpi, 1.1f * dpi), _scratch);
+    }
+
+    /// <summary>
+    /// 关键点吸附那颗圆环占的**画布矩形**（空 = 这一帧没有环）。
+    /// **绘制与脏区共用这一个函数**：两边各算一份就会差一帧、留残影。
+    /// </summary>
+    private static RectF ShapeAnchorSnapBoxCanvas(float dpi)
+    {
+        if (!ShapeAnchorSnap.Active || ShapeAnchorSnap.Kind == ShapeAnchorKind.None) return RectF.Empty;
+        float d = 8.5f * dpi;      // 5.5 半径 + 0.7 白边 + 半个线宽 + 抗锯齿余量
+        var p = ShapeAnchorSnap.Point;
+        var box = RectF.Empty;
+        box.Add(p.X - d, p.Y - d);
+        box.Add(p.X + d, p.Y + d);
+        return box;
     }
 
     /// <summary>

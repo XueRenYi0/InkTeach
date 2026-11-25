@@ -543,6 +543,9 @@ public partial class InkEngine
             _dirty = true;
             return true;
         }
+        // **多笔图形画到一半（第 1 笔已松手、还在等第 2 笔）：Esc = 作废这一条半成品**
+        // （2026-11-25 阶段 2 的步骤引导里那句"（Esc 取消）"就落在这里）。
+        if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && !_drawing && CancelPendingStepShape()) return true;
         // 图形页「∞ 连续」：Esc = 结束连续并回原工具。面板里的下拉/菜单开着时，
         // 第一下先按老规矩关它们，免得抢掉“关菜单”的手感。
         if (!isRepeat && vk == 0x1B /*VK_ESCAPE*/ && ShapeRepeatContinuous

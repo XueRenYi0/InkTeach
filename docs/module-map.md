@@ -27,6 +27,7 @@
 | 操作条按钮动作 | `InkEngine/Core/Engine.SelectionBar.Actions.cs` | `Engine.SelectionBar.cs` | `--seltest` |
 | 框选/套索/拖动/对齐 | `InkEngine/Core/Engine.Selection.Gesture.cs` | `InkEngine/Core/Selection.cs` | `--seltest` / `--lassotest` |
 | 图形端点编辑/吸附 | `InkEngine/Core/Engine.Selection.Vertex.cs` | `Model.Stroke.Curves.cs` · `Model.Stroke.Tangent.cs` · `Model.Stroke.Solids.cs` | `--handletest` |
+| 图形绘制期吸附/正比例/步骤引导 | `InkEngine/Shapes/Engine.ShapeTools.cs` | `InkEngine/Shapes/ShapeAnchorSnap.cs`（关键点吸附）· `ShapeAspectLock.cs`（Shift 1:1）· `Rendering/Overlay.Frame.cs`（小圆环） | `--unittest Shape` / `--shapetest` |
 | 图片美化 | `InkEngine/Core/Engine.Selection.Beautify.cs` | `InkEngine/Export/PhotoBeautify.cs` | `--inkbeautify` |
 | 收藏拖拽排序 | `InkEngine/Shapes/Engine.Library.Input.cs` | `ShapeLibrary.cs::ReorderBefore` | `--librarytest` |
 | 收藏面板/菜单/布局 | `InkEngine/Shapes/Engine.Library.cs` | `Engine.Library.Menu.cs` · `Engine.Library.Layout.cs` | `--librarytest` |

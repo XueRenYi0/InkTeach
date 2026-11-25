@@ -114,6 +114,10 @@ internal static class UnitTestRunner
             UnitTestsPerf.StrokeSimplifier_FreezesTailForTaper_And_CompressesMiddle),
         (nameof(UnitTestsPerf.ShapeMelt_ExactPolyline_RoundTrip_And_BypassesTaperAndSimplifier),
             UnitTestsPerf.ShapeMelt_ExactPolyline_RoundTrip_And_BypassesTaperAndSimplifier),
+        (nameof(UnitTestsPerf.ShapeAnchorSnap_FindsVertexCenterOrigin_And_RespectsRadius),
+            UnitTestsPerf.ShapeAnchorSnap_FindsVertexCenterOrigin_And_RespectsRadius),
+        (nameof(UnitTestsPerf.ShapeShiftAspect_LocksSquareAndCircle),
+            UnitTestsPerf.ShapeShiftAspect_LocksSquareAndCircle),
     };
 
     public static int Run(string[] args)

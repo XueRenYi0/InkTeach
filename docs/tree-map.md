@@ -76,7 +76,7 @@
       - `Engine.Capture.cs` 533 行 — 截图状态、确认/取消、手柄与读数。
       - `Engine.Clipboard.cs` 506 行
       - `Engine.Input.cs` 2,034 行 — 指针输入、停顿成型、动态橡皮。
-      - `Engine.TouchGestures.cs` 792 行 — 触摸手势：单指/双指/三指/长按/惯性。
+      - `Engine.TouchGestures.cs` 794 行 — 触摸手势：单指/双指/三指/长按/惯性。
       - `GoogleInkSlidingWindow.cs` 670 行 — Google Ink 滑动窗口输入。
       - `InkModel.cs` 285 行
       - `InkModelProbe.cs` 278 行
@@ -100,9 +100,9 @@
       - `AutoStart.cs` 196 行
       - `Backup.cs` 457 行
       - `DiagLog.cs` 1,270 行 — 运行日志、设备卡、日志上传同意。
-      - `Engine.Hotkey.cs` 631 行 — 热键处理：WM_HOTKEY → 动作。
+      - `Engine.Hotkey.cs` 632 行 — 热键处理：WM_HOTKEY → 动作。
       - `Engine.Keyboard.cs` 634 行 — 键盘模式与键盘手势：工具键、色带键、滚轮/↑↓ 视野平移。
-      - `Engine.Radial.cs` 707 行 — 呼出盘：按住/划向扇区/松手（清屏格单击即清，可撤销）。
+      - `Engine.Radial.cs` 710 行 — 呼出盘：按住/划向扇区/松手（清屏格单击即清，可撤销）。
       - `Engine.Update.cs` 1,138 行 — 自动更新：检查/下载/换壳。
       - `EraserTelemetry.cs` 329 行
       - `FramePressureValve.cs` 117 行 — 高压保险丝时间驱动状态机：连续慢帧 → 进入高压（收紧分块预算、暂停离屏预取），连续快帧/空闲 → 退出。
@@ -139,11 +139,11 @@
       - `GlyphFill.cs` 341 行
       - `Icons.Paths.cs` 142 行
       - `LegacyOverlayLayer.cs` 74 行
-      - `MultiMonitorSkip.cs` 420 行 — 多屏按窗跳帧：这一帧某扇覆盖窗口要不要 RenderFrame+Present 的纯判定、帧级事实收集、每窗一帧记忆。
+      - `MultiMonitorSkip.cs` 433 行 — 多屏按窗跳帧：这一帧某扇覆盖窗口要不要 RenderFrame+Present 的纯判定、帧级事实收集、每窗一帧记忆。
       - `Overlay.Capture.cs` 832 行 — 截图取景框绘制：遮罩/准线/读数/手柄。
       - `Overlay.Content.cs` 784 行 — 内容层合成：分块光栅、相机变换、缩放合成、滚动条。
       - `Overlay.cs` 1,457 行 — 覆盖层主文件：窗口/初始化/生命周期。
-      - `Overlay.Frame.cs` 1,834 行 — 覆盖层帧渲染：内容/界面/装饰合成。
+      - `Overlay.Frame.cs` 1,896 行 — 覆盖层帧渲染：内容/界面/装饰合成。
       - `Overlay.PptBar.cs` 794 行 — PPT 条/回放条/滚动条绘制。
       - `Overlay.Radial.cs` 651 行 — 呼出盘绘制。
       - `Overlay.Readout.cs` 1,572 行 — 读数、收藏面板、滚动条、回放/PPT 条绘制。
@@ -168,8 +168,8 @@
       - `Engine.Library.Input.cs` 1,013 行 — 收藏库指针输入：拖拽/整理/排序/页签拖动。
       - `Engine.Library.Layout.cs` 583 行 — 收藏面板插入/几何/尺寸/拖拽落位。
       - `Engine.Library.Menu.cs` 407 行 — 收藏库 ⋯ 菜单、过滤、滚动。
-      - `Engine.Library.Pair.cs` 568 行 — 收藏库杂项：双支配对/隐藏配对/结束笔画。
-      - `Engine.ShapeTools.cs` 1,624 行 — 图形工具：直线/矩形/椭圆/箭头/曲线绘制。
+      - `Engine.Library.Pair.cs` 580 行 — 收藏库杂项：双支配对/隐藏配对/结束笔画。
+      - `Engine.ShapeTools.cs` 1,767 行 — 图形工具：直线/矩形/椭圆/箭头/曲线绘制。
       - `FavoriteTransfer.cs` 149 行
       - `FigureParamBar.cs` 126 行
       - `FigureRenderer.cs` 349 行
@@ -179,6 +179,8 @@
       - `PlotSampling.cs` 335 行
       - `PlotSpecJson.cs` 462 行
       - `PointCloudRecognizer.cs` 403 行
+      - `ShapeAnchorSnap.cs` 333 行 — 图形绘制期的几何吸附锚点：已有图形的顶点 / 圆心 / 中点 / 原点。
+      - `ShapeAspectLock.cs` 30 行 — 图形绘制期的正比例约束：Shift 把矩形夹成正方形、椭圆夹成正圆。
       - `ShapeCatalog.cs` 126 行
       - `ShapeLibrary.cs` 829 行 — 收藏条目存储：.ink/.meta、分类、回收站、指纹去重。
       - `ShapePreview.cs` 161 行
@@ -314,12 +316,12 @@
         - `ZoomShots.cs` 776 行 — 文档缩放 E2E：出图（50/100/200/300 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
 
       **InkTeach/SelfTests/Unit/**
-        - `UnitTestRunner.cs` 175 行
+        - `UnitTestRunner.cs` 179 行
         - `UnitTests.Algo.cs` 130 行 — L1 纯逻辑测试：空闲瘦身状态机（IdleMemoryTrimmer）。
         - `UnitTests.Camera.cs` 65 行
         - `UnitTests.Core.cs` 335 行
         - `UnitTests.Overlay.cs` 84 行
-        - `UnitTests.Perf.cs` 429 行 — L1 纯逻辑测试（2026-11-25 三项性能优化）：多屏跳帧判定 / 高压保险丝 / 三段式点抽稀。
+        - `UnitTests.Perf.cs` 557 行 — L1 纯逻辑测试：多屏跳帧判定 / 高压保险丝 / 三段式点抽稀 / 熔墨精确折线 / 顶点圆心吸附 + Shift 正比例。
         - `UnitTests.Ppt.cs` 68 行
 
     **InkUi/Ai/**

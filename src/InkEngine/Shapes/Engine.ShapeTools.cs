@@ -77,6 +77,24 @@ public partial class InkEngine
     private sealed class StepPlan
     {
         public StepApply[] Apply = Array.Empty<StepApply>();
+
+        /// <summary>
+        /// 第 1 笔松手之后、还没提交时弹的那行**轻提示**（2026-11-25 阶段 2）。
+        /// 写"第 2/2 步 + 这一拖管什么 + 怎么退"，老师半路上不用猜"还要不要再画一笔"。
+        /// 空串 = 不提示（单笔图形用不到）。
+        /// </summary>
+        public string NextStepHint = "";
+
+        /// <summary>
+        /// **按当前半成品分文案**的那一档（棱柱一族共用一张表，但"拉出的东西"
+        /// 名字不同：棱柱 / 棱锥 / 棱台的高度长什么样，老师嘴里说的词也不一样）。
+        /// null = 用 <see cref="NextStepHint"/> 那一句。
+        /// </summary>
+        public Func<Stroke, string> NextStepHintOf;
+
+        /// <summary>这一笔该弹哪句（两条路只有这一份判据，见上面两个字段）。</summary>
+        public string HintFor(Stroke s)
+            => NextStepHintOf != null && s != null ? NextStepHintOf(s) : NextStepHint;
     }
 
     /// <summary>
@@ -95,6 +113,7 @@ public partial class InkEngine
             static (s, o, p, min) => s.SetHyperbolaFromAsymptote(o.X, o.Y, p.X, p.Y, min),
             static (s, o, p, _) => s.SetHyperbolaThroughPoint(p.X, p.Y),
         },
+        NextStepHint = "第 2/2 步：拖动决定双曲线开口（Esc 取消）",
     };
 
     /// <summary>
@@ -107,6 +126,7 @@ public partial class InkEngine
             static (s, o, p, _) => s.SetCuboidFront(o.X, o.Y, p.X, p.Y),
             static (s, o, p, _) => s.SetCuboidDepth(p.X, p.Y),
         },
+        NextStepHint = "第 2/2 步：拖动拉出长方体深度（Esc 取消）",
     };
 
     /// <summary>**四面体：两笔**（照他的 `case 26`）——第 1 笔底面三角形、第 2 笔顶点。</summary>
@@ -117,6 +137,7 @@ public partial class InkEngine
             static (s, o, p, _) => s.SetTetraBase(o.X, o.Y, p.X, p.Y),
             static (s, o, p, _) => s.SetTetraApex(p.X, p.Y),
         },
+        NextStepHint = "第 2/2 步：拖动确定四面体顶点（Esc 取消）",
     };
 
     /// <summary>
@@ -138,6 +159,13 @@ public partial class InkEngine
         {
             static (s, o, p, _) => s.SetPrismBase(o.X, o.Y, p.X, p.Y),
             static (s, o, p, _) => s.SetPrismApex(p.X, p.Y),
+        },
+        // 三兄弟共用这张表，所以提示文案也按 `s.Kind` 分（见 StepPlan.NextStepHintOf）。
+        NextStepHintOf = static s => s.Kind switch
+        {
+            StrokeKind.Pyramid => "第 2/2 步：拖动确定棱锥顶点高度（Esc 取消）",
+            StrokeKind.Frustum => "第 2/2 步：拖动拉出棱台上底高度（Esc 取消）",
+            _ => "第 2/2 步：拖动拉出高度（Esc 取消）",
         },
     };
 
@@ -180,10 +208,16 @@ public partial class InkEngine
     /// </summary>
     private void BeginStepShape(Tool tool, StepPlan plan, float x, float y)
     {
+        // `BeginShapeAt` 会先把这一点吸到已有图形的关键点上（见 TrySnapShapePoint），
+        // 所以"第一笔那个点"必须从**对象里读回来**——拿传进来的 raw 会与吸附结果差一截，
+        // 后面每一笔就都绕着那个没吸上的位置算。
         BeginShapeAt(tool, x, y);
         _stepPlan = plan;
         _stepIndex = 0;
-        _stepOrigin = new Vector2(x, y);
+        var first = ActiveStroke != null && ActiveStroke.Points.Count > 0
+            ? new Vector2(ActiveStroke.Points[0].X, ActiveStroke.Points[0].Y)
+            : new Vector2(x, y);
+        _stepOrigin = first;
     }
 
     /// <summary>
@@ -197,6 +231,13 @@ public partial class InkEngine
         var s = ActiveStroke;
         if (s == null || _stepPlan == null) return false;
         if (_stepIndex < 0 || _stepIndex >= _stepPlan.Apply.Length) return false;
+        // **这一笔也吸**（2026-11-25 阶段 2）：第 2 笔拖到长方体某条棱的中点、
+        // 或者双曲线第 1 笔拖到某个顶点上，都是老师真实的画法。
+        if (TrySnapShapePoint(new Vector2(x, y), AltHeld, out var snapTarget))
+        {
+            x = snapTarget.X;
+            y = snapTarget.Y;
+        }
         _stepPlan.Apply[_stepIndex](s, _stepOrigin, new Vector2(x, y),
                                     ShapeMinAxisLogical * DpiScale);
 
@@ -537,6 +578,40 @@ public partial class InkEngine
     }
 
     /// <summary>
+    /// 关键点吸附的**屏幕手感半径**（逻辑像素）：乘 `DpiScale / ViewScale` 之后，
+    /// 不管画布缩放多少，屏幕上都是大约 12 像素的吸附圈。
+    /// </summary>
+    internal const float ShapeAnchorSnapRadiusLogical = 12f;
+
+    /// <summary>此刻的吸附半径（**画布单位**）。</summary>
+    private float ShapeAnchorSnapRadiusCanvas
+        => ShapeAnchorSnapRadiusLogical * DpiScale / MathF.Max(0.25f, ViewScale);
+
+    /// <summary>`Alt` 按着吗（吸附的唯一总闸，语义照仓库老规矩：Alt = 完全自由）。</summary>
+    private static bool AltHeld
+        => (Native.GetAsyncKeyState(0x12 /*VK_MENU*/) & 0x8000) != 0;
+
+    /// <summary>这一个动作要不要允许吸附：`Alt` 一律关；自检默认关（见 <see cref="ShapeAnchorSnap"/>）。</summary>
+    private bool ShapeAnchorSnapEnabled(bool alt)
+        => !alt && (!SelfCheckMode || ShapeAnchorSnap.AllowInSelfCheck);
+
+    /// <summary>
+    /// 把画图形用的那个点吸到**已有图形的顶点 / 圆心 / 中点 / 原点**上。
+    /// 返回 false 时 `snapped` 就是原样、并顺手清掉上一帧的吸附状态（抬笔/取消不留环）。
+    /// </summary>
+    private bool TrySnapShapePoint(Vector2 raw, bool alt, out Vector2 snapped)
+    {
+        snapped = raw;
+        if (!ShapeAnchorSnapEnabled(alt))
+        {
+            ShapeAnchorSnap.Clear();
+            return false;
+        }
+        return ShapeAnchorSnap.TrySnap(Doc, ActiveStroke, raw, ShapeAnchorSnapRadiusCanvas,
+                                       out snapped, out _);
+    }
+
+    /// <summary>
     /// 图形工具的起手：造一条**只有起点**的图形，拖动期由
     /// <see cref="UpdateShapePreview"/> 改控制点，松手由 <see cref="EndStroke"/> 提交。
     ///
@@ -545,6 +620,13 @@ public partial class InkEngine
     /// </summary>
     private void BeginShapeAt(Tool tool, float x, float y)
     {
+        // **起笔也吸**（2026-11-25 阶段 2）：从已有图形的顶点 / 圆心起笔是最常见的画法
+        // （连两个顶点、从圆心拉半径）。`Alt` 按住 = 完全自由，一个像素都不动。
+        if (TrySnapShapePoint(new Vector2(x, y), AltHeld, out var snappedStart))
+        {
+            x = snappedStart.X;
+            y = snappedStart.Y;
+        }
         var kind = KindOfShapeTool(tool);
         ResetPredictTail();   // B4：图形工具不预测，但把上一笔的尾巴清掉
         ActiveStroke = new Stroke
@@ -593,11 +675,37 @@ public partial class InkEngine
     }
 
     /// <summary>
+    /// **作废那条画到一半的多笔图形**（第 1 笔已松手、还在等第 2 笔）。
+    ///
+    /// 半成品一直挂在 `ActiveStroke` 上、**不在文档里**，丢掉它只是把它从屏幕上撤掉；
+    /// 松手那一刻也没提交（见 `EndStroke` 的 `stepPending` 分支），所以不产生撤销记录。
+    /// 返回 true = 真的作废了一条（调用方据此决定要不要吞掉 Esc）。
+    /// </summary>
+    internal bool CancelPendingStepShape()
+    {
+        if (_stepPlan == null || _stepIndex <= 0) return false;
+        ActiveStroke = null;
+        _stepPlan = null;
+        _stepIndex = 0;
+        _stepSnap = ShapeSnapKind.None;
+        ShapeAnchorSnap.Clear();
+        ClearToast();
+        SetInkStatus("已取消这个图形");
+        _dirty = true;
+        return true;
+    }
+
+    /// <summary>
     /// 拖动中更新图形的控制点。
     ///
-    /// 吸附只对**有方向的两个**（直线 / 箭头）做：矩形和椭圆是"两个对角点 / 中心+外角点"
-    /// 定义的，没有"倾斜角"这回事，绕起点转只会把用户拉出来的框改小（见 计划-图形工具.md 8.2
-    /// 那一行只写了"画线吸附"）。Shift = 15° 硬网格、Alt = 完全自由，和旋转同一套语义。
+    /// **两档吸附各管一件事**（2026-11-25 阶段 2 起）：
+    ///   · **关键点吸附**（<see cref="ShapeAnchorSnap"/>）：所有图形通用，把指针吸到已有图形的
+    ///     顶点 / 圆心 / 中点 / 原点上；`Alt` = 完全自由，`Shift` 不参与。
+    ///   · **角度吸附**（<see cref="SelectionHandles.SnapEndPoint"/>）：只对直线 / 箭头，
+    ///     绕过起点转、保持长度；`Shift` = 15° 硬网格。**锚点吸附优先**——已经吸住顶点
+    ///     就不再走角度吸附，否则连两个任意顶点会被 15° 网格拉偏。
+    ///
+    /// 矩形 / 椭圆另外吃 `Shift` = 1:1（正方形 / 正圆，见 <see cref="ShapeAspectLock"/>）；
     /// 三角形 / 平行四边形没有"倾斜角"可吸，它们的"特殊形状吸附"发生在**拖顶点**时
     /// （见 计划-图形工具.md 9.6：画的时候不吸，改的时候才吸）。
     /// </summary>
@@ -608,6 +716,34 @@ public partial class InkEngine
 
         var start = new Vector2(s.Points[0].X, s.Points[0].Y);
         var end = new Vector2(x, y);
+        bool shift = (Native.GetAsyncKeyState(0x10 /* VK_SHIFT */) & 0x8000) != 0;
+        bool alt = AltHeld;
+
+        // **关键点吸附**（2026-11-25 阶段 2）：把这一拖的终点吸到已有图形的顶点 / 圆心 /
+        // 中点 / 原点上。`Alt` = 完全自由；自检默认关（见 ShapeAnchorSnap）。
+        // 多笔图形不吃这一句（它每一笔的落点由 ApplyStepGeometry 自己吸，那里才知道
+        // "这一笔在定义什么"）；抛物线也不吃（它拖的是"曲线经过哪"，不是几何端点）。
+        bool anchorSnapped = false;
+        if (_stepPlan == null && s.Kind != StrokeKind.Parabola
+            && TrySnapShapePoint(end, alt, out var snappedEnd))
+        {
+            anchorSnapped = true;
+            end = snappedEnd;
+            x = end.X;
+            y = end.Y;
+        }
+
+        // **Shift = 1:1**（矩形 → 正方形、椭圆 / 椭圆（带焦点）→ 正圆）。
+        // 只在这三种外框定义的图形上生效，而且**没吸住锚点**时才算——
+        // 吸住顶点之后按住 Shift 再去改它，等于把用户明确指定的那个点挪走。
+        if (!anchorSnapped && !alt && shift
+            && s.Kind is StrokeKind.Rectangle or StrokeKind.Ellipse or StrokeKind.ConicEllipse)
+        {
+            var sq = ShapeAspectLock.FitSquare(_shapeBoxOrigin, new Vector2(x, y));
+            x = sq.X;
+            y = sq.Y;
+            end = sq;
+        }
 
         // 五角星 / 梯形 / 扇形：各自一条直接的"定义元素 → 几何"路径。
         if (s.Kind == StrokeKind.Star)
@@ -714,14 +850,21 @@ public partial class InkEngine
 
         if (s.Kind is StrokeKind.Line or StrokeKind.Arrow)
         {
-            bool shift = (Native.GetAsyncKeyState(0x10 /* VK_SHIFT */) & 0x8000) != 0;
-            bool alt = (Native.GetAsyncKeyState(0x12 /* VK_MENU */) & 0x8000) != 0;
-            end = SelectionHandles.SnapEndPoint(start, end, shift, alt, out bool snapped);
-            // 画线过程中也把 α 报给浮动层（用户 2026-09-18 要的：边画边看这条线是多少度）。
+            // **锚点吸附优先于角度吸附**（2026-11-25 阶段 2）：连两个任意顶点时，
+            // 15° 网格会把端点从顶点拉偏；已经吸住锚点就**不再走角度吸附**。
+            if (!anchorSnapped)
+            {
+                end = SelectionHandles.SnapEndPoint(start, end, shift, alt, out bool snapped);
+                // 画线过程中也把 α 报给浮动层（用户 2026-09-18 要的：边画边看这条线是多少度）。
+                _shapeInclinationSnapped = snapped;
+            }
+            else
+            {
+                _shapeInclinationSnapped = true;     // 吸在顶点上 = 这一下是"吸出来的"，胶囊走强调色
+            }
             // α 由**权威函数**算，这里只是把它和"吸没吸住"一起存下来，供渲染与脏区用。
             _shapeInclination = SelectionHandles.InclinationDegrees(start, end);
             _shapeLength = Vector2.Distance(start, end);
-            _shapeInclinationSnapped = snapped;
         }
         s.SetEnd(end.X, end.Y);
         _shapeAnchor = new Vector2(s.Points[^1].X, s.Points[^1].Y);

@@ -417,6 +417,8 @@ public partial class InkEngine
             ActiveStroke = null;
         }
         // [随老预测系统删除 2026-10-05] 这里原来是 `ClearRenderTail(); ActiveStrokeOnTrail = false;`
+        // 关键点吸附的小圆环跟着这一笔一起作废（不撤掉就会在屏幕上留一个环）。
+        ShapeAnchorSnap.Clear();
         _dwell.Reset();
         _dwellInk = null;
         _dismissTapArmed = false;

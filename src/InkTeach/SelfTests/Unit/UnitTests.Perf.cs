@@ -1,5 +1,5 @@
-// [职责] L1 纯逻辑测试（2026-11-25 三项性能优化）：多屏跳帧判定 / 高压保险丝 / 三段式点抽稀。
-// [测试] --unittest MultiMonitorSkip / FramePressureValve / StrokeSimplifier
+// [职责] L1 纯逻辑测试：多屏跳帧判定 / 高压保险丝 / 三段式点抽稀 / 熔墨精确折线 / 顶点圆心吸附 + Shift 正比例。
+// [测试] --unittest MultiMonitorSkip / FramePressureValve / StrokeSimplifier / ShapeMelt / ShapeAnchorSnap / ShapeShiftAspect
 
 using InkEngine;
 using System.Numerics;
@@ -425,5 +425,133 @@ internal static class UnitTestsPerf
             Check.True(!back[i].HasPressure, $"往返后第 {i} 片不该带压感");
             Check.Equal(melted[i].Points.Count, back[i].Points.Count);
         }
+    }
+
+    // ======================================================================
+    //  5. 阶段 2：顶点 / 圆心 / 中点 / 原点吸附 + Shift 正比例
+    // ======================================================================
+
+    /// <summary>
+    /// 关键点吸附的三条硬约束（2026-11-25 阶段 2）：
+    ///   · 能准确找到矩形角点 / 圆心 / 坐标系原点 / 直线中点 / 熔墨精确折线端点；
+    ///   · **超出半径不吸**（半径就是手感，宽一格就会"隔着半个屏幕粘住"）；
+    ///   · `exclude` 自己**不自吸**（正在画的那一条还没进文档，但第二笔时它在 ActiveStroke 上，
+    ///     不自吸才不会每一帧都把自己算成锚点）。
+    /// </summary>
+    [UnitTest]
+    internal static void ShapeAnchorSnap_FindsVertexCenterOrigin_And_RespectsRadius()
+    {
+        var doc = new InkDocument();
+
+        // ---- ① 矩形：四个角 + 中心 ----
+        var rect = new Stroke { Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle, Width = 3f };
+        rect.SetPoints(new[] { new Vector2(200f, 200f), new Vector2(400f, 300f) });
+        doc.AppendStroke(rect);
+
+        Check.True(ShapeAnchorSnap.TrySnap(doc, null, new Vector2(203f, 198f), 12f,
+                                           out var snapped, out var kind),
+                   "矩形左上角 3px 内必须吸住");
+        Check.True(snapped == new Vector2(200f, 200f), $"应吸到 (200,200)，实际 {snapped}");
+        Check.Equal(ShapeAnchorKind.Vertex, kind);
+        Check.True(ShapeAnchorSnap.Active, "吸住之后 Active 必须为真");
+
+        Check.True(ShapeAnchorSnap.TrySnap(doc, null, new Vector2(302f, 248f), 12f,
+                                           out snapped, out kind),
+                   "矩形中心必须吸住");
+        Check.True(snapped == new Vector2(300f, 250f), $"应吸到中心 (300,250)，实际 {snapped}");
+        Check.Equal(ShapeAnchorKind.Center, kind);
+
+        // ---- ② 圆心 ----
+        var circle = new Stroke { Tool = Tool.Circle, Kind = StrokeKind.Circle, Width = 3f };
+        circle.SetPoints(new[] { new Vector2(800f, 500f), new Vector2(860f, 500f) });
+        doc.AppendStroke(circle);
+        Check.True(ShapeAnchorSnap.TrySnap(doc, null, new Vector2(804f, 503f), 12f,
+                                           out snapped, out kind),
+                   "圆心 5px 内必须吸住");
+        Check.True(snapped == new Vector2(800f, 500f), $"应吸到圆心 (800,500)，实际 {snapped}");
+        Check.Equal(ShapeAnchorKind.Center, kind);
+
+        // ---- ③ 坐标系原点（O 是第三个定义元素） ----
+        var axis = new Stroke { Tool = Tool.Coordinate, Kind = StrokeKind.Coordinate, Width = 3f };
+        axis.SetAxisBox(1200f, 900f, 1500f, 1100f);
+        doc.AppendStroke(axis);
+        Check.True(ShapeAnchorSnap.TrySnap(doc, null, new Vector2(1198f, 902f), 12f,
+                                           out snapped, out kind),
+                   "坐标系原点必须吸住");
+        Check.True(snapped == new Vector2(1200f, 900f), $"应吸到原点 (1200,900)，实际 {snapped}");
+        Check.Equal(ShapeAnchorKind.Origin, kind);
+
+        // ---- ④ 直线中点（优先级最低，但仍要能吸到） ----
+        var line = new Stroke { Tool = Tool.Line, Kind = StrokeKind.Line, Width = 3f };
+        line.SetPoints(new[] { new Vector2(2000f, 100f), new Vector2(2400f, 100f) });
+        doc.AppendStroke(line);
+        Check.True(ShapeAnchorSnap.TrySnap(doc, null, new Vector2(2201f, 101f), 12f,
+                                           out snapped, out kind),
+                   "直线中点必须吸住");
+        Check.True(snapped == new Vector2(2200f, 100f), $"应吸到中点 (2200,100)，实际 {snapped}");
+        Check.Equal(ShapeAnchorKind.Midpoint, kind);
+
+        // ---- ⑤ 熔墨精确折线：首尾两端给锚点，中间采样点不给 ----
+        var melt = rect.MeltToInkParts();
+        Check.True(melt.Count > 0, "矩形熔墨至少一片");
+        var meltDoc = new InkDocument();
+        foreach (var m in melt) meltDoc.AppendStroke(m);
+        bool sawEndpoint = false;
+        foreach (var m in melt)
+        {
+            if (m.Points.Count < 2) continue;
+            var head = new Vector2(m.Points[0].X, m.Points[0].Y);
+            sawEndpoint |= ShapeAnchorSnap.TrySnap(meltDoc, null, head, 6f, out snapped, out kind)
+                           && snapped == head;
+        }
+        Check.True(sawEndpoint, "熔墨精确折线的端点必须能吸住");
+
+        // ---- ⑥ 超出半径：不吸，而且状态要清干净 ----
+        Check.True(!ShapeAnchorSnap.TrySnap(doc, null, new Vector2(200f - 40f, 200f - 40f), 12f,
+                                            out snapped, out kind),
+                   "超出半径不该吸");
+        Check.True(!ShapeAnchorSnap.Active, "没吸住时 Active 必须为假（否则屏幕上留一个环）");
+        Check.Equal(ShapeAnchorKind.None, ShapeAnchorSnap.Kind);
+
+        // ---- ⑦ exclude 自己不自吸 ----
+        var solo = new InkDocument();
+        solo.AppendStroke(rect);
+        Check.True(!ShapeAnchorSnap.TrySnap(solo, rect, new Vector2(200f, 200f), 12f,
+                                            out snapped, out kind),
+                   "把自己排除掉之后，自己的角点不该算锚点");
+        Check.True(ShapeAnchorSnap.TrySnap(solo, null, new Vector2(200f, 200f), 12f,
+                                           out snapped, out kind),
+                   "同一个位置、不排除自己就该吸住（排除确实是唯一差别）");
+        Check.True(!ShapeAnchorSnap.TrySnap(doc, null, new Vector2(200f, 200f), 0f,
+                                            out snapped, out kind),
+                   "半径 0 = 不吸附");
+
+        // 静态状态用完清干净（它是全进程共用的，留给别的自检就是"屏幕上多一个环"）。
+        ShapeAnchorSnap.Clear();
+        Check.True(!ShapeAnchorSnap.Active && ShapeAnchorSnap.Kind == ShapeAnchorKind.None,
+                   "Clear 之后必须完全归零");
+    }
+
+    /// <summary>
+    /// `Shift` 正比例约束：**四个象限都必须输出精确 1:1**，而且方向不能翻到对面去
+    /// （"往右下拖出来一个正方形"，不是"往左上"）。
+    /// </summary>
+    [UnitTest]
+    internal static void ShapeShiftAspect_LocksSquareAndCircle()
+    {
+        var o = new Vector2(500f, 400f);
+        foreach (var (dx, dy) in new[] { (300f, 140f), (-300f, 140f), (-300f, -140f), (300f, -140f) })
+        {
+            var p = ShapeAspectLock.FitSquare(o, new Vector2(o.X + dx, o.Y + dy));
+            float w = MathF.Abs(p.X - o.X), h = MathF.Abs(p.Y - o.Y);
+            Check.Near(MathF.Max(MathF.Abs(dx), MathF.Abs(dy)), w, 0.001f);
+            Check.Near(w, h, 0.001f);
+            // 象限方向必须保住（符号不能翻）。
+            Check.True(MathF.Sign(p.X - o.X) == MathF.Sign(dx), $"x 方向翻了：dx={dx} → {p.X - o.X}");
+            Check.True(MathF.Sign(p.Y - o.Y) == MathF.Sign(dy), $"y 方向翻了：dy={dy} → {p.Y - o.Y}");
+        }
+        // 零长度原样返回（还没拖出去，不该凭空造一个方框）。
+        var still = new Vector2(500f, 400f);
+        Check.True(ShapeAspectLock.FitSquare(o, still) == still, "零长度原样返回");
     }
 }

@@ -15,11 +15,12 @@ on its own layer, the slide underneath is untouched, and one click hands the mou
 ｜[GitCode mirror (China)](https://gitcode.com/XueRenYI0/InkTeach-Releases/releases)
 ｜**Website**: <https://www.inkteach.com/>
 
-> **Latest 9.9.8 (2026-11-23)**: slide-transition **animations no longer get lost** (the overlay no longer steals
-> the foreground during a slideshow, and jumping back to an already played slide replays its animation); opening
-> PowerPoint after WPS was opened and closed now **shows the paging bar again**; paging no longer stutters (writes
-> moved to the background, empty slides never touch the disk); and **↑↓←→ all page the slideshow**, so presenter
-> remotes work too.
+> **Latest 9.9.9 (2026-11-25)**: heavy-duty performance work for **long, annotation-packed lessons** (leaner idle
+> memory, frame-budgeted repaints, per-window multi-monitor skipping, and taper-preserving stroke thinning) — no
+> stutter and no lost pen taper under load. **Shape area-erasing is now v36: zero deformation, precise melting**,
+> so erased shapes keep their exact geometry. Drawing new shapes now **snaps to existing vertices / centers /
+> midpoints / origins**, multi-stroke solids show a step-by-step hint (Esc cancels), and **Shift** draws a perfect
+> square / circle.
 >
 > *This English README is a summary. The Chinese [README.md](README.md) is the authoritative, most
 > current version.*

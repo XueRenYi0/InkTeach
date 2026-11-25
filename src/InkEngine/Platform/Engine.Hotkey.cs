@@ -313,6 +313,7 @@ public partial class InkEngine
         _stepPlan = null;
         _stepIndex = 0;
         _stepSnap = ShapeSnapKind.None;      // 「直棱柱」那颗胶囊跟着半成品一起作废
+        ShapeAnchorSnap.Clear();             // 关键点吸附的小圆环同理（切工具就收）
         // 换工具 = 退出"文档手掌"（2026-11-15：手掌不是工具，点任何工具格 = 我要写字了）。
         // 放在 Tool = t 之前：ExitDocPan 只碰手掌/光标，不看 Tool。
         ExitDocPan("换工具");

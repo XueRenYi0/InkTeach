@@ -224,12 +224,24 @@ public partial class InkEngine
             // 松手就把"**这一笔吸到了什么**"收回去（「直棱柱」那颗胶囊只在拖动中出现，
             // 和拖顶点吸附那边同一个口径：松手就没有了）。不清的话它会一直挂在屏幕上。
             _stepSnap = ShapeSnapKind.None;
+            // 关键点吸附的小圆环同理：抬笔即收（渲染与脏区都读这一个开关）。
+            ShapeAnchorSnap.Clear();
 
             // 还有下一笔 → 这一下松手**不算完**：半成品停在 ActiveStroke 里
             //（**不进文档、也不写撤销记录**），等最后一笔松手再统一提交。
             // 这样在用户眼里这几笔是连着的，中途不会先冒出一条"半成品"曲线、再把它改掉，
             // 撤销也不会多出好几条记录（InkClass 同样把两笔塞进同一个提交里，`:1846-1850`）。
             bool stepPending = _stepPlan != null && _stepIndex < _stepPlan.Apply.Length;
+
+            // **第 1 笔松手、还有下一笔** → 弹一行不挡路的步骤引导（2026-11-25 阶段 2）。
+            // 文案由那张表给（见 StepPlan.NextStepHint），老师不用猜"还要不要再画一笔"。
+            // 提示本身是 2 秒的轻提示：不抢焦点、不吞输入，接着拖第 2 笔就盖过去了。
+            // **自检里不弹**：自检是单帧截图 + 像素断言，多出来一条提示会把判据弄脏。
+            if (stepPending && !SelfCheckMode)
+            {
+                string hint = _stepPlan.HintFor(ActiveStroke);
+                if (!string.IsNullOrEmpty(hint)) ShowToast(hint, 2600);
+            }
 
             // 图形：拖动太短 = 误点，**不提交**。什么都不留（连撤销记录都不留）——
             // 一个退化的图形（零长度直线、零面积矩形）在画面上看不见，却能被点中、

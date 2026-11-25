@@ -466,7 +466,7 @@
 | 1135 | 自检入口（`--dwelltest` 用；四条都是"薄封装"，不含任何逻辑） |
 | 1167 | 黑匣子（`--reclive` / `--replayinput`）用的薄钩子 |
 
-## src/InkEngine/Input/Engine.TouchGestures.cs（792 行）
+## src/InkEngine/Input/Engine.TouchGestures.cs（794 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -606,7 +606,7 @@
 | 975 | 异步上传（2026-10-17）：点「日志」时界面绝不能被网络卡住 |
 | 1041 | 日志上云（2026-10-17 用户定） |
 
-## src/InkEngine/Platform/Engine.Hotkey.cs（631 行）
+## src/InkEngine/Platform/Engine.Hotkey.cs（632 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -632,7 +632,7 @@
 | 371 | 笔的 8 个色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成可改色位） |
 | 493 | 滚轮 / ↑↓：同一类"阅读视野"输入（放在键盘这一份，避免再开 partial） |
 
-## src/InkEngine/Platform/Engine.Radial.cs（707 行）
+## src/InkEngine/Platform/Engine.Radial.cs（710 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -857,7 +857,7 @@
 | 789 | 延时探针 |
 | 844 | 委托墨迹轨迹（微软的低延迟湿墨通道） |
 
-## src/InkEngine/Rendering/Overlay.Frame.cs（1,834 行）
+## src/InkEngine/Rendering/Overlay.Frame.cs（1,896 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -970,7 +970,7 @@
 | 845 | 整理模式：点击 / 框选 |
 | 906 | 整理模式：拖把手排序 |
 
-## src/InkEngine/Shapes/Engine.ShapeTools.cs（1,624 行）
+## src/InkEngine/Shapes/Engine.ShapeTools.cs（1,767 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -980,8 +980,8 @@
 | 行 | 段落 |
 | --- | --- |
 | 18 | 图形工具：直线 / 矩形 / 椭圆 / 箭头 |
-| 879 | 鼠标 / 触摸：同一个道理，读 POINTER_INFO 的合并点 |
-| 918 | 读不到合并点：退回"一个消息一个点"的老路（行为与以前完全一致） |
+| 1022 | 鼠标 / 触摸：同一个道理，读 POINTER_INFO 的合并点 |
+| 1061 | 读不到合并点：退回"一个消息一个点"的老路（行为与以前完全一致） |
 
 ## src/InkEngine/Shapes/ShapeLibrary.cs（829 行）
 

@@ -237,12 +237,21 @@ internal static class WindowSkipScheduler
     private static RectF CanvasOverlayBounds(InkEngine app)
     {
         var r = RectF.Empty;
+        // 关键点吸附的小圆环（2026-11-25 阶段 2）：**画布坐标、跟着指针**，逐窗判相交即可。
+        // （"关掉那一帧还要再擦一次"由 HadDynamicOverlayLastFrame 兜，见 HasDynamicOverlay。）
+        if (ShapeAnchorSnap.Active)
+        {
+            float d = 10f * app.FurnitureDpi;
+            var p = ShapeAnchorSnap.Point;
+            r.Add(p.X - d, p.Y - d);
+            r.Add(p.X + d, p.Y + d);
+        }
         if (app.Doc.Selected.Count == 0) return r;
         var aabb = app.LiveSelectionFrame.CanvasAabb;
         if (aabb.IsEmpty) return r;
         // 外扩量取"手柄 ＋ 操作条 ＋ 面板 ＋ 投影"的量级：宁可多画一扇窗，也别把操作条切掉一半。
         float pad = 360f * app.UiUnit;
-        r = aabb.Inflate(pad);
+        r.Add(aabb.Inflate(pad));      // 并进去，不是覆盖（否则吸附环被丢掉）
         return r;
     }
 
@@ -332,6 +341,10 @@ internal static class WindowSkipScheduler
         bool pointerHere = scene.PointerInside && vis.Contains(scene.PointerX, scene.PointerY);
         if (pointerHere && app.DrawnCursor != InkEngine.ToolCursorShape.None) return true;
         if (pointerHere && app.PredictTailActive) return true;
+        // 关键点吸附的小圆环跟着指针每帧换位置 → 画过就必须再擦一帧（同光标圈）。
+        // 按**这一扇屏**判：环在别的屏上时，这扇窗不用陪着重画。
+        if (ShapeAnchorSnap.Active
+            && vis.Contains(ShapeAnchorSnap.Point.X, ShapeAnchorSnap.Point.Y)) return true;
         if (app.TouchEraseSessionActive) return true;
         if (scene.HasActiveStroke && scene.ActiveStrokeBounds.Intersects(vis)) return true;
         // 滚动条：悬停 / 拖动 / 3.5 秒淡出窗口内都在变（淡出结束才停）。

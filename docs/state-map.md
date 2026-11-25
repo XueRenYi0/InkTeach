@@ -1,14 +1,14 @@
 # 状态地图（自动生成，勿手改）
 
-> 生成：2026-11-16 22:31 ／ 脚本：`tools/gen-state-map.ps1` ／ ADR-005 D4
+> 生成：2026-11-25 12:58 ／ 脚本：`tools/gen-state-map.ps1` ／ ADR-005 D4
 > 用法：改一个私有字段前，先在这里查它被哪些同族文件读写；只列被 >=2 个文件引用的字段。
 > 它降低定位成本，不降低验证成本；拆不拆类看 ADR-005 D4 的触发条件，不按行数。
 
-## Engine（24 文件 / 342 字段 / 272 个跨文件字段）
+## Engine（24 文件 / 347 字段 / 276 个跨文件字段）
 
 | 字段 | 引用文件 | 主要文件 | 写入点 |
 | --- | --- | --- | --- |
-| `_dirty` | 23 | Engine.cs, Engine.Host.cs, Engine.Selection.Beautify.cs, Engine.Selection.Gesture.cs, Engine.Selection.Vertex.cs, Engine.SelectionBar.Actions.cs …+17 | 303 |
+| `_dirty` | 23 | Engine.cs, Engine.Host.cs, Engine.Selection.Beautify.cs, Engine.Selection.Gesture.cs, Engine.Selection.Vertex.cs, Engine.SelectionBar.Actions.cs …+17 | 306 |
 | `_windows` | 14 | Engine.cs, Engine.Host.cs, Engine.Capture.cs, Engine.Clipboard.cs, Engine.Input.cs, Engine.Hotkey.cs …+8 | 1 |
 | `_drawing` | 9 | Engine.cs, Engine.Host.cs, Engine.SelectionBar.cs, Engine.Input.cs, Engine.TouchGestures.cs, Engine.Radial.cs …+3 | 32 |
 | `_libraryPending` | 8 | Engine.Host.cs, Engine.Hotkey.cs, Engine.Radial.cs, Engine.Library.cs, Engine.Library.Input.cs, Engine.Library.Layout.cs …+2 | 14 |
@@ -20,14 +20,14 @@
 | `_quit` | 6 | Engine.cs, Engine.Host.cs, Engine.Selection.Beautify.cs, Engine.Hotkey.cs, Engine.Update.cs, Engine.UiBridge.cs | 9 |
 | `_shapeOneShot` | 6 | Engine.Input.cs, Engine.Hotkey.cs, Engine.Radial.cs, Engine.Library.cs, Engine.Library.Menu.cs, Engine.Library.Pair.cs | 5 |
 | `_libraryCategoryInfos` | 6 | Engine.Keyboard.cs, Engine.UiBridge.cs, Engine.Library.cs, Engine.Library.Input.cs, Engine.Library.Layout.cs, Engine.Library.Menu.cs | 2 |
-| `_dragIsMove` | 5 | Engine.cs, Engine.Selection.cs, Engine.Selection.Gesture.cs, Engine.Selection.Vertex.cs, Engine.Cursor.cs | 8 |
+| `_stepPlan` | 5 | Engine.cs, Engine.Input.cs, Engine.Hotkey.cs, Engine.Library.Pair.cs, Engine.ShapeTools.cs | 9 |
+| `_camAnimating` | 5 | Engine.cs, Engine.Host.cs, Engine.Update.cs, Engine.Cursor.cs, Engine.UiBridge.cs | 9 |
 | `_eraserKind` | 5 | Engine.Host.cs, Engine.TouchGestures.cs, Engine.Hotkey.cs, Engine.Keyboard.cs, Engine.UiBridge.cs | 8 |
-| `_camAnimating` | 5 | Engine.cs, Engine.Host.cs, Engine.Update.cs, Engine.Cursor.cs, Engine.UiBridge.cs | 7 |
+| `_dragIsMove` | 5 | Engine.cs, Engine.Selection.cs, Engine.Selection.Gesture.cs, Engine.Selection.Vertex.cs, Engine.Cursor.cs | 8 |
 | `_selDragMatrix` | 5 | Engine.cs, Engine.Selection.cs, Engine.Selection.Gesture.cs, Engine.Selection.Vertex.cs, Engine.TouchGestures.cs | 7 |
+| `_stepIndex` | 5 | Engine.cs, Engine.Input.cs, Engine.Hotkey.cs, Engine.Library.Pair.cs, Engine.ShapeTools.cs | 6 |
 | `_autoSelCollapsed` | 5 | Engine.cs, Engine.Selection.Gesture.cs, Engine.Hotkey.cs, Engine.Library.Layout.cs, Engine.Library.Pair.cs | 6 |
-| `_stepPlan` | 5 | Engine.cs, Engine.Input.cs, Engine.Hotkey.cs, Engine.Library.Pair.cs, Engine.ShapeTools.cs | 6 |
-| `_capturePressHandled` | 5 | Engine.cs, Engine.Capture.cs, Engine.Input.cs, Engine.Library.Pair.cs, Engine.ShapeTools.cs | 5 |
-| `_stepIndex` | 5 | Engine.cs, Engine.Input.cs, Engine.Hotkey.cs, Engine.Library.Pair.cs, Engine.ShapeTools.cs | 5 |
+| `_capturePressHandled` | 5 | Engine.cs, Engine.Capture.cs, Engine.Input.cs, Engine.Library.Pair.cs, Engine.ShapeTools.cs | 6 |
 
 ## App（28 文件 / 21 字段 / 8 个跨文件字段）
 
@@ -42,36 +42,36 @@
 | `_clickLogFile` | 2 | App.Dev.ClickTarget.cs, App.cs | 1 |
 | `_panelShowMini` | 2 | App.Dev.PageShow.cs, App.cs | 1 |
 
-## Overlay（13 文件 / 128 字段 / 91 个跨文件字段）
+## Overlay（14 文件 / 129 字段 / 92 个跨文件字段）
 
 | 字段 | 引用文件 | 主要文件 | 写入点 |
 | --- | --- | --- | --- |
 | `_ctx` | 10 | Overlay.Capture.cs, Overlay.Content.cs, Overlay.cs, Overlay.Frame.cs, Overlay.PptBar.cs, Overlay.Radial.cs …+4 | 4 |
 | `_scratch` | 9 | Overlay.Capture.cs, Overlay.Content.cs, Overlay.cs, Overlay.Frame.cs, Overlay.PptBar.cs, Overlay.Radial.cs …+3 | 1 |
-| `_fullFramesLeft` | 5 | Overlay.Capture.cs, Overlay.Content.cs, Overlay.cs, Overlay.Frame.cs, Overlay.Ui.cs | 11 |
+| `_fullFramesLeft` | 5 | Overlay.Capture.cs, Overlay.Content.cs, Overlay.cs, Overlay.Frame.cs, Overlay.Ui.cs | 14 |
 | `_app` | 5 | Overlay.Content.cs, Overlay.cs, Overlay.Frame.cs, Overlay.Readout.cs, Overlay.Ui.cs | 3 |
+| `_tiles` | 5 | Overlay.Capture.cs, Overlay.Content.cs, Overlay.cs, Overlay.Frame.cs, Overlay.Ui.cs | 1 |
+| `_tilesVersion` | 4 | Overlay.Content.cs, Overlay.cs, Overlay.Frame.cs, Overlay.Ui.cs | 5 |
 | `_inkStyle` | 4 | Overlay.Capture.cs, Overlay.cs, Overlay.PptBar.cs, Overlay.Ui.cs | 3 |
-| `_backBuffer` | 4 | Overlay.Capture.cs, Overlay.cs, Overlay.Frame.cs, Overlay.Ui.cs | 1 |
 | `_frameDirty` | 4 | Overlay.Capture.cs, Overlay.cs, Overlay.Frame.cs, Overlay.Ui.cs | 1 |
-| `_tiles` | 4 | Overlay.Capture.cs, Overlay.Content.cs, Overlay.cs, Overlay.Ui.cs | 1 |
+| `_backBuffer` | 4 | Overlay.Capture.cs, Overlay.cs, Overlay.Frame.cs, Overlay.Ui.cs | 1 |
 | `_libraryRectPrev` | 3 | Overlay.cs, Overlay.Frame.cs, Overlay.Ui.cs | 4 |
-| `_ctx2` | 3 | Overlay.cs, Overlay.PptBar.cs, Overlay.Ui.cs | 3 |
 | `_uiBounds` | 3 | Overlay.cs, Overlay.Frame.cs, Overlay.Ui.cs | 3 |
-| `_tilesVersion` | 3 | Overlay.Content.cs, Overlay.cs, Overlay.Ui.cs | 3 |
-| `_uiBoundsPrev` | 3 | Overlay.cs, Overlay.Frame.cs, Overlay.Ui.cs | 3 |
-| `_readoutFormatSmall` | 3 | Overlay.Capture.cs, Overlay.cs, Overlay.Readout.cs | 2 |
+| `_ctx2` | 3 | Overlay.cs, Overlay.PptBar.cs, Overlay.Ui.cs | 3 |
 | `_readoutFormat` | 3 | Overlay.Capture.cs, Overlay.cs, Overlay.Readout.cs | 2 |
 | `_drewWetStrokeThisFrame` | 3 | Overlay.Capture.cs, Overlay.cs, Overlay.Frame.cs | 2 |
-| `_pageDirtyNow` | 3 | Overlay.Content.cs, Overlay.cs, Overlay.Frame.cs | 1 |
+| `_readoutFormatSmall` | 3 | Overlay.Capture.cs, Overlay.cs, Overlay.Readout.cs | 2 |
+| `_uiBoundsHistory` | 3 | Overlay.cs, Overlay.Frame.cs, Overlay.Ui.cs | 1 |
+| `_presentRects` | 3 | Overlay.Capture.cs, Overlay.cs, Overlay.Frame.cs | 1 |
 | `_inkSegs` | 3 | Overlay.cs, Overlay.PptBar.cs, Overlay.Ui.cs | 1 |
+| `_pageDirtyNow` | 3 | Overlay.Content.cs, Overlay.cs, Overlay.Frame.cs | 1 |
 | `_inkTrail` | 2 | Overlay.Capture.cs, Overlay.cs | 9 |
-| `_latencyWait` | 2 | Overlay.Capture.cs, Overlay.cs | 4 |
 
 ## FullUi（8 文件 / 142 字段 / 112 个跨文件字段）
 
 | 字段 | 引用文件 | 主要文件 | 写入点 |
 | --- | --- | --- | --- |
-| `_host` | 8 | FullUi.Ai.cs, FullUi.AiMenu.cs, FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs …+2 | 12 |
+| `_host` | 8 | FullUi.Ai.cs, FullUi.AiMenu.cs, FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs …+2 | 13 |
 | `_widgets` | 8 | FullUi.Ai.cs, FullUi.AiMenu.cs, FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs …+2 | 1 |
 | `_moreOpen` | 7 | FullUi.Ai.cs, FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.cs …+1 | 9 |
 | `_dark` | 7 | FullUi.Ai.cs, FullUi.ApiSettings.cs, FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.cs …+1 | 3 |
@@ -92,7 +92,7 @@
 | `_hubHint` | 4 | FullUi.MorePanel.cs, FullUi.Pages.cs, FullUi.Settings.cs, FullUi.Interaction.cs | 10 |
 | `_dragging` | 4 | FullUi.MorePanel.cs, FullUi.Settings.cs, FullUi.cs, FullUi.Interaction.cs | 8 |
 
-## Model（8 文件 / 64 字段 / 4 个跨文件字段）
+## Model（8 文件 / 73 字段 / 4 个跨文件字段）
 
 | 字段 | 引用文件 | 主要文件 | 写入点 |
 | --- | --- | --- | --- |
