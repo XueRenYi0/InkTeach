@@ -142,6 +142,16 @@ internal sealed partial class Stroke
                MathF.Max(TangentHalfSpanLocal(), TangentHalfHeightLocal()) / 4f), 24, 512);
 
     /// <summary>
+    /// 正切**精确采样**段数（渲染 BuildTangent 与熔墨共用）：两端贴近渐近线处变化极快，
+    /// 按 1.5px 一段加密，避免熔墨后尾巴变成折线。
+    /// </summary>
+    private int TangentSegmentsExact()
+        => Math.Max(TangentSegmentsLocal(),
+            Math.Clamp((int)MathF.Ceiling(
+                MathF.Max(TangentHalfSpanLocal(), TangentHalfHeightLocal())
+                * TransformScaleEstimate / 1.5f), 96, 512));
+
+    /// <summary>
     /// 曲线自己的那个矩形（**局部坐标**）。**全引擎唯一一份**，紧框 / 包围盒 / 脏区都问它。
     ///
     /// 四档的算式：
@@ -295,6 +305,16 @@ internal sealed partial class Stroke
     /// </summary>
     private static int CurveSegments(float extent)
         => Math.Clamp((int)MathF.Ceiling(extent / 16f), 24, 128);
+
+    /// <summary>
+    /// 曲线**精确采样**段数：粗筛段数与"每 1.5px 一段"的较大者，并按 Transform 缩放加密。
+    /// 渲染（BuildParabola / BuildHyperbola）与熔墨（ShapeOutlineCore exact）**共用这一份**，
+    /// 否则熔出来的曲线和擦之前不是同一串点，面积擦除就会看出变形。
+    /// </summary>
+    private int ExactCurveSegmentCount(float extent)
+        => Math.Max(CurveSegments(extent),
+                    ExactCurveSegments(extent * TransformScaleEstimate));
+
 
     /// <summary>
     /// 一组**局部坐标点**在给定变换下占的画布范围（= <see cref="PaddedBounds"/> 的算法，
@@ -535,6 +555,7 @@ internal sealed partial class Stroke
             FocusTriangle = FocusTriangle,     // 椭圆（带焦点）画不画焦点三角形
             FocusPointU = FocusPointU,         // 焦点三角形的顶点 P 在椭圆上哪个位置（NaN = 还没定过）
             Transform = Transform,
+            ExactPolyline = ExactPolyline, // 熔墨的身份：复制之后仍然按精确折线渲染（不再被平滑）
             TextBox = TextBox?.Clone(),   // 题卡内容也是"这一条的样子"，复制要独立一份
             // 交互矢量图：JSON 深拷贝一份，复制/收藏后改参数不会串到原对象。
             Figure = Figure == null ? null : PlotSpecJson.Read(PlotSpecJson.Write(Figure)),
@@ -1561,13 +1582,21 @@ internal sealed partial class Stroke
     /// 套索，所以用折线近似；圆和椭圆的段数按尺寸定，见 <see cref="EllipseSegments"/>，
     /// 误差远小于一个笔宽）。
     /// </summary>
-    public List<Vector2> ShapeOutline()
+    public List<Vector2> ShapeOutline() => ShapeOutlineCore(exact: false);
+
+    /// <param name="exact">
+    /// **精确版**（熔墨用）：圆弧 / 曲线按弦高误差 ≤ <see cref="ExactChordErrorPx"/> 加密，
+    /// 并按 <see cref="Transform"/> 缩放补偿；`false` = 老的"够不够碰"粗筛密度（命中 / 套索）。
+    /// 两条路共用同一份算式，差别只在段数——所以不会出现"熔出来和画出来不是一条线"。
+    /// </param>
+    private List<Vector2> ShapeOutlineCore(bool exact)
     {
         var list = new List<Vector2>();
         if (Points.Count == 0) return list;
         var (a, b) = Endpoints();
         var pa = new Vector2(a.X, a.Y);
         var pb = new Vector2(b.X, b.Y);
+        float scale = exact ? TransformScaleEstimate : 1f;
 
         switch (Kind)
         {
@@ -1592,6 +1621,7 @@ internal sealed partial class Stroke
                 float rx = MathF.Max(0.5f, SemiAxisALocal);
                 float ry = MathF.Max(0.5f, SemiAxisBLocal);
                 int n = EllipseSegments(MathF.Max(rx, ry));
+                if (exact) n = Math.Max(n, AdaptiveArcSegments(MathF.Max(rx, ry) * scale, MathF.Tau));
                 for (int i = 0; i <= n; i++)
                 {
                     float t = i / (float)n * MathF.Tau;
@@ -1632,6 +1662,7 @@ internal sealed partial class Stroke
                 var c = ShapeCenterLocal;
                 float r = MathF.Max(0.5f, CircleRadiusLocal);
                 int n = EllipseSegments(r);
+                if (exact) n = Math.Max(n, AdaptiveArcSegments(r * scale, MathF.Tau));
                 for (int i = 0; i <= n; i++)
                 {
                     float t = i / (float)n * MathF.Tau;
@@ -1740,7 +1771,8 @@ internal sealed partial class Stroke
                 if (Points.Count < 2) break;
                 float span = ParabolaSpanLocal();
                 var box = CurveBoxLocal();
-                int n = CurveSegments(MathF.Max(box.MaxX - box.MinX, box.MaxY - box.MinY));
+                float extent = MathF.Max(box.MaxX - box.MinX, box.MaxY - box.MinY);
+                int n = exact ? ExactCurveSegmentCount(extent) : CurveSegments(extent);
                 for (int i = 0; i <= n; i++)
                     list.Add(ParabolaPointAt(-span + 2f * span * i / n));
                 break;
@@ -1763,7 +1795,8 @@ internal sealed partial class Stroke
                 float ha = HyperbolaCurveALocal(), hb = HyperbolaCurveBLocal();
                 float hT = HyperbolaTMaxLocal();
                 var hbox = CurveBoxLocal();
-                int hn = CurveSegments(MathF.Max(hbox.MaxX - hbox.MinX, hbox.MaxY - hbox.MinY));
+                float hextent = MathF.Max(hbox.MaxX - hbox.MinX, hbox.MaxY - hbox.MinY);
+                int hn = exact ? ExactCurveSegmentCount(hextent) : CurveSegments(hextent);
                 for (int branch = 0; branch < 2; branch++)
                 {
                     if (branch > 0) list.Add(OutlineBreak);       // 抬笔：两支之间不连线
@@ -1940,7 +1973,7 @@ internal sealed partial class Stroke
                 // 对三种都对；后者按"周期数"走（正弦恒等于前者，波浪线可能是 2.7 个周期，
                 // 见 WaveCyclesLocal）。
                 if (Points.Count < 2) break;
-                int n = WaveSegmentsLocal();
+                int n = exact ? WaveSegmentsExact() : WaveSegmentsLocal();
                 for (int i = 0; i <= n; i++) list.Add(WaveTracedPointAt(i / (float)n));
                 break;
             }
@@ -1950,7 +1983,7 @@ internal sealed partial class Stroke
                 // 正切：一条开折线，t 从 0 走到 1（左下的截断点 → 右上的截断点；
                 // **和 BuildTangent 同一份算式**，所以橡皮的轮廓和画出来的一模一样）。
                 if (Points.Count < 2) break;
-                int nt = TangentSegmentsLocal();
+                int nt = exact ? TangentSegmentsExact() : TangentSegmentsLocal();
                 for (int i = 0; i <= nt; i++) list.Add(TangentTracedPointAt(i / (float)nt));
                 break;
             }
@@ -2060,7 +2093,7 @@ internal sealed partial class Stroke
     {
         if (Points.Count < 2) return BuildLine(factory);
 
-        int n = TangentSegmentsLocal();
+        int n = TangentSegmentsExact();
 
         var geo = factory.CreatePathGeometry();
         using var sink = geo.Open();
@@ -2203,7 +2236,7 @@ internal sealed partial class Stroke
     /// </summary>
     private ID2D1Geometry TryBuildLiveChunked(ID2D1Factory1 factory, float maxParam)
     {
-        if (!RawWhileLive || Erased.Count > 0 || RendersAsDot) return null;
+        if (!RawWhileLive || Erased.Count > 0 || RendersAsDot || ExactPolyline) return null;
         if (Points.Count < LiveChunkMinPoints) return null;
         // 虚线/点线不能分块：每段几何会重新起一个 dash 相位，接缝处的短划会错位。
         if (Dash != StrokeDash.Solid) return null;
@@ -2436,7 +2469,7 @@ internal sealed partial class Stroke
 
     private ID2D1PathGeometry BuildSector(ID2D1Factory1 factory)
     {
-        var pts = SectorOutlinePoints();
+        var pts = SectorOutlinePoints(exact: true);
         if (pts.Count < 2) return BuildLine(factory);
         var geo = factory.CreatePathGeometry();
         using var sink = geo.Open();
@@ -2601,7 +2634,7 @@ internal sealed partial class Stroke
         if (Points.Count < 2) return BuildLine(factory);
 
         var box = CurveBoxLocal();
-        int n = CurveSegments(MathF.Max(box.MaxX - box.MinX, box.MaxY - box.MinY));
+        int n = ExactCurveSegmentCount(MathF.Max(box.MaxX - box.MinX, box.MaxY - box.MinY));
 
         var geo = factory.CreatePathGeometry();
         using var sink = geo.Open();
@@ -2631,7 +2664,7 @@ internal sealed partial class Stroke
         // **曲线的半轴**（不是渐近线框的 A / B —— 那两个只用来画虚线渐近线，见 BuildAuxGeometry）。
         float a = HyperbolaCurveALocal(), b = HyperbolaCurveBLocal();
         var box = CurveBoxLocal();
-        int n = CurveSegments(MathF.Max(box.MaxX - box.MinX, box.MaxY - box.MinY));
+        int n = ExactCurveSegmentCount(MathF.Max(box.MaxX - box.MinX, box.MaxY - box.MinY));
         float tMax = HyperbolaTMaxLocal();
 
         var geo = factory.CreatePathGeometry();
@@ -2659,7 +2692,7 @@ internal sealed partial class Stroke
     {
         if (Points.Count < 2) return BuildLine(factory);
 
-        int n = WaveSegmentsLocal();
+        int n = WaveSegmentsExact();
 
         var geo = factory.CreatePathGeometry();
         using var sink = geo.Open();
@@ -2680,18 +2713,35 @@ internal sealed partial class Stroke
     /// 不会出现"画出来是按外框、手柄按半轴"这种两套账。
     /// </summary>
     private ID2D1Geometry BuildEllipse(ID2D1Factory1 factory)
-    {
-        return factory.CreateEllipseGeometry(
-            new Ellipse(ShapeCenterLocal,
-                        MathF.Max(0.5f, SemiAxisALocal),
-                        MathF.Max(0.5f, SemiAxisBLocal)));
-    }
+        => BuildEllipseRing(factory, SemiAxisALocal, SemiAxisBLocal);
 
-    /// <summary>圆几何（D2D 原生椭圆几何，两个半径相同）。</summary>
+    /// <summary>圆几何（和椭圆同一条路：精确折线环）。</summary>
     private ID2D1Geometry BuildCircle(ID2D1Factory1 factory)
+        => BuildEllipseRing(factory, CircleRadiusLocal, CircleRadiusLocal);
+
+    /// <summary>
+    /// 圆 / 椭圆的**精确折线环**：渲染与熔墨用同一串点，面积擦除后逐像素不差。
+    ///
+    /// 2026-11-25：以前圆 / 椭圆走 `ID2D1EllipseGeometry`（D2D 原生曲线），
+    /// 熔墨只能近似成折线——圆越大、边缘那 0.2px 的差越容易被看出来（像素自检约 0.7%）。
+    /// 现在两边共用同一份自适应点列（弦高 ≤ 0.2px），既保持观感（远小于一个像素），
+    /// 又让"擦前 / 擦后"的轮廓逐点相同。
+    /// </summary>
+    private ID2D1PathGeometry BuildEllipseRing(ID2D1Factory1 factory, float rx, float ry)
     {
-        float r = MathF.Max(0.5f, CircleRadiusLocal);
-        return factory.CreateEllipseGeometry(new Ellipse(ShapeCenterLocal, r, r));
+        var c = ShapeCenterLocal;
+        rx = MathF.Max(0.5f, rx);
+        ry = MathF.Max(0.5f, ry);
+        float maxR = MathF.Max(rx, ry);
+        int n = Math.Max(EllipseSegments(maxR),
+                         AdaptiveArcSegments(maxR * TransformScaleEstimate, MathF.Tau));
+        var ring = new List<Vector2>(n + 1);
+        for (int i = 0; i <= n; i++)
+        {
+            float t = i / (float)n * MathF.Tau;
+            ring.Add(new Vector2(c.X + MathF.Cos(t) * rx, c.Y + MathF.Sin(t) * ry));
+        }
+        return FromPieces(factory, new List<InkPiece> { new InkPiece(ring, false) });
     }
 
     /// <summary>
@@ -2708,63 +2758,67 @@ internal sealed partial class Stroke
     /// **主体**——它得是实线、和椭圆同一个颜色同一个粗细，放辅助槽里就成了一条虚线。
     /// </summary>
     private ID2D1PathGeometry BuildConicEllipse(ID2D1Factory1 factory)
+        => FromPieces(factory, ConicEllipsePieces());
+
+    /// <summary>
+    /// 椭圆（带焦点）**画出来的每一笔**：椭圆本体 ＋（有档时）焦点三角形的两条边
+    /// ＋ 两个焦点小圆。渲染（<see cref="BuildConicEllipse"/>）与熔墨
+    /// （<see cref="InkPieces"/>）**共用这一份**——各写一套就会"擦一下焦点 / 三角形没了"。
+    /// </summary>
+    private List<InkPiece> ConicEllipsePieces()
     {
+        var list = new List<InkPiece>();
         var c = ShapeCenterLocal;
         float rx = MathF.Max(0.5f, SemiAxisALocal);
         float ry = MathF.Max(0.5f, SemiAxisBLocal);
+        int n = ConicEllipseSegments(rx, ry);
 
-        var geo = factory.CreatePathGeometry();
-        using var sink = geo.Open();
-
-        // ① 椭圆本体：一圈折线（首尾相接 → 闭合）
-        int n = EllipseSegments(MathF.Max(rx, ry));
-        if (PreviewSmooth) n = Math.Max(n, 72);
-        sink.BeginFigure(new Vector2(c.X + rx, c.Y), FigureBegin.Hollow);
-        for (int i = 1; i <= n; i++)
+        // ① 椭圆本体：一圈折线（首尾相接 → 视觉闭合）
+        var ring = new List<Vector2>(n + 1);
+        for (int i = 0; i <= n; i++)
         {
             float t = i / (float)n * MathF.Tau;
-            sink.AddLine(new Vector2(c.X + MathF.Cos(t) * rx, c.Y + MathF.Sin(t) * ry));
+            ring.Add(new Vector2(c.X + MathF.Cos(t) * rx, c.Y + MathF.Sin(t) * ry));
         }
-        sink.EndFigure(FigureEnd.Closed);
+        list.Add(new InkPiece(ring, false));
 
         var (f1, f2) = ConicEllipseFociLocal();
 
-        // ② 焦点三角形的两条边：**一笔画 F₁ → P → F₂**（两条边共用中间的 P，
-        //    写成一条折线就是"画出来的那个三角形去掉底边"）。
+        // ② 焦点三角形的两条边：一笔画 F₁ → P → F₂（三角形去掉底边）
         if (FocusTriangle)
         {
             var p = ConicEllipsePointLocal();
-            sink.BeginFigure(f1, FigureBegin.Hollow);
-            sink.AddLine(p);
-            sink.AddLine(f2);
-            sink.EndFigure(FigureEnd.Open);
+            list.Add(new InkPiece(new List<Vector2> { f1, p, f2 }, false));
         }
 
-        // ③ 两个焦点：小圆点（描边＝这一笔的宽度，见 FocusDotRadius 的注释）。
-        //    同样按折线画一圈（8 段足够小到看不出棱角）。
-        //    **两档都画**：用户 2026-09-22 定的"无焦点三角形"只是不连那两条边，焦点还在。
+        // ③ 两个焦点：小圆点（描边＝这一笔的宽度，见 FocusDotRadius）
         if (!PreviewFocusDots)
         {
-            AddDot(sink, f1);
-            AddDot(sink, f2);
+            list.Add(new InkPiece(DotRing(f1, FocusDotRadius, 8), false));
+            list.Add(new InkPiece(DotRing(f2, FocusDotRadius, 8), false));
         }
+        return list;
+    }
 
-        sink.Close();
-        return geo;
+    /// <summary>椭圆（带焦点）那个椭圆的段数：**渲染与熔墨共用**（含 Transform 缩放加密）。</summary>
+    private int ConicEllipseSegments(float rx, float ry)
+    {
+        int n = EllipseSegments(MathF.Max(rx, ry));
+        if (PreviewSmooth) n = Math.Max(n, 72);
+        return Math.Max(n, AdaptiveArcSegments(MathF.Max(rx, ry) * TransformScaleEstimate, MathF.Tau));
+    }
 
-        // 小工具：画一个"小圆点"（8 段折线的小圆）。
-        static void AddDot(ID2D1GeometrySink sink, Vector2 at)
+    /// <summary>`seg` 段小圆（首尾相接），给焦点小圆点用；点列渲染与熔墨共用。</summary>
+    private static List<Vector2> DotRing(Vector2 at, float r, int seg)
+    {
+        var pts = new List<Vector2>(seg + 1);
+        pts.Add(new Vector2(at.X + r, at.Y));
+        for (int i = 1; i <= seg; i++)
         {
-            const int seg = 8;
-            sink.BeginFigure(new Vector2(at.X + FocusDotRadius, at.Y), FigureBegin.Hollow);
-            for (int i = 1; i <= seg; i++)
-            {
-                float t = i / (float)seg * MathF.Tau;
-                sink.AddLine(new Vector2(at.X + MathF.Cos(t) * FocusDotRadius,
-                                         at.Y + MathF.Sin(t) * FocusDotRadius));
-            }
-            sink.EndFigure(FigureEnd.Closed);
+            float t = i / (float)seg * MathF.Tau;
+            pts.Add(new Vector2(at.X + MathF.Cos(t) * r, at.Y + MathF.Sin(t) * r));
         }
+        return pts;
     }
 
 }

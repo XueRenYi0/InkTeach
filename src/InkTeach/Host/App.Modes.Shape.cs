@@ -205,6 +205,13 @@ internal sealed partial class App
             _quit = true;
             return null;
         }),
+        new("--shapemelttest", "图形面积擦除零变形（熔墨前后未擦区域逐像素对比）", args =>
+        {
+            _autoExitAt = double.MaxValue;
+            _nextLogAt = double.MaxValue;
+            ShapeMeltTest();
+            return null;
+        }),
         new("--shapetest", "", args =>
         {
             _autoExitAt = double.MaxValue;

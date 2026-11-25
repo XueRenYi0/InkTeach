@@ -730,7 +730,7 @@ internal sealed partial class Stroke
             // 只对"没被橡皮擦过、也不是回放前缀"的整笔生效；擦除/回放照样走旧路
             //（擦除区间是按原始点切的，建模点和参数序号对不上——见 StrokeMotion 的注释）。
             // 上游输出点密度足够（≥180Hz），直接当折线描边即可（弦高误差远小于 1px）。
-            if (!clipped && Erased.Count == 0 && StrokeMotion.Build(this))
+            if (!ExactPolyline && !clipped && Erased.Count == 0 && StrokeMotion.Build(this))
             {
                 // mean2 的曲线层固定为**过点曲线**（拟合档已随停用清理，2026-10-05）。
                 // `--nosmooth` 时连模型输出也不上曲线——这样它才是一个真正的
@@ -754,7 +754,7 @@ internal sealed partial class Stroke
                 // 曲线化（`--smooth`）：把这一段 run 的采样点喂给曲线器，输出一串三次贝塞尔。
                 // **点还是原来那些点**——曲线严格过每一个采样点，直角由角点保护保住；
                 // 不生效时（开关关着 / 段数不够）原样退回下面的折线路径。
-                bool smoothed = StrokeSmoothing.Enabled && !RawWhileLive && AppendSmoothedRun(sink, a, b);
+                bool smoothed = !ExactPolyline && StrokeSmoothing.Enabled && !RawWhileLive && AppendSmoothedRun(sink, a, b);
                 GeomTrace(this, "A", "原始", smoothed,
                           $"clipped={clipped} erased={Erased.Count} model={StrokeMotion.Build(this)} live={RawWhileLive} enabled={StrokeSmoothing.Enabled}");
                 if (!smoothed)

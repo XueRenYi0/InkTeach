@@ -23,7 +23,7 @@
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 170 行
       - `Engine.cs` 2,924 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
-      - `Engine.Host.cs` 2,583 行 — 启动、消息循环、窗口过程（WndProc）。
+      - `Engine.Host.cs` 2,584 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
       - `Engine.Selection.Gesture.cs` 1,466 行 — 框选/套索/拖动/对齐吸附/美化入口。
@@ -32,14 +32,14 @@
       - `Engine.SelectionBar.cs` 731 行 — 选中操作条的状态与动作：颜色/粗细/线型/锁定/层级/取色器/菜单。
       - `InkFile.cs` 610 行 — .inkb 的保存 / 打开：异步读盘与解析（按代作废）、打开前备份与轮转、界面命令接线。
       - `InkHistory.cs` 97 行
-      - `InkSerializer.cs` 927 行 — .inkb 序列化：笔画/图像/块格式。
+      - `InkSerializer.cs` 938 行 — .inkb 序列化：笔画/图像/块格式。
       - `Model.EditActions.cs` 920 行 — 撤销/重做动作（Add/Remove/Erase/Transform/SetProp 等）。
-      - `Model.InkDocument.cs` 2,054 行 — 文档/页/槽/撤销栈/空间索引。
+      - `Model.InkDocument.cs` 2,063 行 — 文档/页/槽/撤销栈/空间索引。
       - `Model.LaserTrail.cs` 185 行 — 激光笔轨迹（淡出、采样）。
-      - `Model.Stroke.cs` 971 行 — Stroke 核心：点、颜色、粗细、变换、几何入口（含 InkPiece 嵌套类）。
-      - `Model.Stroke.Curves.cs` 1,130 行 — 坐标系/数轴/四种曲线的几何构建。
+      - `Model.Stroke.cs` 1,106 行 — Stroke 核心：点、颜色、粗细、变换、几何入口（含 InkPiece 嵌套类）。
+      - `Model.Stroke.Curves.cs` 1,140 行 — 坐标系/数轴/四种曲线的几何构建。
       - `Model.Stroke.Solids.cs` 899 行 — 立体图形（圆柱/圆锥/球/棱柱等）的几何构建。
-      - `Model.Stroke.Tangent.cs` 2,770 行 — 正切曲线的几何构建。
+      - `Model.Stroke.Tangent.cs` 2,824 行 — 正切曲线的几何构建。
       - `Model.Types.cs` 853 行 — Tool / StrokeKind / CurveAxis / RectF / InkPoint 等基础类型。
       - `Recovery.cs` 182 行
       - `Selection.cs` 3,377 行 — 选择框、手柄、变换矩阵、紧框与命中。
@@ -149,7 +149,7 @@
       - `Overlay.Readout.cs` 1,572 行 — 读数、收藏面板、滚动条、回放/PPT 条绘制。
       - `Overlay.SelectionBar.cs` 1,064 行 — 选中操作条/色板/字体/图层/菜单的绘制。
       - `Overlay.Toast.cs` 339 行
-      - `Overlay.Ui.cs` 1,474 行 — 界面层合成与界面位图上传。
+      - `Overlay.Ui.cs` 1,476 行 — 界面层合成与界面位图上传。
       - `OverlayCoords.cs` 65 行 — 覆盖窗口的坐标换算（画布 ↔ 窗口 ↔ 屏幕）与窗口裁剪：纯数学、无状态，OverlayWindow 与单测共用。
       - `OverlayLayerManager.cs` 192 行
       - `OverlayLayerRegistration.cs` 215 行
@@ -242,7 +242,7 @@
       - `App.Modes.Dev.cs` 195 行 — 自检模式注册表：Dev 域（ADR-005 D2）。新增模式只改本文件。
       - `App.Modes.Doc.cs` 94 行 — 自检模式注册表：Doc 域（ADR-005 D2）。新增模式只改本文件。
       - `App.Modes.Ink.cs` 614 行 — 自检模式注册表：Ink 域（ADR-005 D2）。新增模式只改本文件。
-      - `App.Modes.Shape.cs` 244 行 — 自检模式注册表：Shape 域（ADR-005 D2）。新增模式只改本文件。
+      - `App.Modes.Shape.cs` 251 行 — 自检模式注册表：Shape 域（ADR-005 D2）。新增模式只改本文件。
       - `App.Modes.Sys.cs` 588 行 — 自检模式注册表：Sys 域（ADR-005 D2）。新增模式只改本文件。
       - `App.Modes.Ui.cs` 398 行 — 自检模式注册表：Ui 域（ADR-005 D2）。新增模式只改本文件。
       - `Program.cs` 545 行
@@ -296,6 +296,7 @@
         - `SettingsAudit.cs` 550 行
         - `ShapeAudit.cs` 104 行
         - `ShapeLibrary.cs` 4,475 行 — 图形面板/收藏 E2E。
+        - `ShapeMelt.cs` 320 行 — 图形面积擦除"零变形"像素级 E2E：熔墨前后未擦区域逐像素对比。
         - `ShapePanel.cs` 845 行 — 图形面板专项 E2E。
         - `SnapTest.cs` 219 行
         - `Startup.cs` 41 行
@@ -313,12 +314,12 @@
         - `ZoomShots.cs` 776 行 — 文档缩放 E2E：出图（50/100/200/300 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
 
       **InkTeach/SelfTests/Unit/**
-        - `UnitTestRunner.cs` 173 行
+        - `UnitTestRunner.cs` 175 行
         - `UnitTests.Algo.cs` 130 行 — L1 纯逻辑测试：空闲瘦身状态机（IdleMemoryTrimmer）。
         - `UnitTests.Camera.cs` 65 行
-        - `UnitTests.Core.cs` 333 行
+        - `UnitTests.Core.cs` 335 行
         - `UnitTests.Overlay.cs` 84 行
-        - `UnitTests.Perf.cs` 359 行 — L1 纯逻辑测试（2026-11-25 三项性能优化）：多屏跳帧判定 / 高压保险丝 / 三段式点抽稀。
+        - `UnitTests.Perf.cs` 429 行 — L1 纯逻辑测试（2026-11-25 三项性能优化）：多屏跳帧判定 / 高压保险丝 / 三段式点抽稀。
         - `UnitTests.Ppt.cs` 68 行
 
     **InkUi/Ai/**

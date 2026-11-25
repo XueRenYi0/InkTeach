@@ -86,7 +86,9 @@ internal static class UnitTestsCore
         string hash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(blob));
         // Golden Master：格式一变就红。有意改格式时更新这一行并在 commit 说明原因。
-        Check.Equal("198DB9B4C51D4A54045EAFF8AD80435D6624C8F81DE0109509A35DC8CEEBF33D",
+        // 2026-11-25 v36：每条笔画末尾追加"精确折线标记"（Stroke.ExactPolyline），
+        // 多一个字节 → 这个哈希整体换代（只改格式，不动其它字段）。
+        Check.Equal("B6E153E17BED6302DC740679B2E1D06A88C7ABBC1D3CCF2B799907F1E5475EF2",
             hash, file: "InkSerializer");
     }
 

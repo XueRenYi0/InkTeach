@@ -1098,6 +1098,16 @@ internal sealed partial class Stroke
         return PreviewSmooth ? Math.Max(n, 160) : n;
     }
 
+    /// <summary>
+    /// 波形**精确采样**段数（渲染 BuildWave 与熔墨共用）：按整条曲线的像素长度
+    /// 每 1.5px 一段加密，并按 Transform 缩放补偿。多个周期的波浪不会再熔成折线。
+    /// </summary>
+    private int WaveSegmentsExact()
+        => Math.Max(WaveSegmentsLocal(),
+            Math.Clamp((int)MathF.Ceiling(
+                WaveLengthLocal() * MathF.Max(1f, WaveCyclesLocal())
+                * TransformScaleEstimate / 1.5f), 96, 720));
+
 
     /// <summary>
     /// 峰 / 谷这两个**极值点**（用户说的"统一根据最大最小点来控制图形"）。

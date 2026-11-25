@@ -185,8 +185,12 @@ internal static class InkSerializer
     /// v28（2026-11-06）：文本框末尾追加一位 **Paper**（识别到文本框的纸面背景）。
     /// v29（2026-11-06）：再追加 **字体档 / 行距 / 逐行墨色**（识别结果按行保留红蓝）。
     /// v30（2026-11-06）：再追加 **逐字墨色 span**（编辑时选中一段改色）。
+    /// v36（2026-11-25）：每条笔画多一个 **精确折线标记**（<see cref="Stroke.ExactPolyline"/>）：
+    /// 图形面积擦除熔出来的墨 = 已经算好的精确折线，**存盘重开也必须继续按折线渲染**，
+    /// 否则又被手写平滑 / 运动模型重新解释一遍（直角变圆角、大圆变多边形）。
+    /// 老文件（≤ v35）读进来 false，正是普通手写笔迹本来的样子。
     /// </summary>
-    public const int FormatVersion = 35;
+    public const int FormatVersion = 36;
 
     /// <summary>注册到系统的剪贴板格式名（RegisterClipboardFormat）。</summary>
     public const string ClipboardFormatName = "InkTeach.InkObjects";
@@ -466,6 +470,10 @@ internal static class InkSerializer
         // 一行 JSON；表达式/参数/圆锥参数都在这。旧文件没有这一段，读端按版本号跳过。
         if (s.Kind == StrokeKind.Figure)
             w.Write(s.Figure != null ? PlotSpecJson.Write(s.Figure) : "");
+
+        // ---- v36：精确折线标记（见 Stroke.ExactPolyline）----
+        // 无条件写一位：熔墨产物存盘重开必须继续走"精确折线"，否则变形会复发。
+        w.Write((byte)(s.ExactPolyline ? 1 : 0));
     }
 
     // =====================================================================
@@ -834,6 +842,9 @@ internal static class InkSerializer
             string plotJson = ReadString(r, 1_000_000);
             s.Figure = PlotSpecJson.Read(plotJson);
         }
+
+        // ---- v36：精确折线标记（老文件没有这一位，一律 false = 普通手写笔迹）----
+        if (version >= 36) s.ExactPolyline = r.ReadByte() != 0;
 
         // ---- v13：抛物线的第二个点**换了含义**，老文件要迁移一次 ----
         //

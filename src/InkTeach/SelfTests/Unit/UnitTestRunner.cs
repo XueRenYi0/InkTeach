@@ -112,6 +112,8 @@ internal static class UnitTestRunner
             UnitTestsPerf.FramePressureValve_EntersOnSustainedSlow_RecoversOnFast),
         (nameof(UnitTestsPerf.StrokeSimplifier_FreezesTailForTaper_And_CompressesMiddle),
             UnitTestsPerf.StrokeSimplifier_FreezesTailForTaper_And_CompressesMiddle),
+        (nameof(UnitTestsPerf.ShapeMelt_ExactPolyline_RoundTrip_And_BypassesTaperAndSimplifier),
+            UnitTestsPerf.ShapeMelt_ExactPolyline_RoundTrip_And_BypassesTaperAndSimplifier),
     };
 
     public static int Run(string[] args)

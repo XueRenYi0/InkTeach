@@ -1184,6 +1184,7 @@ public partial class InkEngine
         // 合成/真实点击都会落到那个窗口上，批注一个字都画不出来。
         Native.SetTimer(_windows[0].Hwnd, (IntPtr)1, 250, IntPtr.Zero);
         DpiScale = _windows[0].Dpi / 96f;
+        Doc.DotUnitPx = DpiScale;            // 熔墨时圆心点的固定尺寸（见 InkDocument.DotUnitPx）
         PressureSim.DpiScale = DpiScale;    // 模拟压力按 72dpi 口径换算距离（见 PressureSim）
         PressureSim.BumpVersion();
 

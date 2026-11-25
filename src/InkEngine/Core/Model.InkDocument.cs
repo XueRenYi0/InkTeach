@@ -786,6 +786,15 @@ internal sealed class InkDocument
         _redo.Clear();
     }
 
+    /// <summary>
+    /// **一个逻辑像素在画布上是多少物理像素**（引擎初始化时把 DpiScale 抄进来）。
+    ///
+    /// 只服务一件事：圆的**圆心点**在屏幕上恒定是 1.25 逻辑像素半径（见
+    /// `Overlay.DrawShapeCenterInk`），面积橡皮把它熔成单点笔迹时要按这个比例还原，
+    /// 否则高 DPI 屏上"擦一下圆心点变小一圈"。
+    /// </summary>
+    internal float DotUnitPx = 1f;
+
     public void AddStroke(Stroke s)
     {
         var act = new AddStrokesAction();
@@ -1329,7 +1338,7 @@ internal sealed class InkDocument
             // ① 先在**还没进文档**的这一组副本上算好每一笔要擦掉的区间。
             //    一整组都没被切到就什么都不做：既不熔（熔了没切到 = 白白把图形降级成墨），
             //    也不打掉它的几何缓存。
-            var pieces = s.MeltToInkParts();
+            var pieces = s.MeltToInkParts(DotUnitPx);
             var tables = new List<List<(float a, float b)>>(pieces.Count);
             bool any = false;
             for (int k = 0; k < pieces.Count; k++)

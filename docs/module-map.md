@@ -48,6 +48,7 @@
 | 文本框 / 公式 | `InkEngine/Text/TextBoxEditing.cs` | `MathRenderer.cs` · `LatexCompat.cs` | `--textboxsim` |
 | 图形识别 | `InkEngine/Shapes/ShapeRecognize.cs` | `PointCloudRecognizer.cs` | `--inktest` |
 | 图形卡 / 图形库 | `InkEngine/Shapes/ShapeCatalog.cs` | `ShapePreview.cs` | `--shapepaneltest` |
+| 图形面积擦除（熔墨零变形） | `InkEngine/Core/Model.Stroke.cs`（`InkPieces` / `MeltToInkParts`） | `Model.Stroke.Tangent.cs`（`ShapeOutlineCore`）· `Model.Stroke.Solids.cs`（`BuildCenterlineCore`）· `Model.InkDocument.cs`（`ApplyErase`） | `--shapemelttest` / `--pixelerasetest` |
 | 设置页 | `InkUi/Panels/FullUi.Settings.cs` | `InkEngine/Core/Settings.cs` | `--settingsaudit` |
 | 更多面板 / 日志页 | `InkUi/Panels/FullUi.MorePanel.cs` | `InkUi/Shell/FullUi.Interaction.cs` | `--paneltest` |
 | 最近文档（更多 → 最近文档） | `InkUi/Panels/FullUi.Pages.cs`（那一小条） | `InkEngine/Doc/DocImport.cs` 打开成功时记一条 · `Doc/DocStore.cs` 的 `RecentDocs` 线格式 | `--paneltest` / `--doctest` |

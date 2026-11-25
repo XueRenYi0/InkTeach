@@ -74,7 +74,7 @@ internal static class StrokeTaper
     /// 一定报压感）是主要设备，笔锋要在有压感的中段上再叠末端尖尾。
     /// </summary>
     public static bool Eligible(Stroke s)
-        => Enabled && s != null && s.Tool == Tool.Pen
+        => Enabled && s != null && !s.ExactPolyline && s.Tool == Tool.Pen
            && s.Kind == StrokeKind.Freehand && s.Points.Count >= 4
            && s.Dash == StrokeDash.Solid;     // 虚线/点线走等宽描边，没有"尖端"可言
 

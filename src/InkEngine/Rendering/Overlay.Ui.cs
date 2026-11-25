@@ -1214,6 +1214,8 @@ internal sealed partial class OverlayWindow
     {
         if (_ctx2 == null || _inkStyle == null) return false;
         if (!InkAvailable) return false;
+        // 熔墨产物是**精确折线**：绝不能进压感 / 笔锋通道（那会重新变宽、把直角拉圆）。
+        if (s.ExactPolyline) return false;
         // 变宽通道放行 = 「有压感参与（压感开且这笔有压力）」或「笔锋生效」之一。
         // 有压感的笔迹在压感关掉后仍可因笔锋开而走这条路（中段等宽、末端尖尾）。
         bool taperOn = StrokeTaper.Eligible(s);

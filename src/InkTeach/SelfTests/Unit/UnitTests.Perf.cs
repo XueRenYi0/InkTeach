@@ -356,4 +356,74 @@ internal static class UnitTestsPerf
         Check.True(StrokeMotion.Count <= liveSim.Points.Count + 8,
                    $"StrokeMotion 输出点数 {StrokeMotion.Count} 不许停留在旧的 200（抽稀后 {liveSim.Points.Count}）");
     }
+
+    // ======================================================================
+    //  4. 图形面积擦除"零变形"：精确折线熔墨
+    // ======================================================================
+
+    /// <summary>
+    /// 图形熔墨产物的硬约束（2026-11-25 面积擦除零变形）：
+    ///   · 每一片都是 <see cref="Stroke.ExactPolyline"/>，且不带压感；
+    ///   · 笔锋 / 抬笔抽稀**都不许碰它**（碰了就会把直角和圆弧重新解释一遍）；
+    ///   · 存盘 → 重开之后标记还在（不然"重开又变形"）；
+    ///   · 自适应圆弧段数对大圆（r=300）足够密（弦高 ≤ 0.2px，≥80 段）。
+    /// </summary>
+    [UnitTest]
+    internal static void ShapeMelt_ExactPolyline_RoundTrip_And_BypassesTaperAndSimplifier()
+    {
+        // ---- ① 自适应圆弧段数：r=300 整圆 ≥ 80 段，且弦高真的 ≤ 0.2px ----
+        int n300 = Stroke.AdaptiveArcSegments(300f, MathF.Tau);
+        Check.True(n300 >= 80, $"r=300 整圆自适应段数应 ≥80，实际 {n300}");
+        Check.True(n300 <= 180, $"段数上限 180，实际 {n300}");
+        float sagitta = 300f * (1f - MathF.Cos(MathF.PI / n300));
+        Check.True(sagitta <= Stroke.ExactChordErrorPx + 1e-3f,
+                   $"弦高 {sagitta:F3}px 应 ≤ {Stroke.ExactChordErrorPx}px");
+        // 小圆也不能缩到看不出圆（下限 24 段）。
+        Check.True(Stroke.AdaptiveArcSegments(1f, MathF.Tau) >= 24, "小圆至少 24 段");
+
+        // ---- ② 39 / 41 张图形卡逐张熔墨：全部带精确折线标记 ----
+        int totalPieces = 0, singlePointDots = 0;
+        foreach (var p in ShapeCatalog.All)
+        {
+            var shape = ShapePreview.Create(p);
+            var pieces = shape.MeltToInkParts();
+            Check.True(pieces.Count > 0, $"{p.Label}：熔墨后一片都没有");
+            foreach (var m in pieces)
+            {
+                Check.True(m.ExactPolyline, $"{p.Label}：熔墨片段缺 ExactPolyline");
+                Check.True(!m.HasPressure, $"{p.Label}：熔墨片段不该带压感");
+                Check.True(!StrokeTaper.Eligible(m), $"{p.Label}：笔锋不许作用于熔墨");
+                Check.True(!StrokeSimplifier.Eligible(m), $"{p.Label}：抬笔抽稀不许作用于熔墨");
+                if (m.Points.Count == 1) singlePointDots++;
+            }
+            totalPieces += pieces.Count;
+            // 圆：圆心点必须作为单点笔迹保留（擦一下不能没）。
+            if (p.Tool == Tool.Circle)
+                Check.True(pieces.Exists(x => x.Points.Count == 1),
+                           "圆：圆心点必须熔成一条单点笔迹");
+        }
+        Check.True(totalPieces >= ShapeCatalog.All.Length, "熔墨片段总数应不少于图形数");
+        Check.True(singlePointDots >= 1, "至少圆心的单点装饰被保留下来");
+
+        // ---- ③ 存档往返：ExactPolyline 必须活下来 ----
+        var rect = new Stroke
+        {
+            Tool = Tool.Rectangle, Kind = StrokeKind.Rectangle,
+            Color = new Vortice.Mathematics.Color4(0f, 0f, 0f, 1f), Width = 3f,
+        };
+        rect.AddPoint(100f, 100f, 1f, 0);
+        rect.AddPoint(400f, 300f, 1f, 0);
+        var melted = rect.MeltToInkParts();
+        Check.True(melted.Count >= 1, "矩形熔墨至少一片");
+
+        byte[] blob = InkSerializer.SaveStrokes(melted);
+        var back = InkSerializer.LoadStrokes(blob, out _);
+        Check.Equal(melted.Count, back.Count);
+        for (int i = 0; i < back.Count; i++)
+        {
+            Check.True(back[i].ExactPolyline, $"往返后第 {i} 片丢了 ExactPolyline");
+            Check.True(!back[i].HasPressure, $"往返后第 {i} 片不该带压感");
+            Check.Equal(melted[i].Points.Count, back[i].Points.Count);
+        }
+    }
 }

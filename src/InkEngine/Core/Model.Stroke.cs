@@ -89,6 +89,21 @@ internal sealed partial class Stroke
     public bool HasPressure;
 
     /// <summary>
+    /// **这一笔是"精确折线"**（2026-11-25，图形面积擦除零变形）：只有**图形熔出来的墨**
+    /// 会置 true，普通手写笔迹恒 false。
+    ///
+    /// 为什么需要它：熔墨产物是一串"已经算好的、逐点等于原图折线"的点。它再走
+    /// <see cref="StrokeMotion"/>（运动模型）或 <see cref="StrokeSmoothing"/>（过点曲线）
+    /// 就会被**重新解释**——直角被圆角化、多边形收缩、大圆变多边形。
+    /// 置 true 之后渲染**直接按原始折线描边**（见 `BuildCenterlineCore` 与
+    /// `Overlay.DrawPressureInk`），并且收尖 / 抽稀都不参与，保证"熔完 = 擦前逐像素一致"。
+    ///
+    /// **进存档（v36）**：不进的话"擦一下图形、存盘重开又变形了"——最刺眼的那类 bug。
+    /// 老文件读进来 false（老文件里没有熔墨产物这个概念）。
+    /// </summary>
+    public bool ExactPolyline;
+
+    /// <summary>
     /// **正在写的那一笔：按原始折线画**（曲线只用在落笔之后，2026-09-28 用户实测后定的）。
     ///
     /// 为什么要有这个开关：过点曲线（centripetal Catmull-Rom）每来一个新采样点，
@@ -358,6 +373,10 @@ internal sealed partial class Stroke
                 // 线型也算"样式"，跟着继承（2026-09-19：自由笔迹有线型之后，
                 // 虚线笔迹被拆开的两截必须还是虚线，否则"拆完样子变了"）。
                 Dash = Dash,
+                // **精确折线也要跟着继承**：图形熔出来的墨在"擦完 → 按剩下段拆开"之后
+                // 仍然必须走原始折线，否则拆完这一步又会被手写平滑重新解释一遍
+                //（2026-11-25 面积擦除零变形：这里漏一位，圆/椭圆擦完照样变形）。
+                ExactPolyline = ExactPolyline,
             };
             var start = PointAtParam(a);
             p.AddPoint(start.X, start.Y, PressureAtParam(a), TimeAtParam(a));
@@ -395,11 +414,23 @@ internal sealed partial class Stroke
         /// </summary>
         public readonly bool Grid;
 
-        public InkPiece(List<Vector2> pts, bool aux) : this(pts, aux, false) { }
+        /// <summary>
+        /// **单点装饰**（圆心的那个小圆点）：> 0 = 这一笔不是折线，而是一个半径这么大的实心点。
+        /// 熔墨时它要变成一条**单点笔迹**（<see cref="MeltToInkParts"/>），
+        /// 否则"擦一下圆心点就没了"（2026-11-25 面积擦除零变形）。
+        /// </summary>
+        public readonly float DotRadius;
 
-        public InkPiece(List<Vector2> pts, bool aux, bool grid)
+        /// <summary>这一笔是不是单点圆点（见 <see cref="DotRadius"/>）。</summary>
+        public bool IsDot => DotRadius > 0.5f;
+
+        public InkPiece(List<Vector2> pts, bool aux) : this(pts, aux, false, 0f) { }
+
+        public InkPiece(List<Vector2> pts, bool aux, bool grid) : this(pts, aux, grid, 0f) { }
+
+        public InkPiece(List<Vector2> pts, bool aux, bool grid, float dotRadius)
         {
-            Pts = pts; Aux = aux; Grid = grid;
+            Pts = pts; Aux = aux; Grid = grid; DotRadius = dotRadius;
         }
     }
 
@@ -421,13 +452,31 @@ internal sealed partial class Stroke
     /// 代价（明确接受）：熔完它**不再是图形**——没有顶点手柄、不能改形状参数。
     /// 这一步靠撤销回退（原图形整个进撤销栈，见 EraseIntervalsAction.Item.UndoOriginal）。
     /// </summary>
-    public List<Stroke> MeltToInkParts()
+    public List<Stroke> MeltToInkParts(float dotUnit = 1f)
     {
         var list = new List<Stroke>();
-        foreach (var piece in InkPieces())
+        foreach (var piece in InkPieces(dotUnit))
         {
+            if (piece.IsDot)
+            {
+                // **单点装饰**（圆心点）：折线不足两点，但它必须留下来——不然"擦一下圆心没了"。
+                // 单点笔迹的渲染半径 = Width × 0.5（见 RendersAsDot / DotRadius），
+                // 所以宽度取直径即可和原来的实心小圆一致。
+                var m = new Stroke
+                {
+                    Tool = Tool, Kind = StrokeKind.Freehand,
+                    Color = Color,
+                    Width = MathF.Max(1f, piece.DotRadius * 2f),
+                    ExactPolyline = true,
+                    HasPressure = false,
+                };
+                var q = Transform.IsIdentity ? piece.Pts[0] : Vector2.Transform(piece.Pts[0], Transform);
+                m.AddPoint(q.X, q.Y, 1f, 0);
+                list.Add(m);
+                continue;
+            }
             if (piece.Pts.Count < 2) continue;
-            var m = new Stroke
+            var m2 = new Stroke
             {
                 Tool = Tool, Kind = StrokeKind.Freehand,
                 // 网格线熔成墨之后也**得是细的淡的**（见 AxisGridWidthFactor / AxisGridAlpha）：
@@ -438,14 +487,19 @@ internal sealed partial class Stroke
                       : piece.Grid ? MathF.Max(1f, Width * AxisGridWidthFactor)
                       : Width,
                 // 线型跟过来：虚线图形熔成笔迹之后还得是虚线（见 SplitIntoRuns 那条同一个理由）。
-                Dash = piece.Aux ? StrokeDash.Dashed : Dash,
+                // 网格线**恒定实线**（渲染时本来就是 `StyleFor(Solid)`，见 Overlay 的辅助几何那段）。
+                Dash = piece.Grid ? StrokeDash.Solid : piece.Aux ? StrokeDash.Dashed : Dash,
+                // **精确折线**：熔出来的点就是原图的点，绝不再交给手写平滑 / 运动模型 / 笔锋
+                // 重新解释，否则直角会变圆、大圆会变多边形（2026-11-25 用户反馈）。
+                ExactPolyline = true,
+                HasPressure = false,
             };
             foreach (var p in piece.Pts)
             {
                 var q = Transform.IsIdentity ? p : Vector2.Transform(p, Transform);
-                m.AddPoint(q.X, q.Y, 1f, 0);
+                m2.AddPoint(q.X, q.Y, 1f, 0);
             }
-            list.Add(m);
+            list.Add(m2);
         }
         return list;
     }
@@ -460,12 +514,32 @@ internal sealed partial class Stroke
     ///   · 这一份是"擦之前屏幕上有几笔，熔完就得有几笔"，所以实 / 虚分开、箭头网格不能漏。
     ///     （图形工具计划 §25：漏一处就是"擦一下少几笔"。）
     /// </summary>
-    public List<InkPiece> InkPieces()
+    public List<InkPiece> InkPieces(float dotUnit = 1f)
     {
         var list = new List<InkPiece>();
 
         switch (Kind)
         {
+            // ---- 圆：轮廓 ＋ **圆心点**（墨迹本身，见 Overlay.DrawShapeCenterInk）----
+            // 圆心点在屏幕上是个半径约 1.25 逻辑像素的实心小圆，不随圆半径缩放；
+            // 熔墨要把它变成单点笔迹，否则"面积橡皮一碰，圆心就没了"。
+            case StrokeKind.Circle:
+            {
+                if (Points.Count < 2) break;
+                foreach (var part in SplitOutlineParts(ShapeOutlineCore(exact: true)))
+                    list.Add(new InkPiece(part, false));
+                list.Add(new InkPiece(new List<Vector2> { ShapeCenterLocal }, false, false,
+                                     1.25f * MathF.Max(0.5f, dotUnit)));
+                break;
+            }
+
+            // ---- 椭圆（带焦点）：椭圆本体 ＋ 焦点三角形 ＋ 两个焦点小圆 ----
+            // 和渲染读同一份（<see cref="ConicEllipsePieces"/>），漏一笔就是"擦一下少一笔"。
+            case StrokeKind.ConicEllipse:
+                if (Points.Count < 2) break;
+                list.AddRange(ConicEllipsePieces());
+                break;
+
             // ---- 圆柱 / 圆锥 / 圆台 / 球：可见的几笔 ＋ 被挡住的那半圈（细虚线）----
             case StrokeKind.Cylinder:
             case StrokeKind.Cone:
@@ -511,7 +585,7 @@ internal sealed partial class Stroke
             //      实虚和双曲线同一个排法：曲线走主几何、渐近线走辅助几何。
             case StrokeKind.Tangent:
                 if (Points.Count < 2) break;
-                foreach (var part in SplitOutlineParts(ShapeOutline()))
+                foreach (var part in SplitOutlineParts(ShapeOutlineCore(exact: true)))
                     list.Add(new InkPiece(part, false));
                 for (int side = -1; side <= 1; side += 2)
                 {
@@ -523,7 +597,7 @@ internal sealed partial class Stroke
             // ---- 双曲线：两支（中间有抬笔）＋ 两条渐近线（细虚线）----
             case StrokeKind.Hyperbola:
                 if (Points.Count < 2) break;
-                foreach (var part in SplitOutlineParts(ShapeOutline()))
+                foreach (var part in SplitOutlineParts(ShapeOutlineCore(exact: true)))
                     list.Add(new InkPiece(part, false));
                 if (ShowAsymptotes)
                 {
@@ -539,7 +613,7 @@ internal sealed partial class Stroke
             //      抛物线 / 正弦 / 余弦 / 波浪线）：轮廓本来就是"画出来的那一条"，
             //      按抬笔分段即可 ----
             default:
-                foreach (var part in SplitOutlineParts(ShapeOutline()))
+                foreach (var part in SplitOutlineParts(ShapeOutlineCore(exact: true)))
                     list.Add(new InkPiece(part, false));
                 break;
         }
@@ -568,13 +642,70 @@ internal sealed partial class Stroke
         return parts;
     }
 
+    /// <summary>
+    /// **精确采样的弦高误差上限**（逻辑像素）：0.20 = 远小于一个像素，
+    /// 熔出来的大圆 / 椭圆与 D2D 原生曲线在屏幕上分辨不出差别。
+    /// </summary>
+    internal const float ExactChordErrorPx = 0.20f;
+
+    /// <summary>
+    /// **自适应圆弧段数**：按"弦高误差 ≤ <see cref="ExactChordErrorPx"/> 像素"反算，夹在 [24,180]。
+    ///
+    /// 公式：`n = ceil(span / (2·acos(1 − e/r)))`（`e` = 允许的弦高，`span` = 圆心角）。
+    /// 例：整圆 `span = 2π`、`r = 300px` → **约 86 段**，每段弦长 22px、弦高 0.2px。
+    ///
+    /// 纯静态、不读对象：自检直接钉它（`--unittest` / `--shapemelttest`）。
+    /// </summary>
+    internal static int AdaptiveArcSegments(float maxRadius, float spanRad)
+    {
+        if (!(maxRadius > 0.5f) || !(spanRad > 1e-4f)) return 24;
+        float ratio = 1f - ExactChordErrorPx / maxRadius;
+        if (ratio >= 1f) return 24;
+        if (ratio <= -1f) return 180;
+        float half = MathF.Acos(ratio);
+        if (!(half > 1e-4f)) return 180;
+        int n = (int)MathF.Ceiling(spanRad / (2f * half));
+        return Math.Clamp(n, 24, 180);
+    }
+
+    /// <summary>
+    /// <see cref="Transform"/> 的**近似缩放**（取两个基向量里较长的一条）。
+    ///
+    /// 精确采样要按**屏幕上的大小**算段数：图形被放大 3 倍之后，同样 48 段的圆
+    /// 在屏幕上的弦高也放大 3 倍，看着就是多边形。用 1 兜底（缩小不减少段数）。
+    /// </summary>
+    private float TransformScaleEstimate
+    {
+        get
+        {
+            var t = Transform;
+            float sx = MathF.Sqrt(t.M11 * t.M11 + t.M12 * t.M12);
+            float sy = MathF.Sqrt(t.M21 * t.M21 + t.M22 * t.M22);
+            return MathF.Max(1f, MathF.Max(sx, sy));
+        }
+    }
+
+    /// <summary>
+    /// 曲线（抛物线 / 双曲线）精确采样的段数：按横向跨度每 1.5px 一段，
+    /// 夹在 [96, 480]。曲线不像圆有确定半径，用"跨度密度"是保守做法——
+    /// 跨度 500px 时 334 段，弦高远小于 0.2px。
+    /// </summary>
+    private static int ExactCurveSegments(float extent)
+        => Math.Clamp((int)MathF.Ceiling(extent / 1.5f), 96, 480);
+
     /// <summary>椭圆上一段弧的采样点列（`u0 → u1`）：**立体图形的实线几何、虚线半圈、
-    /// 以及熔墨三处共用这一份点列**（渲染与熔出来的逐点相同）。</summary>
+    /// 以及熔墨三处共用这一份点列**（渲染与熔出来的逐点相同）。
+    ///
+    /// 段数取"画法需要的段数"与"弦高 ≤ 0.2px 的自适应段数"的**较大者**，
+    /// 并按 <see cref="Transform"/> 的缩放加密（放大过的圆熔墨不能发糙）。</summary>
     private List<Vector2> ArcPoints(Vector2 c, float rx, float ry, float u0, float u1)
     {
+        float maxR = MathF.Max(rx, ry);
         int n = PreviewSmooth
-            ? Math.Clamp((int)(MathF.Max(rx, ry) / 2f), 64, 160)
-            : Math.Clamp((int)(MathF.Max(rx, ry) / 4f), 12, 48);
+            ? Math.Clamp((int)(maxR / 2f), 64, 160)
+            : Math.Clamp((int)(maxR / 4f), 12, 48);
+        n = Math.Max(n, AdaptiveArcSegments(maxR * TransformScaleEstimate,
+                                            MathF.Abs(u1 - u0) * MathF.Tau));
         var pts = new List<Vector2>(n + 1);
         for (int i = 0; i <= n; i++)
             pts.Add(EllipseArcPoint(c, rx, ry, u0 + (u1 - u0) * i / n));
@@ -777,8 +908,9 @@ internal sealed partial class Stroke
         return Math.Clamp(d, 0f, 359f);
     }
 
-    /// <summary>扇形轮廓：圆心 → 圆弧 → 圆心；接近 359° 时直接按整圆画。</summary>
-    public List<Vector2> SectorOutlinePoints()
+    /// <summary>扇形轮廓：圆心 → 圆弧 → 圆心；接近 359° 时直接按整圆画。
+    /// <paramref name="exact"/> = 熔墨用的高精度采样（弦高 ≤ <see cref="ExactChordErrorPx"/>）。</summary>
+    public List<Vector2> SectorOutlinePoints(bool exact = false)
     {
         var list = new List<Vector2>();
         if (Points.Count < 3) return list;
@@ -789,6 +921,9 @@ internal sealed partial class Stroke
         bool full = sweep >= 358.5f;
         list.Add(c);
         int n = Math.Clamp((int)MathF.Ceiling(MathF.Max(r, 1f) * MathF.Tau / 8f), 32, 160);
+        if (exact)
+            n = Math.Max(n, AdaptiveArcSegments(r * TransformScaleEstimate,
+                                               (full ? 1f : sweep / 360f) * MathF.Tau));
         for (int i = 0; i <= n; i++)
         {
             float u = full ? i / (float)n : sweep / 360f * i / n;

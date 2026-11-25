@@ -69,7 +69,7 @@ internal static class StrokeSimplifier
     /// 这条笔迹该不该走抽稀（抬笔提交前的唯一判据）。**纯判定**，测试直接钉它。
     /// </summary>
     internal static bool Eligible(Stroke s)
-        => SimplifyOnPenUp && s != null
+        => SimplifyOnPenUp && s != null && !s.ExactPolyline
            && s.Kind == StrokeKind.Freehand
            && (s.Tool == Tool.Pen || s.Tool == Tool.Highlighter)
            && s.Points.Count >= MinPoints;
