@@ -668,6 +668,15 @@ public partial class InkEngine
         bool consumed = UiGuard("PointerUp", () => Ui.PointerUp(e), false);
         _uiPointers.Remove(pointerId);
         UiCapturing = _uiPointers.Count > 0;
+        // ★ 触摸 / 笔抬起来之后**不会再有"离开"消息**（2026-11-25 用户报：希沃白板触屏上贴边隐藏不生效）。
+        //
+        // 鼠标移开面板时，接输入小窗会收到 WM_POINTERLEAVE 并转成 Ui.PointerLeave()；
+        // 手指和笔没有悬停这一层——抬手就是最后一条消息。界面靠"指针还在不在面板上"
+        // （`_hoverInside`）决定贴边隐藏收不收，不清掉的话它永远是"在"，
+        // UpdatePeek 的 keepOpen 永远成立 → 面板拖到屏幕最底下也永远不收。
+        // 最后一根**界面捕获的**指针抬起 = 等效于指针离开面板。
+        if (!UiCapturing && (fromTouch || fromPen))
+            UiGuard("PointerLeave", () => Ui.PointerLeave());
         return consumed;
     }
 
