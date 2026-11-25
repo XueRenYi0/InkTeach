@@ -1,6 +1,6 @@
 # 目录树（自动生成，勿手改）
 
-> 生成：2026-11-23 ／ 脚本：`tools/gen-tree-map.ps1`
+> 生成：2026-11-25 ／ 脚本：`tools/gen-tree-map.ps1`
 > 用途：目录 = 功能域、文件名 = 功能块；先看树定位目录，再看行数决定读哪一段。
 > 语义导航（“某个需求该看哪 1–2 个文件”）看 `docs/module-map.md`；段落行号看 `docs/section-map.md`。
 
@@ -22,8 +22,8 @@
     **InkEngine/Core/**
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 170 行
-      - `Engine.cs` 2,921 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
-      - `Engine.Host.cs` 2,398 行 — 启动、消息循环、窗口过程（WndProc）。
+      - `Engine.cs` 2,924 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
+      - `Engine.Host.cs` 2,583 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
       - `Engine.Selection.Gesture.cs` 1,466 行 — 框选/套索/拖动/对齐吸附/美化入口。
@@ -32,14 +32,14 @@
       - `Engine.SelectionBar.cs` 731 行 — 选中操作条的状态与动作：颜色/粗细/线型/锁定/层级/取色器/菜单。
       - `InkFile.cs` 610 行 — .inkb 的保存 / 打开：异步读盘与解析（按代作废）、打开前备份与轮转、界面命令接线。
       - `InkHistory.cs` 97 行
-      - `InkSerializer.cs` 882 行 — .inkb 序列化：笔画/图像/块格式。
+      - `InkSerializer.cs` 927 行 — .inkb 序列化：笔画/图像/块格式。
       - `Model.EditActions.cs` 920 行 — 撤销/重做动作（Add/Remove/Erase/Transform/SetProp 等）。
-      - `Model.InkDocument.cs` 2,012 行 — 文档/页/槽/撤销栈/空间索引。
+      - `Model.InkDocument.cs` 2,054 行 — 文档/页/槽/撤销栈/空间索引。
       - `Model.LaserTrail.cs` 185 行 — 激光笔轨迹（淡出、采样）。
       - `Model.Stroke.cs` 971 行 — Stroke 核心：点、颜色、粗细、变换、几何入口（含 InkPiece 嵌套类）。
       - `Model.Stroke.Curves.cs` 1,130 行 — 坐标系/数轴/四种曲线的几何构建。
-      - `Model.Stroke.Solids.cs` 884 行 — 立体图形（圆柱/圆锥/球/棱柱等）的几何构建。
-      - `Model.Stroke.Tangent.cs` 2,566 行 — 正切曲线的几何构建。
+      - `Model.Stroke.Solids.cs` 899 行 — 立体图形（圆柱/圆锥/球/棱柱等）的几何构建。
+      - `Model.Stroke.Tangent.cs` 2,770 行 — 正切曲线的几何构建。
       - `Model.Types.cs` 853 行 — Tool / StrokeKind / CurveAxis / RectF / InkPoint 等基础类型。
       - `Recovery.cs` 182 行
       - `Selection.cs` 3,377 行 — 选择框、手柄、变换矩阵、紧框与命中。
@@ -65,7 +65,7 @@
       - `ClipboardInk.cs` 134 行
       - `ClipboardText.cs` 59 行
       - `Export.cs` 1,178 行 — 导出格式表：PNG/JPEG/BMP 与编码器选择。
-      - `ImageData.cs` 258 行
+      - `ImageData.cs` 264 行
       - `ImageFile.cs` 208 行
       - `PhotoBeautify.cs` 345 行
       - `ScreenCapture.cs` 106 行
@@ -89,7 +89,8 @@
       - `PointerInput.cs` 338 行
       - `PressureSim.cs` 306 行
       - `SmoothProbe.cs` 313 行
-      - `StrokeMotion.cs` 837 行 — 笔迹运动模型对照台（M0–M7）。
+      - `StrokeMotion.cs` 844 行 — 笔迹运动模型对照台（M0–M7）。
+      - `StrokeSimplifier.cs` 215 行 — 抬笔时的三段式无损点抽稀：首段冻结 + 尾段绝对冻结（保笔锋）+ 中段超保守 RDP。
       - `StrokeSmoothing.cs` 538 行
       - `Touch.cs` 362 行
       - `TouchStats.cs` 135 行
@@ -104,7 +105,9 @@
       - `Engine.Radial.cs` 707 行 — 呼出盘：按住/划向扇区/松手（清屏格单击即清，可撤销）。
       - `Engine.Update.cs` 1,138 行 — 自动更新：检查/下载/换壳。
       - `EraserTelemetry.cs` 329 行
+      - `FramePressureValve.cs` 117 行 — 高压保险丝时间驱动状态机：连续慢帧 → 进入高压（收紧分块预算、暂停离屏预取），连续快帧/空闲 → 退出。
       - `GcLatency.cs` 109 行
+      - `IdleMemoryTrimmer.cs` 113 行 — 空闲内存瘦身的时间驱动状态机（30s 轻度 / 穿透 5s / 90s 深度；任何活动重置）。
       - `KeyBindings.cs` 578 行 — 键位表、作用域、冲突检测、解析。
       - `Latency.cs` 216 行
       - `LogFeedback.cs` 93 行
@@ -129,23 +132,24 @@
       - `InkPredictorLinear.cs` 452 行
 
     **InkEngine/Rendering/**
-      - `CanvasTiles.cs` 552 行
+      - `CanvasTiles.cs` 716 行 — 内容层分块光栅缓存：画布空间分块、脏区/补画、分帧预算、预取与淘汰。
       - `Cursors.cs` 505 行
       - `Engine.Cursor.cs` 800 行 — 光标形状与滚动条交互。
       - `Engine.UiBridge.cs` 1,024 行 — 引擎 ↔ 界面边界：IOverlayUi 命令转发。
       - `GlyphFill.cs` 341 行
       - `Icons.Paths.cs` 142 行
       - `LegacyOverlayLayer.cs` 74 行
+      - `MultiMonitorSkip.cs` 420 行 — 多屏按窗跳帧：这一帧某扇覆盖窗口要不要 RenderFrame+Present 的纯判定、帧级事实收集、每窗一帧记忆。
       - `Overlay.Capture.cs` 832 行 — 截图取景框绘制：遮罩/准线/读数/手柄。
-      - `Overlay.Content.cs` 774 行 — 内容层合成：分块光栅、相机变换、缩放合成、滚动条。
+      - `Overlay.Content.cs` 784 行 — 内容层合成：分块光栅、相机变换、缩放合成、滚动条。
       - `Overlay.cs` 1,457 行 — 覆盖层主文件：窗口/初始化/生命周期。
-      - `Overlay.Frame.cs` 1,724 行 — 覆盖层帧渲染：内容/界面/装饰合成。
+      - `Overlay.Frame.cs` 1,834 行 — 覆盖层帧渲染：内容/界面/装饰合成。
       - `Overlay.PptBar.cs` 794 行 — PPT 条/回放条/滚动条绘制。
       - `Overlay.Radial.cs` 651 行 — 呼出盘绘制。
       - `Overlay.Readout.cs` 1,572 行 — 读数、收藏面板、滚动条、回放/PPT 条绘制。
       - `Overlay.SelectionBar.cs` 1,064 行 — 选中操作条/色板/字体/图层/菜单的绘制。
       - `Overlay.Toast.cs` 339 行
-      - `Overlay.Ui.cs` 1,468 行 — 界面层合成与界面位图上传。
+      - `Overlay.Ui.cs` 1,474 行 — 界面层合成与界面位图上传。
       - `OverlayCoords.cs` 65 行 — 覆盖窗口的坐标换算（画布 ↔ 窗口 ↔ 屏幕）与窗口裁剪：纯数学、无状态，OverlayWindow 与单测共用。
       - `OverlayLayerManager.cs` 192 行
       - `OverlayLayerRegistration.cs` 215 行
@@ -164,7 +168,7 @@
       - `Engine.Library.Input.cs` 1,013 行 — 收藏库指针输入：拖拽/整理/排序/页签拖动。
       - `Engine.Library.Layout.cs` 583 行 — 收藏面板插入/几何/尺寸/拖拽落位。
       - `Engine.Library.Menu.cs` 407 行 — 收藏库 ⋯ 菜单、过滤、滚动。
-      - `Engine.Library.Pair.cs` 561 行 — 收藏库杂项：双支配对/隐藏配对/结束笔画。
+      - `Engine.Library.Pair.cs` 568 行 — 收藏库杂项：双支配对/隐藏配对/结束笔画。
       - `Engine.ShapeTools.cs` 1,624 行 — 图形工具：直线/矩形/椭圆/箭头/曲线绘制。
       - `FavoriteTransfer.cs` 149 行
       - `FigureParamBar.cs` 126 行
@@ -309,10 +313,12 @@
         - `ZoomShots.cs` 776 行 — 文档缩放 E2E：出图（50/100/200/300 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
 
       **InkTeach/SelfTests/Unit/**
-        - `UnitTestRunner.cs` 163 行
+        - `UnitTestRunner.cs` 173 行
+        - `UnitTests.Algo.cs` 130 行 — L1 纯逻辑测试：空闲瘦身状态机（IdleMemoryTrimmer）。
         - `UnitTests.Camera.cs` 65 行
         - `UnitTests.Core.cs` 333 行
         - `UnitTests.Overlay.cs` 84 行
+        - `UnitTests.Perf.cs` 359 行 — L1 纯逻辑测试（2026-11-25 三项性能优化）：多屏跳帧判定 / 高压保险丝 / 三段式点抽稀。
         - `UnitTests.Ppt.cs` 68 行
 
     **InkUi/Ai/**

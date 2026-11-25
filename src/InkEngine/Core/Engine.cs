@@ -2476,6 +2476,9 @@ public partial class InkEngine
     internal bool _dirty = true;
     internal bool _drawing;
 
+    /// <summary>书写中包含"刚按下还没收到点"的那一小段（`_drawing`），只读给渲染层判预算。</summary>
+    internal bool IsDrawingNow => _drawing;
+
     /// <summary>这一帧为什么出（位标志）。只在 NeedsFrame 里填；1Hz 日志/慢帧日志读。</summary>
     [Flags]
     private enum FrameDrive

@@ -193,6 +193,34 @@ internal sealed class InkDocument
         => _pages.TryGetValue(key, out var s) ? s.Strokes : null;
 
     /// <summary>
+    /// **空闲瘦身**：释放所有**非当前页槽**里可重建的 GPU 缓存，返回处理过的笔数。
+    ///
+    /// 为什么安全：这些页当前不在屏幕上（切页 = 换引用，见 <see cref="PageSlot"/>），
+    /// 缓存放掉之后几何会按需重建（<c>Stroke.Release</c> 会把版本号打回 -1）。
+    /// 唯一不能碰的是"已经丢掉 CPU 源字节的位图"——那种图放掉显卡资源就再也画不出来，
+    /// 所以只释放 <see cref="ImageData.HasCpuBytes"/> 为 true 的图。
+    ///
+    /// 与 <see cref="LoadPageContent"/> / <see cref="ResetToSinglePage"/> 的区别：
+    /// 那两个是"整页不要了"，这里只是"暂时看不见，先把 GPU 侧还回去"。
+    /// </summary>
+    internal int TrimInactivePageCaches()
+    {
+        int released = 0;
+        foreach (var kv in _pages)
+        {
+            if (ReferenceEquals(kv.Value, _cur)) continue;
+            foreach (var s in kv.Value.Strokes)
+            {
+                // 没有 CPU 源字节的图（文档页位图）不能放：放掉就重建不出来。
+                if (s.IsImage && (s.Image == null || !s.Image.HasCpuBytes)) continue;
+                s.Release();
+                released++;
+            }
+        }
+        return released;
+    }
+
+    /// <summary>
     /// 往指定页槽装一页的内容（PPT 模式从磁盘读回某一页时用）。
     ///
     /// **绕开 <see cref="AppendStroke"/>**：那个只服务"当前页"，还会记历史、标脏区；
@@ -316,12 +344,24 @@ internal sealed class InkDocument
     private readonly List<Stroke> _queryScratch = new();
     /// <summary>像素橡皮的候选集合（HashSet 是为了"扫一遍笔画列表时 O(1) 判断在不在候选里"）。</summary>
     private readonly HashSet<Stroke> _candidateSet = new();
+    /// <summary>整笔橡皮的候选快照（移除会改网格，必须先拷出来；复用避免拖动时每步分配）。</summary>
+    private readonly List<Stroke> _eraseCandidates = new();
     /// <summary>像素橡皮命中的 (下标, 前面的干净笔画数, 笔画)。复用，避免拖动时每步分配。</summary>
     private readonly List<(int index, int logical, Stroke s)> _hitScratch = new();
     public int GridCells => _grid.CellCount;
 
     /// <summary>Candidate lookup through the spatial index (for measurement).</summary>
     public int QueryGrid(RectF r, List<Stroke> results) => _grid.Query(r, results);
+
+    /// <summary>视口内有没有笔迹（多屏休眠判断用）。走空间网格，**零分配**（复用查询缓冲）。</summary>
+    public bool HasStrokesInRect(in RectF r)
+    {
+        if (r.IsEmpty) return false;
+        _grid.Query(r, _contentProbeScratch);
+        return _contentProbeScratch.Count > 0;
+    }
+
+    private readonly List<Stroke> _contentProbeScratch = new();
 
     // -- mutation primitives (no history; the actions below drive these) ---
 
@@ -986,8 +1026,10 @@ internal sealed class InkDocument
         if (_queryScratch.Count == 0) return 0;
 
         // Copy first: removing strokes mutates the grid we just queried.
-        var candidates = _queryScratch.ToArray();
-        foreach (var s in candidates)
+        // 用复用缓冲而不是 ToArray：拖动时每一步都会调到这里，每步一次分配没必要。
+        _eraseCandidates.Clear();
+        for (int i = 0; i < _queryScratch.Count; i++) _eraseCandidates.Add(_queryScratch[i]);
+        foreach (var s in _eraseCandidates)
         {
             // **图像对象不碰**：两种橡皮一致（像素橡皮那边也跳过）。
             // 图像是"老师截来的内容"，不是笔画——橡皮擦掉半张截图不是任何人想要的；

@@ -315,7 +315,8 @@ internal sealed partial class OverlayWindow
             _fullFramesLeft = 2;
         }
 
-        _tiles.Sync(VisibleCanvasRect, RasterizeTile);
+        // 分帧时间预算与焦点排序：见 SyncTilesWithBudget（自检走同步光栅，不动）。
+        SyncTilesWithBudget(app);
 
         if (Trace && (_tiles.RasterizedLastFrame > 0 || _tiles.AppendedLastFrame > 0))
             Console.WriteLine($"    [tiles] raster={_tiles.RasterizedLastFrame} append={_tiles.AppendedLastFrame} "
@@ -341,6 +342,15 @@ internal sealed partial class OverlayWindow
 
     /// <summary>视口外一圈还有没有欠着的块（引擎据此排空闲预取拍）。</summary>
     public bool PrefetchNeeded() => _tiles.PrefetchNeeded(VisibleCanvasRect);
+
+    /// <summary>本帧时间预算用完、还有可见脏块没烘完（引擎据此在下一个 VBlank 续烘）。</summary>
+    internal bool HasPendingDirtyTiles => _tiles.HasPendingDirtyTiles;
+
+    /// <summary>
+    /// 空闲瘦身转发：放掉视口外的分块（见 <see cref="CanvasTileCache.TrimOffscreen"/>）。
+    /// 返回释放的块数；<paramref name="dropVisible"/> 只给空桌面穿透用。
+    /// </summary>
+    internal int TrimIdleTiles(bool dropVisible) => _tiles.TrimOffscreen(dropVisible);
 
     /// <summary>
     /// 空闲预取一拍：只烘"视口外一圈"里欠着的块，**不合成、不上屏**（上游 Xournal++/Rnote 的

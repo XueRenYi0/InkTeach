@@ -347,6 +347,13 @@ public partial class InkEngine
                 {
                     // 落笔：从这一刻起曲线化生效（几何缓存键里带着这个标志，会自己重画）
                     ActiveStroke.RawWhileLive = false;
+                    // **抬笔无损抽稀**（2026-11-25，三段式：首尾冻结 + 中段超保守 RDP）：
+                    // 必须在 AddStroke 之前——入册之后空间索引/撤销栈/缓存都按当时的点建好了。
+                    // 只删"卫星点"，尾段 180ms/40px 一个点都不动，笔锋口径见 StrokeSimplifier。
+                    if (StrokeSimplifier.Eligible(ActiveStroke)
+                        && StrokeSimplifier.SimplifyInPlace(ActiveStroke.Points,
+                               ActiveStroke.HasPressure, ActiveStroke.Width) > 0)
+                        ActiveStroke.InvalidateMetrics();     // 点数变了：包围盒/几何/命中全部作废
                     Doc.AddStroke(ActiveStroke);
                     // 真提交进文档了才算"成型"——下面那一步要拿它做自动选中。
                     if (IsShapeTool(ActiveStroke.Tool)) committedShape = ActiveStroke;

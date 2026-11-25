@@ -696,18 +696,23 @@ internal sealed partial class Stroke
     /// 外侧圆弧 + 内角补角 + 压感宽度），用户实测后认为 D2D 的观感更好，
     /// 于是整套删掉。
     /// </summary>
-    private ID2D1PathGeometry BuildCenterline(ID2D1Factory1 factory)
+    private ID2D1Geometry BuildCenterline(ID2D1Factory1 factory)
         => BuildCenterlineCore(factory, float.MaxValue);
 
     /// <summary>
     /// 回放用：只画**前 maxParam**（点序号，0..Points.Count-1，可带小数）那一段中心线。
     /// **不进几何缓存**（每帧都在变，缓存只会不停重建）——调用方画完负责 Dispose。
     /// </summary>
-    internal ID2D1PathGeometry BuildCenterlinePrefix(ID2D1Factory1 factory, float maxParam)
+    internal ID2D1Geometry BuildCenterlinePrefix(ID2D1Factory1 factory, float maxParam)
         => BuildCenterlineCore(factory, maxParam);
 
-    private ID2D1PathGeometry BuildCenterlineCore(ID2D1Factory1 factory, float maxParam)
+    private ID2D1Geometry BuildCenterlineCore(ID2D1Factory1 factory, float maxParam)
     {
+        // 书写中的超长单笔：稳定前段复用缓存几何，只重建笔尖附近一截。
+        // 返回 null = 条件不满足，下面照原路一次性整条重建。
+        var live = TryBuildLiveChunked(factory, maxParam);
+        if (live != null) return live;
+
         var geo = factory.CreatePathGeometry();
         using var sink = geo.Open();
 
@@ -820,14 +825,7 @@ internal sealed partial class Stroke
     /// </summary>
     private static bool AppendSmoothedModeledRun(ID2D1GeometrySink sink)
     {
-        StrokeSmoothing.Begin();
-        int n = StrokeMotion.Count;
-        for (int i = 0; i < n; i++)
-        {
-            var p = StrokeMotion.At(i);
-            StrokeSmoothing.Add(p.X, p.Y, p.Z);
-        }
-        int m = StrokeSmoothing.Finish();
+        int m = PrepareSmoothedModeledRun();
         if (m <= 0) return false;
 
         var segs = StrokeSmoothing.Out;
@@ -835,6 +833,23 @@ internal sealed partial class Stroke
         for (int k = 0; k < m; k++)
             sink.AddBezier(new BezierSegment(segs[k].C1, segs[k].C2, segs[k].P1));
         return true;
+    }
+
+    /// <summary>
+    /// 把运动模型的输出喂进过点曲线，**只算段不建几何**（返回段数；0 = 段数不够）。
+    /// 书写中启用分段缓存时也要先算这一遍——两种用法共用同一份结果，
+    /// 保证缓存段 = 原路会画的段，一个控制点都不差。
+    /// </summary>
+    private static int PrepareSmoothedModeledRun()
+    {
+        StrokeSmoothing.Begin();
+        int n = StrokeMotion.Count;
+        for (int i = 0; i < n; i++)
+        {
+            var p = StrokeMotion.At(i);
+            StrokeSmoothing.Add(p.X, p.Y, p.Z);
+        }
+        return StrokeSmoothing.Finish();
     }
 
     /// <summary>

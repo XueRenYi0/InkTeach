@@ -234,7 +234,9 @@ internal static class InkSerializer
     /// </summary>
     public static byte[] SaveStrokes(IReadOnlyList<Stroke> strokes)
     {
-        using var ms = new MemoryStream(64 * 1024);
+        // 一次开够容量（见 EstimateStrokesBytes）：几千笔的板书如果从 64KB 反复翻倍，
+        // 每次 >85KB 的旧数组都进 LOH，自动存档时就是一次可见的扩容尖峰。
+        using var ms = new MemoryStream(EstimateStrokesBytes(strokes));
         using (var w = new BinaryWriter(ms, System.Text.Encoding.UTF8, leaveOpen: true))
         {
             w.Write(Magic);
@@ -253,6 +255,49 @@ internal static class InkSerializer
     /// <summary>读一页的字节，返回对象表（PPT 模式装载某一页用）。</summary>
     public static List<Stroke> LoadStrokes(byte[] data, out int maxId)
         => ParseCore(data, out _, out maxId);
+
+    /// <summary>
+    /// 估算一批笔画序列化后的**近似上界**字节数，给 <see cref="MemoryStream"/> 一次开够容量。
+    ///
+    /// 目的不是精确，而是消掉 LOH 反复翻倍：MemoryStream 的旧缓冲一旦超过 85KB 就落在
+    /// LOH，扩容 = 新分配 + 整段拷贝 + 旧数组等回收。按"笔画头 + 点 + 擦除区间 + 图像 +
+    /// 文本/矢量字段"估出来，偶尔少估一点点也只会再长一次（文本题卡那种少数对象），
+    /// 点数 / 图片这两个大头一定落在一次分配里。
+    ///
+    /// 上限 256MB：再大就让 MemoryStream 自己长（先保底不因一次拼错的长度抛 OOM）。
+    /// </summary>
+    private static int EstimateStrokesBytes(IReadOnlyList<Stroke> strokes)
+    {
+        long n = 64 * 1024 + 64;                  // 文件头 + 空白块
+        if (strokes != null)
+        {
+            foreach (var s in strokes)
+            {
+                if (s == null) { n += 128; continue; }
+                n += 128;                         // 固定头（Id/颜色/变换/各版本小字段的余量）
+                n += (long)s.Points.Count * 16;   // X/Y/P/T
+                n += (long)s.Erased.Count * 8;
+                if (s.Image?.Bgra != null) n += s.Image.Bgra.Length;
+
+                var tb = s.TextBox;
+                if (tb != null)
+                {
+                    n += 1024;                    // 其余固定字段 + 题目结构余量
+                    n += (long)(tb.Text?.Length ?? 0) * 3;
+                    n += (long)(tb.Title?.Length ?? 0) * 3;
+                    n += (long)(tb.Meta?.Length ?? 0) * 3;
+                    foreach (var q in tb.Questions)
+                    {
+                        n += (long)((q.Stem?.Length ?? 0) + (q.Answer?.Length ?? 0)
+                                    + (q.Analysis?.Length ?? 0)) * 3;
+                        if (q.Figure?.Bgra != null) n += q.Figure.Bgra.Length;
+                    }
+                }
+                if (s.Figure != null) n += 2048;   // 一行 JSON 的余量
+            }
+        }
+        return (int)Math.Clamp(n, 64 * 1024, 256L * 1024 * 1024);
+    }
 
     private static void WriteStroke(BinaryWriter w, Stroke s)
     {

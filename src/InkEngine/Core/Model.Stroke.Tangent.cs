@@ -499,6 +499,8 @@ internal sealed partial class Stroke
             Geometry = null;
             LiveGeometries--;
         }
+        // 书写中留下的分块几何（见 Model.Stroke.LiveChunks.cs）：同样是缓存，必须一起放。
+        DisposeLiveChunks();
         // 辅助几何（双曲线的虚线渐近线）也是缓存，同样要放——理由和下面那张位图一样：
         // 漏一处，"删掉之后内存不降"就是必然的。
         Geometry2?.Dispose();
@@ -2091,6 +2093,13 @@ internal sealed partial class Stroke
         // AI 题卡由 Overlay 用 DirectWrite 画，没有中心线几何。
         if (Kind == StrokeKind.TextBox) return null;
 
+        // 抬笔：书写中的分段缓存到此为止（下一行起按整条原始点重建，笔锋/曲线化不受影响）。
+        if (!RawWhileLive && _liveChunkKind != 0)
+        {
+            if (Geometry != null) { Geometry.Dispose(); Geometry = null; LiveGeometries--; }
+            DisposeLiveChunks();
+        }
+
         // 缓存键 = 几何版本（Revision）＋ 曲线化版本 ＋ 活笔/模型版本；
         // 只比 Revision 的话，开关一拨会把旧几何还回来。
         if (Geometry != null && _builtRevision == Revision
@@ -2144,6 +2153,201 @@ internal sealed partial class Stroke
         _builtRawLive = RawWhileLive;
         _builtInkModelVer = StrokeMotion.Version;
         return Geometry;
+    }
+
+    // ======================================================================
+    //  书写中：超长单笔的分段增量几何缓存（2026-11-25）
+    //
+    //  为什么：正在写的那一笔每帧 Revision +1，几何缓存必然失效，于是
+    //  BuildCenterlineCore 每帧都从第 0 个点重头开 sink、加几百上千段；而其中
+    //  **前段一点没变**，变的只有笔尖附近那一小截。
+    //
+    //  做法（严格只影响"书写中的显示"，抬笔后完全走原路）：
+    //    · 前段按固定步长烘成独立 path geometry 留着复用，每帧只重建尾部一截；
+    //    · 用 ID2D1GeometryGroup 把"缓存块 + 尾段"装成**一条几何**再 DrawGeometry：
+    //      一次混合，块与块衔接处的圆头端帽不会叠出深色/深透明度接缝（荧光笔也一样）；
+    //    · 贝塞尔通道只缓存离笔尖 LiveStableMargin 段以外的输出（平滑器的角点/抽稀
+    //      窗口最多看 ±3 点），尾段永远现算 → 笔尖跟手性不变；
+    //    · 抬笔 / Release 时立即释放全部分块，内容层烘焙仍按原始点一次重建整笔。
+    //
+    //  红线：**绝不改 Points**、绝不改 StrokeTaper / StrokeSmoothing 的算法与参数——
+    //  这里只是把"同一批点/同一批曲线段"分几次建几何。
+    //  `--smoothmacropx`（像素宏观窗）打开时不启用：那个判据按全条平均点距取窗口，
+    //  前段的角点可能随总长变化，分块缓存不再等价于整条重建。
+    // ======================================================================
+
+    /// <summary>一块缓存覆盖的段数（折线 = 段数，贝塞尔 = 输出曲线段数）。</summary>
+    internal const int LiveChunkSegments = 128;
+
+    /// <summary>启用分段缓存的最小采样点数（短笔重头建也不慢，不值得多一层）。</summary>
+    private const int LiveChunkMinPoints = 160;
+
+    /// <summary>离"当前末端"至少这么多段才认为稳定（平滑器的角点/抽稀窗口最多看 ±3 点）。</summary>
+    private const int LiveStableMargin = 8;
+
+    /// <summary>缓存种类：0 无、1 折线、2 平滑贝塞尔。</summary>
+    private int _liveChunkKind;
+    private ID2D1PathGeometry[] _liveChunks;
+    private int _liveChunkCount;
+    /// <summary>折线 = 已烘到的点下标；贝塞尔 = 已烘的段数。下一块的起点。</summary>
+    private int _liveChunkCursor;
+    /// <summary>建缓存时的点数：点被整批换短了（撤销/重设）就必须作废。</summary>
+    private int _liveChunkPoints;
+    private int _liveChunkSmoothVer;
+
+    private readonly List<ID2D1Geometry> _liveGroupScratch = new();
+
+    /// <summary>
+    /// 书写中尝试走"稳定前段缓存 + 尾段重建"。返回 null = 不适用/还没攒够一块，
+    /// 调用方照原路整条重建（结果与没有这个优化时一致）。
+    /// </summary>
+    private ID2D1Geometry TryBuildLiveChunked(ID2D1Factory1 factory, float maxParam)
+    {
+        if (!RawWhileLive || Erased.Count > 0 || RendersAsDot) return null;
+        if (Points.Count < LiveChunkMinPoints) return null;
+        // 虚线/点线不能分块：每段几何会重新起一个 dash 相位，接缝处的短划会错位。
+        if (Dash != StrokeDash.Solid) return null;
+        // 回放前缀/取景裁剪：每帧末端都在动，分块缓存没有意义。
+        if (maxParam < Points.Count - 1 - 1e-4f) return null;
+
+        if (StrokeMotion.Build(this))
+        {
+            // 运动模型输出：曲线化开着走贝塞尔分块；关着是"模型折线"，保持原路（少见配置）。
+            if (!StrokeSmoothing.Enabled) return null;
+            if (StrokeSmoothing.CornerMacroPx > 0f) return null;
+            int m = PrepareSmoothedModeledRun();
+            if (m < LiveChunkSegments + LiveStableMargin) return null;
+            return BuildBezierChunked(factory, m);
+        }
+
+        // 原始折线通道（`--motion raw/catmull`，或点数/几何条件让模型不生效）。
+        return BuildPolylineChunked(factory);
+    }
+
+    private ID2D1Geometry BuildPolylineChunked(ID2D1Factory1 factory)
+    {
+        EnsureLiveChunkState(kind: 1);
+        int last = Points.Count - 1;
+
+        while (_liveChunkCursor + LiveChunkSegments <= last)
+        {
+            int from = _liveChunkCursor, to = from + LiveChunkSegments;
+            AddLiveChunk(BuildPolylineRange(factory, from, to));
+            _liveChunkCursor = to;
+        }
+        if (_liveChunkCursor == 0) return null;     // 还没攒够一块：交回原路
+
+        var tail = _liveChunkCursor < last ? BuildPolylineRange(factory, _liveChunkCursor, last) : null;
+        GeomTrace(this, "A", "原始", false, "live-chunk");
+        return MakeLiveGroup(factory, tail);
+    }
+
+    private ID2D1PathGeometry BuildPolylineRange(ID2D1Factory1 factory, int from, int to)
+    {
+        var geo = factory.CreatePathGeometry();
+        using (var sink = geo.Open())
+        {
+            sink.BeginFigure(LivePoint(from), FigureBegin.Hollow);
+            for (int i = from + 1; i <= to; i++) sink.AddLine(LivePoint(i));
+            sink.EndFigure(FigureEnd.Open);
+            sink.Close();
+        }
+        return geo;
+    }
+
+    private Vector2 LivePoint(int i) => new(Points[i].X, Points[i].Y);
+
+    private ID2D1Geometry BuildBezierChunked(ID2D1Factory1 factory, int segmentCount)
+    {
+        EnsureLiveChunkState(kind: 2);
+        var segs = StrokeSmoothing.Out;
+        // 尾段（含平滑器还没看全邻居的那几段）永远现算，保证笔尖跟手、曲线不断。
+        int stable = segmentCount - LiveStableMargin;
+
+        while (_liveChunkCursor + LiveChunkSegments <= stable)
+        {
+            int from = _liveChunkCursor, to = from + LiveChunkSegments;
+            AddLiveChunk(BuildBezierRange(factory, segs, from, to));
+            _liveChunkCursor = to;
+        }
+        if (_liveChunkCursor == 0) return null;     // 还没攒够一块：交回原路
+
+        var tail = BuildBezierRange(factory, segs, _liveChunkCursor, segmentCount);
+        GeomTrace(this, "A", "模型", true, "live-chunk");
+        return MakeLiveGroup(factory, tail);
+    }
+
+    /// <summary>段区间 [from, toExclusive)：fig. 起点 = 第 from 段的 P0（严格落在采样点上）。</summary>
+    private static ID2D1PathGeometry BuildBezierRange(ID2D1Factory1 factory,
+        StrokeSmoothing.Seg[] segs, int from, int toExclusive)
+    {
+        var geo = factory.CreatePathGeometry();
+        using (var sink = geo.Open())
+        {
+            sink.BeginFigure(segs[from].P0, FigureBegin.Hollow);
+            for (int k = from; k < toExclusive; k++)
+                sink.AddBezier(new BezierSegment(segs[k].C1, segs[k].C2, segs[k].P1));
+            sink.EndFigure(FigureEnd.Open);
+            sink.Close();
+        }
+        return geo;
+    }
+
+    private void EnsureLiveChunkState(int kind)
+    {
+        if (_liveChunkKind != kind || _liveChunkPoints > Points.Count
+            || _liveChunkSmoothVer != StrokeSmoothing.Version)
+            DisposeLiveChunks();
+
+        _liveChunkKind = kind;
+        _liveChunkPoints = Points.Count;
+        _liveChunkSmoothVer = StrokeSmoothing.Version;
+    }
+
+    private void AddLiveChunk(ID2D1PathGeometry geo)
+    {
+        if (_liveChunks == null || _liveChunkCount == _liveChunks.Length)
+            Array.Resize(ref _liveChunks, Math.Max(4, (_liveChunks?.Length ?? 0) * 2));
+        _liveChunks[_liveChunkCount++] = geo;
+        LiveGeometries++;
+    }
+
+    /// <summary>
+    /// 把缓存块 + 尾段装成一条几何（一次 DrawGeometry → 一次混合，接缝不叠色）。
+    /// 组持有子几何的引用，尾段的包装器在这里就可以放掉。
+    /// </summary>
+    private ID2D1Geometry MakeLiveGroup(ID2D1Factory1 factory, ID2D1PathGeometry tail)
+    {
+        _liveGroupScratch.Clear();
+        for (int i = 0; i < _liveChunkCount; i++) _liveGroupScratch.Add(_liveChunks[i]);
+        if (tail != null) _liveGroupScratch.Add(tail);
+
+        var arr = _liveGroupScratch.ToArray();
+        _liveGroupScratch.Clear();
+        var group = factory.CreateGeometryGroup(
+            Vortice.Direct2D1.FillMode.Winding, arr, (uint)arr.Length);
+        // 组本身由 BuildGeometry 统一计入 LiveGeometries（那里对所有 Geometry 都 +1）。
+        tail?.Dispose();        // 组自己持有引用
+        return group;
+    }
+
+    /// <summary>抬笔/释放：所有分块几何立即放掉（下一帧按整条原始点重建，笔锋/曲线化不受影响）。</summary>
+    private void DisposeLiveChunks()
+    {
+        if (_liveChunks != null)
+        {
+            for (int i = 0; i < _liveChunkCount; i++)
+            {
+                _liveChunks[i]?.Dispose();
+                LiveGeometries--;
+            }
+            _liveChunks = null;
+        }
+        _liveChunkCount = 0;
+        _liveChunkCursor = 0;
+        _liveChunkKind = 0;
+        _liveChunkPoints = 0;
+        _liveChunkSmoothVer = 0;
     }
 
     private (InkPoint a, InkPoint b) Endpoints()

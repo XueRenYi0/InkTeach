@@ -1,3 +1,4 @@
+// [职责] 内容层分块光栅缓存：画布空间分块、脏区/补画、分帧预算、预取与淘汰。
 using System.Diagnostics;
 using Vortice.Direct2D1;
 using Vortice.Direct3D11;
@@ -159,6 +160,8 @@ internal sealed class CanvasTileCache : IDisposable
     private readonly Dictionary<long, Tile> _tiles = new();
     private readonly List<Tile> _visible = new();
     private readonly List<KeyValuePair<long, Tile>> _trimScratch = new();
+    /// <summary>本帧还没烘的脏块（含新建块）＋ 建块耗时；预算在 <see cref="Sync"/> 里按它推进。</summary>
+    private readonly List<(Tile Tile, double CreateMs)> _dirtyScratch = new();
     private ID2D1DeviceContext _ctx;
     private long _frame;
 
@@ -179,6 +182,52 @@ internal sealed class CanvasTileCache : IDisposable
     public int AppendedLastFrame { get; private set; }
     /// <summary>累计淘汰块数。</summary>
     public long EvictedTotal { get; private set; }
+
+    // ---- 分帧时间预算（2026-11-25）------------------------------------------
+    /// <summary>
+    /// 上一帧丢给 <see cref="Sync"/> 的预算用完后，是否还有可见脏块没烘完。
+    /// 引擎据此在下一个 VBlank 再出一帧继续补（补干净后立刻回到空闲 0 FPS）。
+    /// 预算为 0（自检 / 老调用方）时恒为 false——同步行为一个像素不变。
+    /// </summary>
+    public bool HasPendingDirtyTiles { get; private set; }
+
+    /// <summary>
+    /// 正常书写/擦除时一帧给分块光栅化的预算（毫秒）。
+    ///
+    /// 取 9ms：60Hz 一帧 16.7ms，留 7ms 给界面、合成、输入和 GPU 提交；
+    /// 120Hz 下也够（8.3ms 一帧时超一点，由"至少烘 1 块"的保底推进兜住）。
+    /// 只影响"烘多少块"，**不改任何一块的像素结果**：没烘完的块保留旧纹理，
+    /// 下一帧接着烘。
+    /// </summary>
+    public const double DefaultFrameBudgetMs = 9.0;
+
+    /// <summary>
+    /// **书写中**一帧给分块光栅化的预算（毫秒，2026-11-25）。
+    ///
+    /// 取 3.5ms：这一帧的时间要**先**给湿墨和指针采样（那是用户直接看得见、摸得着的延迟），
+    /// 远处的脏块晚一两帧补完肉眼看不出来；抬笔之后立刻回到
+    /// <see cref="DefaultFrameBudgetMs"/>（9ms）把剩下的迅速补干净。
+    /// 和 9ms 那一档一样：**只影响"这一帧烘几块"，不改任何一块的像素结果**。
+    /// </summary>
+    public const double WritingFrameBudgetMs = 3.5;
+
+    /// <summary>
+    /// 脏块到焦点的排序键（距离平方；无有效焦点返回 +∞）。
+    /// 指针 / 视口中心正下方的块先清晰，远处块顺延——橡皮笔尖永远当帧优先。
+    /// 抽成静态方法是为了让 <c>--unittest</c> 能直接验排序口径（见 UnitTestsAlgo）。
+    /// </summary>
+    internal static double FocusKey(double centerX, double centerY, float focusX, float focusY)
+    {
+        if (!float.IsFinite(focusX) || !float.IsFinite(focusY)) return double.PositiveInfinity;
+        double dx = centerX - focusX, dy = centerY - focusY;
+        return dx * dx + dy * dy;
+    }
+
+    /// <summary>
+    /// 本帧还能不能再烘一块脏块：**至少烘 1 块**（进度必须推进），之后到预算就停。
+    /// </summary>
+    internal static bool CanRasterMore(double spentMs, double budgetMs, int done)
+        => done < 1 || !(spentMs >= budgetMs);
 
     // ---- 视口外一圈的预取（诊断 / 调度）------------------------------------
     /// <summary>
@@ -349,21 +398,58 @@ internal sealed class CanvasTileCache : IDisposable
     /// <param name="visibleCanvas">当前视口在画布坐标里的范围。</param>
     /// <param name="paint">画一块：参数是要画的块目标、画布矩形、以及"只补画这些笔画"
     /// （null = 整块重画），返回画了几条笔画。</param>
-    public void Sync(in RectF visibleCanvas, Func<ID2D1Bitmap1, RectF, List<Stroke>, int> paint)
+    /// <param name="budgetMs">本帧给脏块光栅化的时间预算（毫秒）；<c>&lt;= 0</c> = 不限，
+    /// 完全保持原来的同步行为（自检/老调用方默认走这条）。</param>
+    /// <param name="focusX">优先焦点（画布 X）。给了焦点就按"块中心到焦点的距离"先烘近的。</param>
+    /// <param name="focusY">优先焦点（画布 Y）。</param>
+    public void Sync(in RectF visibleCanvas, Func<ID2D1Bitmap1, RectF, List<Stroke>, int> paint,
+                     double budgetMs = 0, float focusX = float.NaN, float focusY = float.NaN)
     {
         _frame++;
         _visible.Clear();
+        _dirtyScratch.Clear();
         RasterizedLastFrame = 0;
         AppendedLastFrame = 0;
         RasterMsLastFrame = 0;
         AppendedMsLastFrame = 0;
         StrokesLastFrame = 0;
+        HasPendingDirtyTiles = false;
 
         if (visibleCanvas.IsEmpty) return;
 
         int x0 = FirstIdx(visibleCanvas.MinX), x1 = LastIdx(visibleCanvas.MaxX);
         int y0 = FirstIdx(visibleCanvas.MinY), y1 = LastIdx(visibleCanvas.MaxY);
 
+        // ① 收集可见块（缺失的就建），② 补画快路径当帧立刻画完（新落笔必须立现），
+        //    ③ 剩下的脏块再按预算烘——没烘完的下帧继续。
+        CollectVisible(x0, x1, y0, y1, paint);
+
+        // 记录可见块的行列数：预算里的"预取环"按它算（见 BudgetNow / RingTiles）。
+        _visCols = Math.Max(0, x1 - x0 + 1);
+        _visRows = Math.Max(0, y1 - y0 + 1);
+
+        if (budgetMs > 0)
+        {
+            SortDirtyByFocus(focusX, focusY);
+            RasterDirtyWithinBudget(paint, budgetMs);
+        }
+        else
+        {
+            foreach (var (tile, createMs) in _dirtyScratch)
+                RasterWhole(tile, paint, createMs);
+        }
+        _dirtyScratch.Clear();
+
+        Trim();
+    }
+
+    /// <summary>
+    /// <see cref="Sync"/> 的第 ①② 步：建好所有可见块、登记到 <see cref="_visible"/>，
+    /// 补画路径立即画完，脏块收进 <see cref="_dirtyScratch"/> 等预算拍。
+    /// </summary>
+    private void CollectVisible(int x0, int x1, int y0, int y1,
+                                Func<ID2D1Bitmap1, RectF, List<Stroke>, int> paint)
+    {
         for (int ty = y0; ty <= y1; ty++)
         {
             for (int tx = x0; tx <= x1; tx++)
@@ -379,23 +465,15 @@ internal sealed class CanvasTileCache : IDisposable
                     _tiles[k] = tile;
                 }
                 tile.LastFrame = _frame;
+                _visible.Add(tile);
 
-                if (tile.Dirty)
-                {
-                    var sw = Stopwatch.StartNew();
-                    StrokesLastFrame += paint(tile.Target, PaintRectOf(tx, ty), null);
-                    sw.Stop();
-                    RasterMsLastFrame += sw.Elapsed.TotalMilliseconds + createMs;
-                    tile.Dirty = false;
-                    tile.Appended.Clear();
-                    RasterizedLastFrame++;
-                    RasterizedTotal++;
-                }
-                else if (tile.Appended.Count > 0)
+                if (tile.Dirty) { _dirtyScratch.Add((tile, createMs)); continue; }
+
+                if (tile.Appended.Count > 0)
                 {
                     // 只补画新笔画：不清空，代价与"新笔画条数"成正比，而不是与块内总数成正比。
                     var sw = Stopwatch.StartNew();
-                    StrokesLastFrame += paint(tile.Target, PaintRectOf(tx, ty), tile.Appended);
+                    StrokesLastFrame += paint(tile.Target, PaintRectOf(tile.Tx, tile.Ty), tile.Appended);
                     sw.Stop();
                     double ms = sw.Elapsed.TotalMilliseconds;
                     RasterMsLastFrame += ms;
@@ -405,15 +483,56 @@ internal sealed class CanvasTileCache : IDisposable
                     RasterizedLastFrame++;
                     RasterizedTotal++;
                 }
-                _visible.Add(tile);
             }
         }
+    }
 
-        // 记录可见块的行列数：预算里的"预取环"按它算（见 BudgetNow / RingTiles）。
-        _visCols = Math.Max(0, x1 - x0 + 1);
-        _visRows = Math.Max(0, y1 - y0 + 1);
+    /// <summary>
+    /// 脏块按到焦点距离从近到远排（指针/视口中心最先变清晰）。
+    /// 焦点无效时保持原来的收集顺序（网格顺序）。
+    /// </summary>
+    private void SortDirtyByFocus(float focusX, float focusY)
+    {
+        if (_dirtyScratch.Count < 2) return;
+        if (!float.IsFinite(focusX) || !float.IsFinite(focusY)) return;
+        double half = TileSize * 0.5;
 
-        Trim();
+        double KeyOf(Tile t)
+            => FocusKey(t.Tx * (double)TileSize + half, t.Ty * (double)TileSize + half, focusX, focusY);
+
+        _dirtyScratch.Sort((a, b) => KeyOf(a.Tile).CompareTo(KeyOf(b.Tile)));
+    }
+
+    /// <summary>
+    /// 逐块光栅化脏块：**至少烘 1 块**保证进度，之后一旦累计耗时到预算就停，
+    /// 剩余块留在 <see cref="_dirtyScratch"/>（并置 <see cref="HasPendingDirtyTiles"/>）。
+    /// </summary>
+    private void RasterDirtyWithinBudget(Func<ID2D1Bitmap1, RectF, List<Stroke>, int> paint,
+                                         double budgetMs)
+    {
+        int done = 0;
+        for (int i = 0; i < _dirtyScratch.Count; i++)
+        {
+            if (!CanRasterMore(RasterMsLastFrame, budgetMs, done)) break;
+            var (tile, createMs) = _dirtyScratch[i];
+            RasterWhole(tile, paint, createMs);
+            done++;
+        }
+        HasPendingDirtyTiles = done < _dirtyScratch.Count;
+    }
+
+    /// <summary>整块重画并把它标干净（<see cref="RasterMsLastFrame"/> 含新建纹理的耗时）。</summary>
+    private void RasterWhole(Tile tile, Func<ID2D1Bitmap1, RectF, List<Stroke>, int> paint,
+                             double createMs)
+    {
+        var sw = Stopwatch.StartNew();
+        StrokesLastFrame += paint(tile.Target, PaintRectOf(tile.Tx, tile.Ty), null);
+        sw.Stop();
+        RasterMsLastFrame += sw.Elapsed.TotalMilliseconds + createMs;
+        tile.Dirty = false;
+        tile.Appended.Clear();
+        RasterizedLastFrame++;
+        RasterizedTotal++;
     }
 
     /// <summary>
@@ -500,6 +619,51 @@ internal sealed class CanvasTileCache : IDisposable
             _tiles.Remove(kv.Key);
             EvictedTotal++;
         }
+    }
+
+    /// <summary>
+    /// **空闲瘦身**：放掉视口外的块（回滚余量 + 预取环 + 淘汰后留下的冷块）。
+    ///
+    /// 与 <see cref="Trim"/> 的区别：Trim 只按预算淘汰，环里的块本来就在预算内；
+    /// 这个方法在"人已经离开、屏幕不再变化"时把**所有本帧没上屏的块**都放掉，
+    /// 只保留可见块——所以用户回来写第一笔时，可见区域**一个块都不用重建**。
+    ///
+    /// <paramref name="dropVisible"/> = true 只用于"穿透 + 没白板 + 没文档 + 本页没墨"
+    /// 的空桌面：这时屏幕上本来就没有内容，可见块也可以整层释放，唤醒后重建也只是
+    /// 空白，不存在首笔卡顿。
+    ///
+    /// 返回释放的块数；释放过就 Flush 一次（同 <see cref="SetRenderScale"/>：让 D2D
+    /// 把攒着的命令交出去，显存才真的掉下来）。
+    /// </summary>
+    public int TrimOffscreen(bool dropVisible = false)
+    {
+        int released;
+        if (dropVisible)
+        {
+            released = _tiles.Count;
+            Reset();
+        }
+        else
+        {
+            _trimScratch.Clear();
+            foreach (var kv in _tiles)
+                if (kv.Value.LastFrame != _frame) _trimScratch.Add(kv);
+            released = _trimScratch.Count;
+            foreach (var kv in _trimScratch)
+            {
+                Release(kv.Value);
+                _tiles.Remove(kv.Key);
+                EvictedTotal++;
+            }
+            _trimScratch.Clear();
+        }
+
+        if (released > 0)
+        {
+            try { _ctx?.Flush(out _, out _); }
+            catch { /* 有意忽略：Flush 失败只影响显存回收时点，不影响画面 */ }
+        }
+        return released;
     }
 
     private Tile Create(int tx, int ty)

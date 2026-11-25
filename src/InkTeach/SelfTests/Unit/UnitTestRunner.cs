@@ -102,6 +102,16 @@ internal static class UnitTestRunner
             UnitTestsPpt.ComLate_TwoArgOrder_IsReversed),
         (nameof(UnitTestsPpt.PptStore_HasPageFile_TracksDisk),
             UnitTestsPpt.PptStore_HasPageFile_TracksDisk),
+        (nameof(UnitTestsAlgo.IdleMemoryTrimmer_StateTransitions),
+            UnitTestsAlgo.IdleMemoryTrimmer_StateTransitions),
+        (nameof(UnitTestsAlgo.TileSyncBudget_PrioritizesFocus_And_ProgressesAtLeastOne),
+            UnitTestsAlgo.TileSyncBudget_PrioritizesFocus_And_ProgressesAtLeastOne),
+        (nameof(UnitTestsPerf.MultiMonitorSkip_SkipsCleanSecondary_And_CleansUpLeavingPointer),
+            UnitTestsPerf.MultiMonitorSkip_SkipsCleanSecondary_And_CleansUpLeavingPointer),
+        (nameof(UnitTestsPerf.FramePressureValve_EntersOnSustainedSlow_RecoversOnFast),
+            UnitTestsPerf.FramePressureValve_EntersOnSustainedSlow_RecoversOnFast),
+        (nameof(UnitTestsPerf.StrokeSimplifier_FreezesTailForTaper_And_CompressesMiddle),
+            UnitTestsPerf.StrokeSimplifier_FreezesTailForTaper_And_CompressesMiddle),
     };
 
     public static int Run(string[] args)

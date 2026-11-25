@@ -1,6 +1,6 @@
 # 段落地图（自动生成，勿手改）
 
-> 生成：2026-11-23 ／ 脚本：`tools/gen-section-map.ps1` ／ 只列 >= 600 行的文件。
+> 生成：2026-11-25 ／ 脚本：`tools/gen-section-map.ps1` ／ 只列 >= 600 行的文件。
 > 用法：``Read`` 大文件前先在这里找段落标题，再只读那一段（行号漂移后重跑脚本即可）。
 
 ## src/InkEngine/Ai/AiCard.cs（2,761 行）
@@ -94,7 +94,7 @@
 | 541 | 底行：名单 / 学号范围 |
 | 567 | 绘制小工具 |
 
-## src/InkEngine/Core/Engine.cs（2,921 行）
+## src/InkEngine/Core/Engine.cs（2,924 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -106,7 +106,7 @@
 | 2363 | `internal enum AlignSnapKind` |
 | 2372 | `private enum AlignLineRole` |
 | 2379 | `private struct AlignAxisCandidate` |
-| 2481 | `private enum FrameDrive` |
+| 2484 | `private enum FrameDrive` |
 
 | 行 | 段落 |
 | --- | --- |
@@ -127,44 +127,44 @@
 | 2046 | 交互矢量图的参数滑杆（v2.1） |
 | 2094 | 图形定义元素编辑（直线 / 箭头 / 圆 / 椭圆）：和"拖对象"同一条快路 |
 | 2352 | 对象吸附（2026-10-18） |
-| 2506 | 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictorLinear.cs） |
-| 2529 | 书写期间的分配 / GC 仪表（低配机排查用） |
-| 2612 | perf accounting |
-| 2625 | 界面接入口 |
-| 2633 | 工具带色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成 8 个可改色位） |
-| 2662 | 荧光笔的 5 个色位 / 5 档浓度（2026-10-28） |
-| 2686 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
-| 2767 | 延时探针（见 Latency.cs） |
+| 2509 | 压感采集与笔迹预测（实现见 Input/PenInput.cs、Prediction/InkPredictorLinear.cs） |
+| 2532 | 书写期间的分配 / GC 仪表（低配机排查用） |
+| 2615 | perf accounting |
+| 2628 | 界面接入口 |
+| 2636 | 工具带色位 / 最近颜色（2026-10-23 起；2026-10-28 扩成 8 个可改色位） |
+| 2665 | 荧光笔的 5 个色位 / 5 档浓度（2026-10-28） |
+| 2689 | 面板的"接输入小窗"（方案 B，见 计划-底层对接界面.md 4.1） |
+| 2770 | 延时探针（见 Latency.cs） |
 
-## src/InkEngine/Core/Engine.Host.cs（2,398 行）
+## src/InkEngine/Core/Engine.Host.cs（2,583 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
-| 16 | `public partial class InkEngine` |
+| 17 | `public partial class InkEngine` |
 
 | 行 | 段落 |
 | --- | --- |
-| 18 | Startup |
-| 226 | 委托墨迹轨迹（笔 / 鼠标 / 触摸都喂） |
-| 236 | 湿墨档位（0..1） |
-| 274 | 笔迹预测：三档收口（2026-10-15） |
-| 280 | 书写期间的 GC 低延迟档 |
-| 293 | 压感 → 粗细 |
-| 319 | 用户开关：压感粗细（2026-10-01，「更多 → 设置 → 书写」） |
-| 329 | 精细笔迹（2026-10-07 加开关；**2026-10-09 晚用户定：开关撤掉、常开**） |
-| 338 | 模拟压力与笔锋：**已全部停用**（2026-10-05，代码保留） |
-| 348 | 收笔笔锋（速度尖尾，仿 ClassIn） |
-| 368 | 中心线曲线化（过点 Catmull-Rom ＋ 角点保护） |
-| 393 | 笔迹运动模型（2026-10-03 对照台 → 2026-10-05 收敛） |
-| 525 | D1：亚像素输入（默认开；`--nohimetric` 退回 D0 对照） |
-| 534 | 呈现节奏 |
-| 629 | 荧光笔的 5 个色位 + 5 档浓度 |
-| 1007 | 原始输入"被哪道门挡住的"分项计数（诊断，2026-10-07 加） |
-| 1022 | "到底有没有中间点可捞"的自适应判据（2026-10-07 加） |
-| 1249 | 放映期间的"临时全局热键"（2026-09-30 用户定方案①） |
-| 1330 | Message loop |
-| 1490 | 文档高清补丁：每帧同步一次（由引擎挑驱动窗口） |
-| 1967 | Window procedure |
+| 19 | Startup |
+| 227 | 委托墨迹轨迹（笔 / 鼠标 / 触摸都喂） |
+| 237 | 湿墨档位（0..1） |
+| 275 | 笔迹预测：三档收口（2026-10-15） |
+| 281 | 书写期间的 GC 低延迟档 |
+| 294 | 压感 → 粗细 |
+| 320 | 用户开关：压感粗细（2026-10-01，「更多 → 设置 → 书写」） |
+| 330 | 精细笔迹（2026-10-07 加开关；**2026-10-09 晚用户定：开关撤掉、常开**） |
+| 339 | 模拟压力与笔锋：**已全部停用**（2026-10-05，代码保留） |
+| 349 | 收笔笔锋（速度尖尾，仿 ClassIn） |
+| 369 | 中心线曲线化（过点 Catmull-Rom ＋ 角点保护） |
+| 394 | 笔迹运动模型（2026-10-03 对照台 → 2026-10-05 收敛） |
+| 526 | D1：亚像素输入（默认开；`--nohimetric` 退回 D0 对照） |
+| 535 | 呈现节奏 |
+| 630 | 荧光笔的 5 个色位 + 5 档浓度 |
+| 1008 | 原始输入"被哪道门挡住的"分项计数（诊断，2026-10-07 加） |
+| 1023 | "到底有没有中间点可捞"的自适应判据（2026-10-07 加） |
+| 1256 | 放映期间的"临时全局热键"（2026-09-30 用户定方案①） |
+| 1337 | Message loop |
+| 1607 | 文档高清补丁：每帧同步一次（由引擎挑驱动窗口） |
+| 2150 | Window procedure |
 
 ## src/InkEngine/Core/Engine.Selection.Gesture.cs（1,466 行）
 
@@ -211,7 +211,7 @@
 | 314 | **异步"打开墨迹"**（2026-11-16）：大 .inkb 不再把界面卡死。 |
 | 566 | 「保存…」/「打开…」——2026-10-16 合并入口（原「保存墨迹」＋「保存图片」、 |
 
-## src/InkEngine/Core/InkSerializer.cs（882 行）
+## src/InkEngine/Core/InkSerializer.cs（927 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -222,32 +222,32 @@
 | 行 | 段落 |
 | --- | --- |
 | 210 | 画布块 |
-| 288 | v2：图像像素 |
-| 303 | v4：擦除区间表 |
-| 312 | v5：锁定标记 |
-| 315 | v8：线型 |
-| 321 | v9：坐标系网格 |
-| 324 | v10：这一笔有没有真实压感（见 Stroke.HasPressure） |
-| 328 | v11：曲线的朝向（见 Stroke.CurveAxis） |
-| 334 | v12：双曲线画不画那两条虚线渐近线（见 Stroke.ShowAsymptotes） |
-| 338 | v17：棱柱底面几边形（见 Stroke.PrismSides） |
-| 342 | v23：椭圆（带焦点）的两个字段（见 Stroke.FocusTriangle / FocusPointU） |
-| 350 | v24：坐标系网格的格距（见 Stroke.AxisGridStep） |
-| 356 | v25 / v26：文本框内容（只有 Kind == TextBox 才写；其它对象一个字节都不加） |
-| 420 | v34：交互矢量图（只有 Kind == Figure 才写） |
-| 581 | v5：锁定标记（老文件没有这一位，一律"不锁"） |
-| 584 | v8：线型（老文件没有这一位，一律"实线"） |
-| 592 | v9：坐标系网格（老文件没有这一位，一律"不要网格"） |
-| 595 | v10：这一笔有没有真实压感（老文件没有这一位，一律"没有" = 等宽描边） |
-| 598 | v11：曲线的朝向（老文件没有这一位，读进来就是字段默认值 0） |
-| 614 | v12：渐近线开关（老文件没有这一位，一律"画"） |
-| 618 | v17：棱柱底面几边形（老文件没有这一位，一律四棱柱） |
-| 627 | v23：椭圆（带焦点）的"画不画焦点三角形" ＋ "P 的参数角" |
-| 636 | v24：坐标系网格的**格距**（见 Stroke.AxisGridStep） |
-| 647 | v25 / v26：文本框内容（只有 Kind == TextBox 才有） |
-| 786 | v34：交互矢量图 |
-| 793 | v13：抛物线的第二个点**换了含义**，老文件要迁移一次 |
-| 816 | v14：双曲线**拆成两套半轴**，老文件要把第三个点补出来 |
+| 333 | v2：图像像素 |
+| 348 | v4：擦除区间表 |
+| 357 | v5：锁定标记 |
+| 360 | v8：线型 |
+| 366 | v9：坐标系网格 |
+| 369 | v10：这一笔有没有真实压感（见 Stroke.HasPressure） |
+| 373 | v11：曲线的朝向（见 Stroke.CurveAxis） |
+| 379 | v12：双曲线画不画那两条虚线渐近线（见 Stroke.ShowAsymptotes） |
+| 383 | v17：棱柱底面几边形（见 Stroke.PrismSides） |
+| 387 | v23：椭圆（带焦点）的两个字段（见 Stroke.FocusTriangle / FocusPointU） |
+| 395 | v24：坐标系网格的格距（见 Stroke.AxisGridStep） |
+| 401 | v25 / v26：文本框内容（只有 Kind == TextBox 才写；其它对象一个字节都不加） |
+| 465 | v34：交互矢量图（只有 Kind == Figure 才写） |
+| 626 | v5：锁定标记（老文件没有这一位，一律"不锁"） |
+| 629 | v8：线型（老文件没有这一位，一律"实线"） |
+| 637 | v9：坐标系网格（老文件没有这一位，一律"不要网格"） |
+| 640 | v10：这一笔有没有真实压感（老文件没有这一位，一律"没有" = 等宽描边） |
+| 643 | v11：曲线的朝向（老文件没有这一位，读进来就是字段默认值 0） |
+| 659 | v12：渐近线开关（老文件没有这一位，一律"画"） |
+| 663 | v17：棱柱底面几边形（老文件没有这一位，一律四棱柱） |
+| 672 | v23：椭圆（带焦点）的"画不画焦点三角形" ＋ "P 的参数角" |
+| 681 | v24：坐标系网格的**格距**（见 Stroke.AxisGridStep） |
+| 692 | v25 / v26：文本框内容（只有 Kind == TextBox 才有） |
+| 831 | v34：交互矢量图 |
+| 838 | v13：抛物线的第二个点**换了含义**，老文件要迁移一次 |
+| 861 | v14：双曲线**拆成两套半轴**，老文件要把第三个点补出来 |
 
 ## src/InkEngine/Core/Model.EditActions.cs（920 行）
 
@@ -274,7 +274,7 @@
 | 805 | `internal sealed class SetStrokeGeometryAction : EditAction` |
 | 889 | `internal sealed class SetFigureParamsAction : EditAction` |
 
-## src/InkEngine/Core/Model.InkDocument.cs（2,012 行）
+## src/InkEngine/Core/Model.InkDocument.cs（2,054 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -285,9 +285,9 @@
 | --- | --- |
 | 34 | 页（每页一套内容） |
 | 148 | 页（每页一套内容） |
-| 326 | mutation primitives (no history; the actions below drive these) |
-| 429 | user operations |
-| 1633 | 属性编辑（颜色 / 粗细 / 锁定）与层级 |
+| 366 | mutation primitives (no history; the actions below drive these) |
+| 469 | user operations |
+| 1675 | 属性编辑（颜色 / 粗细 / 锁定）与层级 |
 
 ## src/InkEngine/Core/Model.Stroke.cs（971 行）
 
@@ -318,7 +318,7 @@
 | 13 | 坐标系 / 数轴（2026-09-19 第三批） |
 | 257 | 四种曲线（2026-09-20 第四批）：抛物线 / 双曲线 / 正弦 / 余弦 |
 
-## src/InkEngine/Core/Model.Stroke.Solids.cs（884 行）
+## src/InkEngine/Core/Model.Stroke.Solids.cs（899 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -331,7 +331,7 @@
 | 164 | 四面体（两笔：底面三角形 → 顶点） |
 | 188 | 棱柱 / 棱锥 / 棱台（两笔：底面正 n 边形 → 顶上那个中心） |
 
-## src/InkEngine/Core/Model.Stroke.Tangent.cs（2,566 行）
+## src/InkEngine/Core/Model.Stroke.Tangent.cs（2,770 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -340,10 +340,11 @@
 | 行 | 段落 |
 | --- | --- |
 | 13 | **正切 y = tan x**（2026-09-20 第十五批） |
-| 1698 | 空间坐标系：三根从原点出发的轴（抬笔分段，避免连出假线） |
-| 2290 | 空间直角坐标系：原点 → 三个正半轴端点，各带一个箭头 |
-| 2314 | 数轴：一条水平线 + 右端一个箭头 |
-| 2323 | 坐标系：十字轴 + 两个箭头 |
+| 1700 | 空间坐标系：三根从原点出发的轴（抬笔分段，避免连出假线） |
+| 2158 | 书写中：超长单笔的分段增量几何缓存（2026-11-25） |
+| 2494 | 空间直角坐标系：原点 → 三个正半轴端点，各带一个箭头 |
+| 2518 | 数轴：一条水平线 + 右端一个箭头 |
+| 2527 | 坐标系：十字轴 + 两个箭头 |
 
 ## src/InkEngine/Core/Model.Types.cs（853 行）
 
@@ -549,7 +550,7 @@
 | 982 | internal/prediction/input_predictor.h + stroke_end_predictor.h / .cc |
 | 1030 | stroke_modeler.h / .cc（总装） |
 
-## src/InkEngine/Input/StrokeMotion.cs（837 行）
+## src/InkEngine/Input/StrokeMotion.cs（844 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -557,7 +558,7 @@
 | 40 | `internal static class StrokeMotion` |
 | 123 | `private struct GaussEvent` |
 | 130 | `private sealed class MotionCache` |
-| 315 | `internal sealed class OneEuroAxis` |
+| 322 | `internal sealed class OneEuroAxis` |
 
 | 行 | 段落 |
 | --- | --- |
@@ -565,17 +566,17 @@
 | 93 | M6g（2026-10-08 新增）：高斯权 + 速度自适应 σ |
 | 117 | 静态复用输出缓冲 |
 | 129 | 每笔缓存 |
-| 265 | M2：google/ink 滑动窗 |
-| 312 | M4：1€ 滤波 |
-| 364 | M5：固定窗口算术平均（Xournal++/GIMP 思路的自实现） |
-| 384 | M5+（mean2）：距离窗平均 + 收笔追赶 |
-| 470 | 速度：最近 ~6 点的路径速度（px/ms）→ σ、λ 的目标值 |
-| 501 | 高斯权平均 |
-| 515 | 可选：向原始末点混一点（λ 随速度） |
-| 524 | M7：Xournal++ VelocityGaussian（速度高斯权重平均 + 收笔二次样条） |
-| 695 | 输出缓冲与时间轴 |
-| 774 | 命令行 |
-| 789 | M6g（2026-10-08）：高斯权 + 速度自适应 |
+| 272 | M2：google/ink 滑动窗 |
+| 319 | M4：1€ 滤波 |
+| 371 | M5：固定窗口算术平均（Xournal++/GIMP 思路的自实现） |
+| 391 | M5+（mean2）：距离窗平均 + 收笔追赶 |
+| 477 | 速度：最近 ~6 点的路径速度（px/ms）→ σ、λ 的目标值 |
+| 508 | 高斯权平均 |
+| 522 | 可选：向原始末点混一点（λ 随速度） |
+| 531 | M7：Xournal++ VelocityGaussian（速度高斯权重平均 + 收笔二次样条） |
+| 702 | 输出缓冲与时间轴 |
+| 781 | 命令行 |
+| 796 | M6g（2026-10-08）：高斯权 + 速度自适应 |
 
 ## src/InkEngine/Platform/DiagLog.cs（1,270 行）
 
@@ -763,6 +764,19 @@
 | 1501 | 穿透模式下"PPT 条那一块"的接输入小窗 |
 | 1904 | 位置的持久化 |
 
+## src/InkEngine/Rendering/CanvasTiles.cs（716 行）
+
+| 行 | 顶层类型 |
+| --- | --- |
+| 43 | `internal sealed class CanvasTileCache : IDisposable` |
+| 141 | `internal sealed class Tile` |
+
+| 行 | 段落 |
+| --- | --- |
+| 168 | 诊断用（性能面板 / 自检） |
+| 186 | 分帧时间预算（2026-11-25） |
+| 232 | 视口外一圈的预取（诊断 / 调度） |
+
 ## src/InkEngine/Rendering/Engine.Cursor.cs（800 行）
 
 | 行 | 顶层类型 |
@@ -810,12 +824,12 @@
 | 518 | 触点诊断浮层（8.3.3，默认关） |
 | 569 | 橡皮读数浮层（8.3.7，默认关；调参用） |
 
-## src/InkEngine/Rendering/Overlay.Content.cs（774 行）
+## src/InkEngine/Rendering/Overlay.Content.cs（784 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
 | 21 | `internal sealed partial class OverlayWindow` |
-| 638 | `private enum PillPlace` |
+| 648 | `private enum PillPlace` |
 
 | 行 | 段落 |
 | --- | --- |
@@ -839,7 +853,7 @@
 | 789 | 延时探针 |
 | 844 | 委托墨迹轨迹（微软的低延迟湿墨通道） |
 
-## src/InkEngine/Rendering/Overlay.Frame.cs（1,724 行）
+## src/InkEngine/Rendering/Overlay.Frame.cs（1,834 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -897,7 +911,7 @@
 | 721 | ③ 当前色预览 |
 | 737 | 取色板两张缓存位图（色相/尺寸变了才重画） |
 
-## src/InkEngine/Rendering/Overlay.Ui.cs（1,468 行）
+## src/InkEngine/Rendering/Overlay.Ui.cs（1,474 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -1840,4 +1854,4 @@
 
 ---
 
-共 85 个文件。重跑：`powershell -ExecutionPolicy Bypass -File tools/gen-section-map.ps1`
+共 86 个文件。重跑：`powershell -ExecutionPolicy Bypass -File tools/gen-section-map.ps1`

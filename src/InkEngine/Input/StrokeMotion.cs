@@ -187,7 +187,14 @@ internal static class StrokeMotion
         if (s == null || s.Kind != StrokeKind.Freehand || s.Points.Count < 2) return false;
 
         var cache = s_cache.GetValue(s, _ => new MotionCache());
-        if (cache.CachedMode != mode || cache.Version != Version || cache.Times == null)
+        // 抬笔抽稀（StrokeSimplifier）会把 s.Points 变短；若缓存里还留着抽稀前的
+        // Mean2Fed/Out（比如 200 点），而 StrokeTaper 按抽稀后的 60 点算系数，
+        // 后半条笔画就会全部钳到末点尖端系数（慢写后半段变发丝细，2026-11-25 实测）。
+        bool shrunk = (cache.Times != null && cache.Times.Length > s.Points.Count)
+                   || cache.Mean2Fed > s.Points.Count || cache.MeanFed > s.Points.Count
+                   || cache.OneEuroFed > s.Points.Count || cache.SlidingFed > s.Points.Count
+                   || cache.GaussFed > s.Points.Count;
+        if (cache.CachedMode != mode || cache.Version != Version || cache.Times == null || shrunk)
         {
             cache.CachedMode = mode;
             cache.Version = Version;

@@ -1227,6 +1227,12 @@ internal sealed partial class OverlayWindow
 
         try
         {
+            // **为什么这里每帧整条重建、不做 `ID2D1Ink.AddSegments` 增量追加**（2026-11-25 结论）：
+            // 墨迹点半径在书写过程中**不是只追加**——`StrokeTaper.Factors` 的尾长按"当前整条
+            // 末段速度/总长"重算，`stroke` 一变长，前面所有点的收尖系数都可能改；默认档的
+            // 抽稀步长 `stride` 也随总点数变化，采样点会整体重排。增量追加只能把新段接上去，
+            // 改不了已追加段的半径与位置，接出来的笔锋与现在**不是同一条曲线**。
+            // 所以这条通道保持"整条重建"，宁可慢一点，也不拿笔锋画质换。
             var ink = _ctx2.CreateInk(new Vortice.Direct2D1.InkPoint
             {
                 X = s.Points[0].X, Y = s.Points[0].Y, Radius = startRadius,

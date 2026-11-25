@@ -76,6 +76,12 @@ internal sealed class ImageData
     public static long LiveBytes;
     public static int LiveImages;
 
+    /// <summary>
+    /// 还留着 CPU 源字节吗？<c>true</c> = 放掉 GPU 位图后可以按需重建
+    /// （空闲瘦身只对这种图动手，见 <see cref="Stroke"/> 的页槽清理）。
+    /// </summary>
+    public bool HasCpuBytes => Bgra != null;
+
     public long ByteSize => (long)Width * Height * 4;
 
     /// <summary>

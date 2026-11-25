@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
+using System.Runtime;
 using System.Runtime.InteropServices;
 using InkLocalization;
 using Vortice.Direct2D1;
@@ -1197,7 +1198,13 @@ public partial class InkEngine
         DiagLog.SetEnv(Gfx.AdapterName, Gfx.IsSoftware, Gfx.AdapterVramMb,
                        envHz, _windows[0].Dpi, UiScale, $"{_virtualW}x{_virtualH}");
         if (Gfx.IsSoftware)
+        {
             Console.WriteLine("[env] ⚠ 没有可用的硬件显卡，正在用 WARP 软件渲染（能用，但会明显慢；4K 尤其）");
+            // 弱机保护（2026-11-25）：WARP 下预取是纯 CPU 光栅，会在空闲时和书写抢核。
+            // 关掉它只少一点"滚过去已经热好"的收益，换来书写主线程稳定。
+            CanvasTileCache.PrefetchEnabled = false;
+            Console.WriteLine("[env] 软件渲染模式：已自动关闭离屏分块预取以保障书写流畅");
+        }
         if (Gfx.HardwareError.Length > 0)
         {
             if (Gfx.HardwareError.StartsWith("强制", StringComparison.Ordinal))
@@ -1428,6 +1435,9 @@ public partial class InkEngine
             StepImageCard(); StepCardAnswers();             // 图片→题卡 / 卡上生成答案
             StepAppDataJob();                 // 全局备份/恢复结果轮询（后台线程，界面不卡）
             StepInkOpen();                    // 后台"打开墨迹"结果采纳（大 .inkb 不卡界面）
+            // 空闲内存瘦身（2026-11-25）：纯时间驱动，**绝不置 _dirty**——空闲仍然 0 FPS。
+            // 放在出帧判断之前：书写 / 拖动 / 回放 / 取景期间 Step 会因 busy 直接返回。
+            StepIdleMemoryTrim();
             if (NeedsFrame())
             {
                 // VBlankPaced：先等到合成边界，**再抽一次消息**，然后画、提交。
@@ -1458,19 +1468,34 @@ public partial class InkEngine
                 if (!_quit && !CaptureActive && ActiveStroke == null && AnyPrefetchNeeded())
                     _prefetchStepsLeft = Math.Max(_prefetchStepsLeft, 64);
             }
-            else if (_prefetchStepsLeft > 0)
+            else if (_prefetchStepsLeft > 0 && !FramePressureValve.Host.HighPressure)
             {
                 // 空闲预取一拍：只烘"视口外一圈"里欠着的块，不合成、不上屏。
                 // 一拍之后等最多 4ms（有输入立刻醒）：既不打满空闲 CPU，也不拖输入。
                 _prefetchStepsLeft--;
                 bool more = false;
-                foreach (var w in _windows) more |= w.PrefetchStep(this);
+                bool multi = _windows.Count > 1;
+                foreach (var w in _windows)
+                {
+                    // 多屏：空副屏跳过（同 AnyPrefetchNeeded 的判据）。
+                    if (multi && !WindowHasContent(w)) continue;
+                    more |= w.PrefetchStep(this);
+                }
                 if (!more) _prefetchStepsLeft = 0;
                 Native.MsgWaitForMultipleObjectsEx(0, IntPtr.Zero, 4, Native.QS_ALLINPUT, 0);
             }
             else
             {
-                Native.WaitMessage();
+                // 空闲：如果还有瘦身档没到点，用**带超时的等待**醒来一次（不产生帧）；
+                // 没有待办就回到无限等待，保持空闲 0 FPS。
+                // 高压保险丝也要在**没有帧**的时候自己退出去（空闲 10 秒 = 压力自然消失），
+                // 否则它会一直压着离屏预取，直到下一次有人动鼠标（见 FramePressureValve.StepIdle）。
+                FramePressureValve.Host.StepIdle(NowMs);
+                int waitMs = IdleMemoryTrimmer.Host.WaitMs(NowMs, _lastActivityMs, IdleTrimBusy, PassThrough);
+                if (waitMs > 0)
+                    Native.MsgWaitForMultipleObjectsEx(0, IntPtr.Zero, (uint)waitMs, Native.QS_ALLINPUT, 0);
+                else
+                    Native.WaitMessage();
             }
         }
     }
@@ -1478,14 +1503,106 @@ public partial class InkEngine
     /// <summary>空闲预取的剩余拍数（见主循环；每拍 <see cref="CanvasTileCache.PrefetchPerFrame"/> 块）。</summary>
     private int _prefetchStepsLeft;
 
+    /// <summary>
+    /// 空闲瘦身的"忙"判据：书写、拖动、回放、相机动画、截图取景、文本编辑、触摸惯性、
+    /// 激光轨迹未淡完——**任何一项成立都不许瘦身**（用户 2026-11-25 的硬边界）。
+    /// </summary>
+    private bool IdleTrimBusy
+        => _drawing || ActiveStroke != null || CaptureActive
+           || _camAnimating || _replayPlaying || ColorPickActive || _textBoxEditing
+           || _g2FlingActive || Laser.Visible;
+
+    /// <summary>
+    /// 推进空闲瘦身状态机；到点才做动作。**不碰 _dirty**（空闲 0 FPS）。
+    /// 自检模式不自动触发，避免干扰判据（状态机本身由 <c>--unittest</c> 覆盖）。
+    /// </summary>
+    private void StepIdleMemoryTrim()
+    {
+        if (SelfCheckMode) return;
+        var action = IdleMemoryTrimmer.Host.Step(NowMs, _lastActivityMs, IdleTrimBusy, PassThrough);
+        if (action == IdleTrimAction.Light) RunLightIdleTrim();
+        else if (action == IdleTrimAction.Deep) RunDeepIdleTrim();
+    }
+
+    /// <summary>
+    /// 轻度空闲瘦身：只放"当前看不见"的 GPU 缓存，可见内容一个不动。
+    ///
+    ///   · 各窗口的视口外分块（含回滚余量 / 预取环）；空桌面穿透时连可见块一起放；
+    ///   · 非当前页槽的几何与可重建位图（切页时会按需重建）。
+    ///
+    /// 放掉分块后清空 <see cref="_prefetchStepsLeft"/>：否则空闲预取会立刻把刚清掉的
+    /// 环又烘回来，等于白做（施工单明确要求）。
+    /// </summary>
+    private void RunLightIdleTrim()
+    {
+        // 空桌面穿透：屏幕上本来就没有任何墨，可见块也可以整层释放。
+        bool emptyDesktopPassThrough = PassThrough && !BoardOn && !DocView.IsOpen && Doc.Strokes.Count == 0;
+
+        int tiles = 0;
+        bool multi = _windows.Count > 1;
+        foreach (var w in _windows)
+        {
+            // 多屏：空副屏连可见块一起放（屏幕上本来就没内容，唤醒后重建也只是空白）；
+            // 有内容的屏幕只放视口外块，可见块保留 → 第一笔零延迟。
+            bool emptyScreen = multi && !WindowHasContent(w);
+            tiles += w.TrimIdleTiles(emptyDesktopPassThrough || emptyScreen);
+        }
+        if (tiles > 0) _prefetchStepsLeft = 0;
+
+        int strokes = Doc.TrimInactivePageCaches();
+        if (tiles > 0 || strokes > 0)
+            Console.WriteLine($"[idle] 轻度瘦身：离屏分块 {tiles}，非当前页缓存 {strokes} 笔"
+                              + (emptyDesktopPassThrough ? "（空桌面穿透，含可见块）" : ""));
+    }
+
+    /// <summary>
+    /// 深度空闲瘦身：先压缩 LOH 并做一次后台第 2 代回收，再让 DXGI 把驱动内部缓存还回去。
+    ///
+    /// **只在退出书写低延迟档之后做**：GC 的暂停会直接变成卡顿，而低延迟档正在保护书写。
+    /// 都是"尽量回收"语义（<c>blocking: false</c>），不会把空闲主线程按住。
+    /// </summary>
+    private void RunDeepIdleTrim()
+    {
+        bool gc = false;
+        if (!GcLatency.On)
+        {
+            try
+            {
+                GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+                GC.Collect(2, GCCollectionMode.Optimized, blocking: false);
+                gc = true;
+            }
+            catch { /* 有意忽略：个别运行时配置不支持 LOH 压缩，不影响使用 */ }
+        }
+
+        bool vram = Gfx.TrimVideoMemory();
+        Console.WriteLine($"[idle] 深度瘦身：GC {(gc ? "已请求" : "跳过（书写低延迟档生效中）")}，"
+                          + $"显存 Trim {(vram ? "成功" : "失败")}");
+    }
+
     /// <summary>视口外一圈还有没有欠着的块（任一窗口）。</summary>
     private bool AnyPrefetchNeeded()
     {
         if (!CanvasTileCache.PrefetchEnabled) return false;
+        // 高压态临时暂停离屏预取（2026-11-25）：这时帧时间本来就紧，远处那圈块
+        // 晚几拍补不但看不出来，还会跟湿墨抢 GPU/CPU。**不改** PrefetchEnabled 这个静态配置。
+        if (FramePressureValve.Host.HighPressure) return false;
+        bool multi = _windows.Count > 1;
         foreach (var w in _windows)
+        {
+            // 多屏：空副屏不预取（不为一块没有任何内容的屏白烘 16MB 预取环）。
+            if (multi && !WindowHasContent(w)) continue;
             if (w.PrefetchNeeded()) return true;
+        }
         return false;
     }
+
+    /// <summary>
+    /// 这块屏幕"有没有值得预取/保留的内容"：白板、文档页、或视口内真有笔迹。
+    /// 走 <see cref="InkDocument.HasStrokesInRect"/> 的网格查询，零分配。
+    /// </summary>
+    private bool WindowHasContent(OverlayWindow w)
+        => BoardOn || DocView.IsOpen || Doc.HasStrokesInRect(w.VisibleCanvasRect);
 
     // ======================================================================
     //  文档高清补丁：每帧同步一次（由引擎挑驱动窗口）
@@ -1709,16 +1826,78 @@ public partial class InkEngine
         var renderDoc = RenderDoc;
         long docVerBeforeRender = renderDoc.Version;
 
-        foreach (var w in _windows)
-            w.RenderFrame(this);
+        // **多屏按窗跳帧**（2026-11-25）：帧级事实收一次，逐窗只做矩形相交。
+        // 单屏 / 自检时 scene.Valid = false，下面的判定一律返回 true——行为和以前一个像素不差。
+        var scene = WindowSkipScheduler.BuildScene(this);
+        // 页层版本的水位在**帧首**记一次（见 SkipFrameState：渲染途中上涨的版本要保证下一帧全画）。
+        int pagesVerAtFrameStart = DocView.Version;
+
+        // 这一帧真正 RenderFrame 过的窗口。`Present` 只对它们调——跳过的窗口连后缓冲都没碰，
+        // 再对它 Present 一次就是把一份陈旧画面重新提交一遍（DWM 还要为它白合成一次）。
+        Span<bool> rendered = _windows.Count <= 16
+            ? stackalloc bool[_windows.Count]
+            : new bool[_windows.Count];
+
+        for (int i = 0; i < _windows.Count; i++)
+        {
+            var w = _windows[i];
+            if (!scene.Valid)
+            {
+                w.RenderFrame(this);
+                rendered[i] = true;
+                continue;
+            }
+
+            var f = WindowSkipScheduler.Build(w, this, scene);
+            if (WindowSkipDecision.ShouldRenderWindow(in f))
+            {
+                w.RenderFrame(this);
+                rendered[i] = true;
+            }
+            else
+            {
+                // 跳过的这一帧：把文档增量登记进这扇窗的分块缓存（只登记，不烘、不上屏），
+                // 否则回滚余量 / 预取环里那些块会缺墨（见 AbsorbDocDeltaWithoutRender）。
+                w.AbsorbDocDeltaWithoutRender(this);
+            }
+            WindowSkipScheduler.Commit(w, this, scene, rendered[i]);
+        }
+
+        // 兜底：一帧里**一个窗口都没画**是可能的（界面收起来、指针不在任何屏上、文档也没动），
+        // 但那样这一帧就白出了——主循环的 `_dirty` 已经消费掉，某些动因（后台任务轮询等）
+        // 会变成空转。这时强制画一次第一个窗口，保证每帧至少有一扇屏走完整流程。
+        if (!rendered.Contains(true) && _windows.Count > 0)
+        {
+            _windows[0].RenderFrame(this);
+            rendered[0] = true;
+            WindowSkipScheduler.Commit(_windows[0], this, scene, true);
+        }
+
+        // 本帧的页层版本水位（下一帧据此判断"页图是不是刚变过、要不要全画"）。
+        if (scene.Valid) SkipFrameState.Host.PagesVersionBaseline = pagesVerAtFrameStart;
 
         // 补丁脏区是**广播**的：每个窗口都要把这块分块重铺一遍，所以**所有**窗口都渲染完之后
         // 才由引擎清（哪个窗口先清，后面的窗口就漏铺 → 副屏留着上一张高清图）。
         // 见 `OverlayWindow.SyncDocPages` 里那段"只标记、不清单"。
         DocPatch?.DirtyRects.Clear();
 
-        foreach (var w in _windows)
-            w.Present();
+        // **高压保险丝**（2026-11-25）：喂进去的是"这一帧**真的在做事**的墙钟"——从帧首到这里，
+        // **不含** `Present` 的垂直同步阻塞（60Hz 下每次都要等 ~16ms，算进去的话会永远高压，
+        // 保险丝就成了摆设）。自检模式不喂：自检的节奏由"抽消息＋渲染"驱动，不代表真实帧耗。
+        if (!SelfCheckMode)
+        {
+            double workMs = _clock.Elapsed.TotalMilliseconds - frameStart;
+            if (FramePressureValve.Host.RecordFrame(workMs, NowMs))
+                Console.WriteLine(FramePressureValve.Host.HighPressure
+                    ? $"[压力] 连续 {FramePressureValve.EnterSlowStreak} 帧 > {FramePressureValve.SlowFrameMs:F0}ms"
+                      + " → 进入高压：分块预算收紧到 "
+                      + $"{CanvasTileCache.WritingFrameBudgetMs:F1}ms、暂停离屏预取"
+                    : "[压力] 帧时间已恢复 → 退出高压：分块预算回到 "
+                      + $"{CanvasTileCache.DefaultFrameBudgetMs:F1}ms、预取恢复");
+        }
+
+        for (int i = 0; i < _windows.Count; i++)
+            if (rendered[i]) _windows[i].Present();
 
         // 文本框编辑：透明背景要等这一拍把“正在编辑的框”隐藏并 Present 后，
         // 才能从屏幕截到它下面的画布。
@@ -1750,7 +1929,10 @@ public partial class InkEngine
             renderDoc.StructureChangedSinceRender = false;
         }
 
+        // 统计口径取"这一帧真的画过的那扇窗"——跳过的窗口计数是上一帧的旧值，读它会骗人。
         var w0 = _windows[0];
+        for (int i = 0; i < _windows.Count; i++)
+            if (rendered[i]) { w0 = _windows[i]; break; }
         _lastRebuildMs = w0.LastRebuildMs;
         _lastRecordMs = w0.LastRecordMs;
         _lastPresentMs = w0.LastPresentMs;
@@ -1780,6 +1962,7 @@ public partial class InkEngine
 
         double wall = _clock.Elapsed.TotalMilliseconds;
         _lastFrameMs = wall - frameStart;
+
         // 手测台：把这一帧的"重画 + 整帧"耗时喂给采集器（它只在拖拽中累计）。
         if (EraserTelemetry != null)
         {
@@ -2333,6 +2516,8 @@ public partial class InkEngine
         // 缩放停手后的"换分块倍率"是一个**定时待办**（防抖 120ms）：不算进这里，
         // 界面不再置脏时主循环会睡在 WaitMessage 上，倍率永远换不了（拉伸糊图常驻）。
         if (_windows.Exists(w => w.TileScalePending)) d |= FrameDrive.Dirty;
+        // 分帧烘焙没做完：下一帧继续烘（烘干净后 HasPendingDirtyTiles 归 false，立刻回空闲 0 FPS）。
+        if (_windows.Exists(w => w.HasPendingDirtyTiles)) d |= FrameDrive.Dirty;
         // 文档高清补丁：>100% 且"还缺补丁 / 等落稳 120ms / 有请求在飞"→ 定时待办。
         // 和分块倍率同一个理由：界面不再置脏时主循环会睡在 WaitMessage 上，补丁排不出来。
         // 缩回 100% 后的一次性空闲清理也由它报（待办期间即使 100% 也返回 true）。

@@ -24,9 +24,119 @@ internal sealed partial class OverlayWindow
     //  Frame
     // ------------------------------------------------------------------
 
-    public void RenderFrame(InkEngine app)
+    /// <summary>
+    /// 分块同步的"这一帧烘多少"（2026-11-25）。
+    ///
+    /// 正常模式一帧最多烘 <see cref="CanvasTileCache.DefaultFrameBudgetMs"/>（9ms）的脏块；
+    /// **书写中 / 刚按下 / 高压保险丝跳开时收紧到 <see cref="CanvasTileCache.WritingFrameBudgetMs"/>
+    /// （3.5ms）**——帧时间先给湿墨和指针采样，远处的脏块顺延一两帧补完；
+    /// 剩下的留到下帧。**自检模式必须同步光栅（budget = 0）**，否则单帧截图会拍到大片
+    /// 未烘的空块。焦点取指针（不在窗口内时取视口中心）：橡皮笔尖/书写处当帧优先清晰，
+    /// 大跨度长笔画波及的远处分块顺延到下一帧补完。
+    /// </summary>
+    private void SyncTilesWithBudget(InkEngine app)
     {
-        _app = app;
+        // 书写绝对优先（2026-11-25）：正在写 / 刚按下，或高压保险丝已跳开 → 只给 3.5ms
+        // 烘脏块，把帧时间让给湿墨与指针采样；抬笔后立刻回到 9ms 迅速补完。
+        bool writing = app.ActiveStroke != null || app.IsDrawingNow;
+        bool squeeze = (writing || FramePressureValve.Host.HighPressure) && !app.SelfCheckMode;
+        double budget = app.SelfCheckMode ? 0
+                      : squeeze ? CanvasTileCache.WritingFrameBudgetMs
+                                : CanvasTileCache.DefaultFrameBudgetMs;
+        float focusX, focusY;
+        if (app.PointerInside || app.SelfCheckMode)
+        {
+            focusX = app.PointerX;
+            focusY = app.PointerY;
+        }
+        else
+        {
+            var v = VisibleCanvasRect;
+            focusX = (v.MinX + v.MaxX) * 0.5f;
+            focusY = (v.MinY + v.MaxY) * 0.5f;
+        }
+
+        _tiles.Sync(VisibleCanvasRect, RasterizeTile, budget, focusX, focusY);
+        // 本帧没烘完：下帧必须继续合成（主循环由 NeedsFrame 续帧），否则旧画面会停住。
+        if (_tiles.HasPendingDirtyTiles)
+            _fullFramesLeft = Math.Max(_fullFramesLeft, 1);
+    }
+
+    /// <summary>还欠着几帧整屏重画（多屏跳帧判据要读；见 MultiMonitorSkip）。</summary>
+    internal int FullFramesLeftForSkip => _fullFramesLeft;
+
+    /// <summary>
+    /// 上一帧 / 上上帧这扇窗上还留着**落在窗口里**的浮动层矩形（后缓冲里躺着的旧像素还没被覆盖掉）。
+    /// 多屏跳帧据此**再画一帧**——否则界面/面板移走后那块屏会留下"死画面"。
+    ///
+    /// 注意要裁剪：浮动层矩形是按"画布 → 窗口"算出来的，画在别的屏上的那部分在本窗这里
+    /// 是一个**落在窗外**的非空矩形，不能当成"本窗有残留"（否则副屏永远跳不掉）。
+    /// </summary>
+    internal bool HasStaleOverlayRects
+    {
+        get
+        {
+            for (int i = 0; i < _transientHistory.Length; i++)
+                foreach (var r in _transientHistory[i].Items)
+                    if (!ClipToWindow(r).IsEmpty) return true;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 上一帧 / 上上帧这扇窗上还留着界面像素（界面可能刚移走到别的屏上）。
+    /// 多屏跳帧据此**再画一帧把旧界面擦掉**——否则界面移走后那块屏会留一条"死工具条"。
+    /// 同样要裁剪（理由同上）。
+    /// </summary>
+    internal bool HasStaleUiPixels
+    {
+        get
+        {
+            for (int i = 0; i < _uiBoundsHistory.Length; i++)
+                if (!ClipToWindow(_uiBoundsHistory[i]).IsEmpty) return true;
+            return false;
+        }
+    }
+
+    /// <summary>这扇窗这一刻画不画滚动条（多屏跳帧判据要读；和 <c>TryScrollBar</c> 同口径）。</summary>
+    internal bool HasScrollBarForSkip(InkEngine app)
+        => app.ScrollBarVisible && TryScrollBar(app, out _);
+
+    /// <summary>
+    /// **本帧跳过了渲染**时把文档增量吸收进分块缓存（多屏按窗跳帧，2026-11-25）。
+    ///
+    /// 和 <see cref="SyncTiles"/> 第 ① 步是**同一份登记**，只是不烘、不合成、不上屏：
+    ///   · 整层作废 → 所有块标脏（但调用方判过 `Dirty.Full` 会强制渲染，这一支基本走不到）；
+    ///   · 结构变化（删 / 移 / 撤销）→ 补画清单作废、脏区照标；
+    ///   · 只增不减 → 把新笔登记到覆盖它的块上（下次那块变可见时按"补画"画进去）。
+    ///
+    /// 为什么必须登记而不能只同步版本号：分块缓存里除了可见块还有**回滚余量 / 预取环**，
+    /// 后两者在可见画布之外。那一块里要是漏登记了一笔，用户往回滚时看到的就是缺墨的旧画面。
+    /// 登记本身只是字典查找，不碰 GPU，成本可以忽略。
+    /// </summary>
+    internal void AbsorbDocDeltaWithoutRender(InkEngine app)
+    {
+        var doc = app.RenderDoc;
+        if (_tilesVersion == doc.Version) return;
+        if (doc.Dirty.Full)
+        {
+            _tiles.MarkAllDirty();
+            _fullFramesLeft = 2;
+        }
+        else if (doc.StructureChangedSinceRender)
+        {
+            _tiles.FlushAppendsAsDirty();
+            foreach (var r in doc.Dirty.Rects) _tiles.MarkDirty(r);
+        }
+        else
+        {
+            foreach (var s in doc.AppendedSinceRender) _tiles.MarkAppend(s);
+        }
+        _tilesVersion = doc.Version;
+    }
+
+    public void RenderFrame(InkEngine app)
+    {        _app = app;
         s_frameNo++;
 
         // 抓屏专用：整窗清成透明（不画内容/界面/光标），让 BitBlt 直接看到桌面。
