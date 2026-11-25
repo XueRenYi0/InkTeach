@@ -72,6 +72,8 @@
     "贴边隐藏": "Masquer au bord",
     "色带常开": "Garder la bande de couleurs ouverte",
     "界面大小": "Taille de l'interface",
+    "窗口透明度": "Opacité de la fenêtre",
+    "整个批注窗口（笔迹和工具栏）的透明度；点一下换一档（100%～40%）": "Opacité de toute la fenêtre d'annotation (encre et barre d'outils) ; cliquez pour changer de palier (100 %–40 %)",
     "开机自动启动": "Démarrer avec Windows",
     "语言": "Langue",
     "停顿变图形": "Pause → forme",

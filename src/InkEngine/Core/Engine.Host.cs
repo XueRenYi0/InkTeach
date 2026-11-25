@@ -741,6 +741,11 @@ public partial class InkEngine
         if (float.TryParse(GetUiPref("uiscale"), System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture, out float usPref))
             UiScale = UiScalePresets.Snap(usPref);
+        // **窗口整体透明度**（2026-11-25）：只认档位（1 / .85 / .70 / .55 / .40），
+        // 配置里存的是数值，手改过的怪值先吸附到最近一档；缺省 / 非法 = 不透明。
+        if (float.TryParse(GetUiPref("windowOpacity"), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out float wopPref))
+            WindowOpacity = SnapWindowOpacity(wopPref);
         for (int i = 0; i < args.Length - 1; i++)
             if (args[i] == "--uiscale" && float.TryParse(args[i + 1],
                     System.Globalization.NumberStyles.Float,

@@ -147,6 +147,18 @@ internal sealed partial class OverlayWindow
             return;
         }
 
+        // **窗口整体透明度**（2026-11-25，用户："加一个透明度设置"）：DirectComposition
+        // 根视觉上的**合成期属性**。只在值变了时提交一次（Commit 是批处理，不必每帧刷）。
+        // 设在根视觉上 → 交换链和系统湿墨轨迹一起淡出：笔迹 / 工具栏 / 面板整体半透明。
+        // 命中测试与穿透按窗口样式 + WM_NCHITTEST 判定，不受它影响。
+        if (_opacityEffect != null && _dcomp != null
+            && MathF.Abs(_appliedWindowOpacity - app.WindowOpacity) > 0.001f)
+        {
+            _appliedWindowOpacity = app.WindowOpacity;
+            _opacityEffect.SetOpacity(_appliedWindowOpacity).CheckError();
+            _dcomp.Commit().CheckError();
+        }
+
         // 回放：推进"现在演到哪"必须**排在 SyncTiles 之前**。
         //
         // 为什么（用户 2026-10-01 报"每写完一笔还是会闪一下"的根因）：一条笔迹

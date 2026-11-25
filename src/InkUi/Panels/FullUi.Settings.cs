@@ -2080,6 +2080,7 @@ public sealed partial class FullUi
         Row.AutoHide => "settings.general.autoHide",
         Row.RailPin => "settings.general.railPin",
         Row.UiSize => "settings.general.uiSize",
+        Row.WindowOpacity => "settings.general.windowOpacity",
         Row.Language => "settings.general.language",
         Row.AutoStart => "settings.general.autoStart",
         Row.DwellShape => "settings.writing.dwellShape",
@@ -2099,11 +2100,33 @@ public sealed partial class FullUi
 
     private static UiActionKind RowActionKind(Row kind) => kind switch
     {
-        Row.UiSize or Row.HistoryDays or Row.Language => UiActionKind.Choice,
+        Row.UiSize or Row.WindowOpacity or Row.HistoryDays or Row.Language => UiActionKind.Choice,
         Row.AiApi => UiActionKind.Navigate,
         _ when IsToggleRow(kind) => UiActionKind.Toggle,
         _ => UiActionKind.Command,
     };
+
+    /// <summary>
+    /// 窗口透明度点一下就换一档（1 → .85 → .70 → .55 → .40 → 1，到顶回头）。
+    /// 引擎立刻生效（合成期属性，下一帧刷到根视觉上）；落盘也由引擎做
+    ///（"windowOpacity"，默认档不写项），界面这边不重复存。
+    /// </summary>
+    private void CycleWindowOpacity() =>
+        _host.Commands.SetWindowOpacity(NextWindowOpacity(_host.State.WindowOpacity));
+
+    /// <summary>
+    /// 窗口透明度的下一档：1 → .85 → .70 → .55 → .40 → 1（到顶回头）。
+    /// 档表必须和引擎 <c>Engine.WindowOpacityPresets</c> 一致（界面拿不到引擎的 internal 常量；
+    /// 同 BoardOpacityMin/Max 的做法，不一致由 --settingsaudit / 实测兜住）。
+    /// </summary>
+    private static float NextWindowOpacity(float cur)
+    {
+        if (cur > 0.92f) return 0.85f;
+        if (cur > 0.77f) return 0.70f;
+        if (cur > 0.62f) return 0.55f;
+        if (cur > 0.47f) return 0.40f;
+        return 1f;
+    }
 
     private void ActivateRow(int i)
     {
@@ -2146,6 +2169,8 @@ public sealed partial class FullUi
                 _host.Commands.SetUiScale(next);
                 break;
             }
+
+            case Row.WindowOpacity: CycleWindowOpacity(); break;
 
             // 语言（2026-11-13）：**不再点一下就直接重启**，改成常规下拉。
             // 选中只落盘 `ui.lang`；底部“重启以应用”才重启。不在当前进程里热切换：
@@ -2301,7 +2326,7 @@ public sealed partial class FullUi
         { "工具栏", "常规", "书写", "墨迹", "AI 服务", "备份", "关于" };
 
     private static readonly Row[] SettingsGeneralRows =
-        { Row.DarkTheme, Row.AutoHide, Row.RailPin, Row.UiSize, Row.Language, Row.AutoStart };
+        { Row.DarkTheme, Row.AutoHide, Row.RailPin, Row.UiSize, Row.WindowOpacity, Row.Language, Row.AutoStart };
     private static readonly Row[] SettingsWritingRows =
         { Row.DwellShape, Row.Pressure, Row.Taper, Row.Predict, Row.TouchMode, Row.ClearOnArrow };
     private static readonly Row[] SettingsInkRows =

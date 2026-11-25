@@ -466,7 +466,8 @@ internal static class SettingsAudit
         public AuditHost(RectF screen) => _screen = screen;
 
         public IEngineCommands Commands { get; } = DispatchProxy.Create<IEngineCommands, NoopCommands>();
-        public UiState State { get; } = new();
+        // 默认快照：窗口透明度给 1（struct 缺省是 0，设置页那一行会显示成 0%）。
+        public UiState State { get; } = new() { WindowOpacity = 1f };
         public RectF Screen => _screen;
         public RectF WorkArea => _screen;
         public float DpiScale => 1f;

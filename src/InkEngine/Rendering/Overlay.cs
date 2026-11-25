@@ -387,6 +387,14 @@ internal sealed partial class OverlayWindow : IDisposable
     private IDCompositionVisual _visual;
     /// <summary>交换链内容视觉（每帧画的内容都在这）。2026-10-10 试验C 从"根视觉直接装内容"改成子视觉。</summary>
     private IDCompositionVisual _swapVisual;
+    /// <summary>已经设在根视觉上的窗口透明度（合成期属性，真值在 Engine.WindowOpacity）。</summary>
+    private float _appliedWindowOpacity = 1f;
+    /// <summary>
+    /// 根视觉上的"效果组"，只用来装窗口整体不透明度（2026-11-25）。
+    /// 不用 <c>Visual::SetOpacity</c>——那个只在 <c>IDCompositionVisual3</c>（Win10 1809+）上；
+    /// 效果组从 Win8 就有，语义一样：根视觉整棵子树的合成结果乘这个不透明度。
+    /// </summary>
+    private IDCompositionEffectGroup _opacityEffect;
     /// <summary>委托墨迹轨迹视觉（内容＝_inkTrail，叠在交换链之上）。2026-10-10 试验C 新增。</summary>
     private IDCompositionVisual _inkVisual;
     private IDCompositionInkTrailDevice _inkTrailDevice;
@@ -1208,6 +1216,10 @@ internal sealed partial class OverlayWindow : IDisposable
         //   （2026-10-13 实测：白板 + 系统轨迹 0 像素，桌面正常），
         //   因为白板的底色把下面的一切都盖住了；松手干墨进文档后才重新可见。
         _visual = _dcomp.CreateVisual();
+        // 窗口整体透明度（2026-11-25）：效果组挂在根视觉上 → 交换链 + 系统湿墨一起淡出。
+        _opacityEffect = _dcomp.CreateEffectGroup();
+        _visual.SetEffect(_opacityEffect).CheckError();
+        _opacityEffect.SetOpacity(_appliedWindowOpacity).CheckError();
         _swapVisual = _dcomp.CreateVisual();
         _swapVisual.SetContent(_swapChain).CheckError();
         _visual.AddVisual(_swapVisual, false, null).CheckError();

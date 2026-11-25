@@ -416,7 +416,7 @@ public sealed partial class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。外观 / 书写 / 墨迹三列并排；
     /// `AutoStart` 排在表尾，但由 <see cref="MoreRowRect"/> 画在外观列最后一格。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, Language, DwellShape, Pressure, Taper, Predict, TouchMode, ClearOnArrow, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart, AiApi }
+    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, Language, DwellShape, Pressure, Taper, Predict, TouchMode, ClearOnArrow, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart, AiApi, WindowOpacity }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -483,6 +483,10 @@ public sealed partial class FullUi : IOverlayUi
         // 开机自启：放在「外观」列最后一格（MoreRowRect 里按列排，不按 Rows 顺序画）。
         // 默认关；打开后只写 HKCU Run，不需要管理员，也不碰任务计划/服务。
         (Row.AutoStart, "开机自动启动", false, false, "登录 Windows 后在后台待命：点小球再开始批注"),
+        // 窗口整体透明度（2026-11-25，用户："加一个透明度设置"）：五档循环、到顶回头。
+        // 引擎立刻生效（合成期属性：设在 DirectComposition 根视觉上，笔迹和工具栏一起淡出）；
+        // 落盘在引擎里（"windowOpacity"，默认档不写项），界面只负责点。
+        (Row.WindowOpacity, "窗口透明度", false, false, "整个批注窗口（笔迹和工具栏）的透明度；点一下换一档（100%～40%）"),
         // 板书历史本身没有开关（默认留、默认不显示）；上限是"总量 1 GB、份数不限"，
         // 见 BoardHistory。老师想清空就删 `%LOCALAPPDATA%\InkTeach\History`，或把这一行设成 7 天。
         // ⚠ 「精细笔迹」开关 2026-10-09 晚撤掉（默认开）；「触摸模式」2026-10-24

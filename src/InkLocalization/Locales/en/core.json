@@ -72,6 +72,8 @@
     "贴边隐藏": "Auto-hide at edge",
     "色带常开": "Keep color band open",
     "界面大小": "UI size",
+    "窗口透明度": "Window opacity",
+    "整个批注窗口（笔迹和工具栏）的透明度；点一下换一档（100%～40%）": "Opacity of the whole annotation window (ink and toolbar); click to switch tier (100%–40%)",
     "开机自动启动": "Start with Windows",
     "语言": "Language",
     "停顿变图形": "Hold to shape",

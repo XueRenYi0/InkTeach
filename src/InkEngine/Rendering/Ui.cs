@@ -578,6 +578,14 @@ public interface IEngineCommands
     void SetBoardOpacity(float opacity);
 
     /// <summary>
+    /// **整个批注窗口的透明度**（2026-11-25，用户："加一个透明度设置"）。
+    ///
+    /// 档位：1 / 0.85 / 0.70 / 0.55 / 0.40。合成期属性——笔迹、工具栏、面板一起淡出，
+    /// 能透出下面的 PPT / 桌面；命中测试、书写、穿透都不变。默认 1（不透明）。
+    /// </summary>
+    void SetWindowOpacity(float opacity);
+
+    /// <summary>
     /// 「设置 → 导出日志…」（2026-10-16 用户定）：把运行日志（+环境摘要）打包成 zip，
     /// 走系统"另存为"——存 U 盘 / 发给开发都能用。自检模式不弹对话框。
     /// </summary>
@@ -1373,6 +1381,9 @@ public readonly struct UiState
     public float BoardPatternStep { get; init; }
     /// <summary>白板的不透明度（1 = 实心；调小能隐约看见下面的题目）。</summary>
     public float BoardOpacity { get; init; }
+    /// <summary>整个批注窗口的透明度（1 = 不透明；设置页用它显示当前百分比）。
+    /// 注意：UiState 是 struct，不能带字段初始值；无窗口宿主自己给初值（见 SettingsAudit.AuditHost）。</summary>
+    public float WindowOpacity { get; init; }
     /// <summary>截图模式：true = 隐藏批注截取（只有下层内容），false = 直接截取（连板书一起拍）。</summary>
     public bool CaptureHideInk { get; init; }
     /// <summary>框选的选择方式（界面用它高亮"矩形/套索"那一格）。</summary>

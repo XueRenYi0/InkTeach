@@ -218,6 +218,7 @@ public partial class InkEngine
         BoardPattern = BoardPattern,
         BoardPatternStep = BoardPatternStepLogical,
         BoardOpacity = BoardOpacity,
+        WindowOpacity = WindowOpacity,
         CaptureHideInk = CaptureHideInk,
         SelectMode = SelMode,
         CoordGridDefault = CoordGridDefault,

@@ -665,6 +665,48 @@ public partial class InkEngine
         _dirty = true;
         NotifyUiStateChanged();
     }
+    /// <summary>
+    /// **整个批注窗口的透明度**（用户 2026-11-25："加一个透明度设置"）。
+    ///
+    /// 和 <see cref="BoardOpacity"/> 不同：它不碰任何画进分块缓存的内容，是**合成期属性**——
+    /// 渲染时设在 DirectComposition 根视觉上，交换链和系统湿墨一起淡出，所以笔迹、工具栏、
+    /// 面板整体半透明，能透出下面的 PPT / 桌面。命中测试看的是窗口样式与 WM_NCHITTEST 区域，
+    /// 不受透明度影响，书写 / 框选 / 穿透都不变。
+    ///
+    /// 1 = 不透明（默认）；调小 → 整个窗口变淡。
+    /// </summary>
+    internal float WindowOpacity = 1f;
+    /// <summary>可调档位：1.0 / 0.85 / 0.70 / 0.55 / 0.40（再低工具栏就不好点了）。</summary>
+    internal static readonly float[] WindowOpacityPresets = { 1f, 0.85f, 0.70f, 0.55f, 0.40f };
+
+    /// <summary>把任意数值吸附到最近的一档（手改配置 / 旧版残留值不会产生一个"不存在"的档）。</summary>
+    internal static float SnapWindowOpacity(float v)
+    {
+        if (float.IsNaN(v)) return WindowOpacityPresets[0];
+        float best = WindowOpacityPresets[0];
+        float bestD = MathF.Abs(v - best);
+        for (int i = 1; i < WindowOpacityPresets.Length; i++)
+        {
+            float d = MathF.Abs(v - WindowOpacityPresets[i]);
+            if (d < bestD) { bestD = d; best = WindowOpacityPresets[i]; }
+        }
+        return best;
+    }
+
+    internal void SetWindowOpacityFromUi(float v)
+    {
+        v = SnapWindowOpacity(v);
+        if (MathF.Abs(WindowOpacity - v) < 0.005f) return;
+        WindowOpacity = v;
+        // 默认档不写项（只写和默认不一样的，老规矩）；下次启动由 Engine.Host 读回。
+        SetUiPref("windowOpacity", v >= 0.995f
+            ? null
+            : v.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+        // 只影响合成，不动分块缓存；标脏让下一帧把视觉透明度刷上（Overlay.RenderFrame 里同步）。
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
     /// <summary>底纹间距（逻辑像素）。InkClass 的范围是 16～240，我们按逻辑像素存。</summary>
     internal float BoardPatternStepLogical = 40f;
 
