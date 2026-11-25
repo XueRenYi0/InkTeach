@@ -572,6 +572,8 @@ internal sealed partial class OverlayWindow : IDisposable
     /// <summary>PPT 控件条上一帧的矩形（**窗口坐标**；退出放映 / 拖动那一帧要靠它把旧位置擦干净，
     /// 同 `_libraryRectPrev` 的做法）。</summary>
     private RectF _pptBarRectPrev = RectF.Empty;
+    /// <summary>左右边缘翻页条上一帧的矩形（**窗口坐标**；隐藏那一帧要把旧位置擦干净）。</summary>
+    private RectF _pageEdgeRectPrev = RectF.Empty;
     /// <summary>回放控制条上一帧的矩形（**窗口坐标**；退出回放那一帧要把旧位置擦干净，同 PPT 条）。</summary>
     private RectF _replayBarRectPrev = RectF.Empty;
     /// <summary>计时卡片上一帧的矩形（**窗口坐标**；停下 / 收起 / 拖动那一帧要把旧位置擦干净）。</summary>
@@ -588,6 +590,9 @@ internal sealed partial class OverlayWindow : IDisposable
     /// <summary>页码那一段文字的格式（13 逻辑像素，见 `PptPageFormat`）。</summary>
     private IDWriteTextFormat _pptPageFmt;
     private float _pptPageFmtPx;
+    /// <summary>边缘翻页条页码格的小字号（48 的方格放不下 13px 的 "12/100"）。</summary>
+    private IDWriteTextFormat _pageEdgeFmt;
+    private float _pageEdgeFmtPx;
     /// <summary>悬停提示的两行格式：第一行 12.5、第二行 11（都左对齐，键位跟名称同一行）。</summary>
     private IDWriteTextFormat _tipTitleFmt, _tipNoteFmt;
     private float _tipTitleFmtPx, _tipNoteFmtPx;

@@ -816,6 +816,54 @@ internal sealed partial class App
             Check("点右端 ▶：这一下归它、命令给 PPT",
                   ate && fake.NextCalls == nextBefore2 + 1, $"吃掉={ate}，NextCalls={fake.NextCalls}");
 
+            // 屏幕左右边缘的三格翻页条（2026-11-25 定版）：上翻 / 页码 / 下翻，各 48×48、垂直居中。
+            // 几何与命中共用 PageEdge.CellRect —— 这里把它钉死。
+            {
+                var scrEdge = new RectF
+                {
+                    MinX = _virtualX, MinY = _virtualY,
+                    MaxX = _virtualX + _virtualW, MaxY = _virtualY + _virtualH,
+                };
+                var gl = PageEdge.GroupRect(scrEdge, true, DpiScale);
+                var gr = PageEdge.GroupRect(scrEdge, false, DpiScale);
+                bool geo = MathF.Abs((gl.MaxX - gl.MinX) - PageEdge.Cell * DpiScale) < 0.6f
+                        && MathF.Abs((gl.MaxY - gl.MinY) - PageEdge.GroupH * DpiScale) < 0.6f
+                        && MathF.Abs((gl.MinY + gl.MaxY) * 0.5f - (scrEdge.MinY + scrEdge.MaxY) * 0.5f) < 0.6f
+                        && MathF.Abs(gl.MinX - (scrEdge.MinX + PageEdge.EdgeMargin * DpiScale)) < 0.6f
+                        && MathF.Abs(gr.MaxX - (scrEdge.MaxX - PageEdge.EdgeMargin * DpiScale)) < 0.6f
+                        && PageEdge.CellAt((gl.MinX + gl.MaxX) * 0.5f,
+                                           (gl.MinY + gl.MaxY) * 0.5f, scrEdge, true, DpiScale) == 1;
+                Check("边缘翻页条：三格 48×48、垂直居中、离边 8（绘制=命中）", geo,
+                      $"左 {gl.MinX:F0}..{gl.MaxX:F0} × {gl.MinY:F0}..{gl.MaxY:F0}");
+
+                var downCell = PageEdge.CellRect(scrEdge, false, 2, DpiScale);
+                int nextBeforeEdge = fake.NextCalls;
+                bool ateEdgeR = PageEdgePress((downCell.MinX + downCell.MaxX) * 0.5f,
+                                              (downCell.MinY + downCell.MaxY) * 0.5f);
+                Step();
+                Check("点右边下格 ∨：下一页（命令给 PPT）",
+                      ateEdgeR && fake.NextCalls == nextBeforeEdge + 1,
+                      $"吃掉={ateEdgeR}，NextCalls={fake.NextCalls}");
+
+                var upCell = PageEdge.CellRect(scrEdge, true, 0, DpiScale);
+                int prevBeforeEdge = fake.PrevCalls;
+                bool ateEdgeL = PageEdgePress((upCell.MinX + upCell.MaxX) * 0.5f,
+                                              (upCell.MinY + upCell.MaxY) * 0.5f);
+                Step();
+                Check("点左边上格 ∧：上一页（命令给 PPT）",
+                      ateEdgeL && fake.PrevCalls == prevBeforeEdge + 1,
+                      $"吃掉={ateEdgeL}，PrevCalls={fake.PrevCalls}");
+
+                var midCell = PageEdge.CellRect(scrEdge, true, 1, DpiScale);
+                int nextBeforeMid = fake.NextCalls, prevBeforeMid = fake.PrevCalls;
+                bool ateMid = PageEdgePress((midCell.MinX + midCell.MaxX) * 0.5f,
+                                            (midCell.MinY + midCell.MaxY) * 0.5f);
+                Step();
+                Check("点中格（页码）：吃掉但不翻页",
+                      ateMid && fake.NextCalls == nextBeforeMid && fake.PrevCalls == prevBeforeMid,
+                      $"吃掉={ateMid}，Next={fake.NextCalls}，Prev={fake.PrevCalls}");
+            }
+
             // 点页码格 → **直接开页号面板**（2026-11-15：菜单搬去 ☰ 之后回归本职）。
             // 先把页数设成 12（页号面板铺成 2 行）：3 页时面板只有一行、点"第 5 格"根本不在面板里，
             // 那样测的是"点面板外"——**用例要挑有代表性的输入**（这坑自检当场踩了一次）。

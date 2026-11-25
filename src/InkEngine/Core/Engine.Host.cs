@@ -2279,7 +2279,7 @@ public partial class InkEngine
                 HitTestPoint(lParam, out float hitX, out float hitY);
                 // PPT 条（放映时底部那两条）也算"我的地盘"：**开着穿透时老师照样得能
                 // 点翻页 / 拖进度条**——不然那一下会落到下层 PPT 上，被它当成翻页点击。
-                bool mine = UiContains(hitX, hitY) || PptBarContains(hitX, hitY)
+                bool mine = UiContains(hitX, hitY) || PageEdgeContains(hitX, hitY) || PptBarContains(hitX, hitY)
                          || ReplayBarContains(hitX, hitY)
                          || TimerCardContains(hitX, hitY) || RollCardContains(hitX, hitY);
                 if (mine) _cntNcHitClient++;

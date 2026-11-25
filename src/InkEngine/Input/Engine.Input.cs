@@ -286,6 +286,16 @@ public partial class InkEngine
             return;
         }
 
+        // 屏幕左右边缘的三格翻页条（2026-11-25）：和 PPT 条同一条规矩——
+        // 排在界面之后、**穿透之前**（穿透下也要能点；NCHITTEST 给它开了区域豁免）。
+        if (OverlayLayers.PointerDown(screenX, screenY, id, ptype, 550, 550))
+        {
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
         // 界面之外的穿透：交下层窗口，我们不收这一下。
         if (PassThrough) return;
 

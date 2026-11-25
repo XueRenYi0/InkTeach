@@ -502,5 +502,59 @@ public partial class InkEngine
     // ---- 自检钩子（--touchtest）：H / 空格走同一条判据，不另写一套 ----------------
 
     internal bool DocPanSpaceHeldForTest => _docTouch.PanBySpace;
-}
 
+    // ---- 屏幕左右边缘的整页翻页条（2026-11-25 用户："在 ppt 正左和正右侧加一个翻页"）----
+
+    /// <summary>
+    /// 边缘翻页条现在**画不画 / 点不点得到**。
+    ///
+    /// **三种有"页"的模式都显示**（用户 2026-11-25 定："白板模式（含 PPT 上盖白板）、
+    /// PDF/图片文档这些也加上翻页"）：PPT 放映、白板（不论是否盖在 PPT 上）、文档。
+    /// 桌面纯批注（没有页的概念）不显示。
+    /// 穿透时照样显示、照样能点——NCHITTEST 给它开了区域豁免，和 PPT 条同一条规矩。
+    /// 全屏模态（更多 / 设置 / AI / 截图 / 吸管 / 图库落点 / 反馈码）和回放时收起。
+    /// </summary>
+    internal bool PageEdgeVisible =>
+        (PptMode || BoardOn || DocView.IsOpen)
+        && !ReplayActive && !UiOverlayOpen
+        && !CaptureActive && !ColorPickActive && !LibraryPlacementMode && !FeedbackQrVisible;
+
+    /// <summary>边缘翻页条整组 / 单格的引擎侧访问器（Overlay 是另一个类，读不到私有的 ScreenRectPhysical）。</summary>
+    internal RectF PageEdgeGroupRect(bool left) => PageEdge.GroupRect(ScreenRectPhysical(), left, UiUnit);
+
+    internal RectF PageEdgeCellRect(bool left, int index) => PageEdge.CellRect(ScreenRectPhysical(), left, index, UiUnit);
+
+    internal bool PageEdgeContains(float x, float y)
+        => PageEdgeVisible && PageEdge.Contains(x, y, ScreenRectPhysical(), UiUnit);
+
+    /// <summary>按下即翻页（触屏没有 hover，按下就生效最跟手；和 PptBar 的左右箭头一致）。
+    /// 返回 true = 这一下归它，引擎不再把它变成笔画（缝和页码格也是"归它但不动作"）。</summary>
+    internal bool PageEdgePress(float x, float y)
+    {
+        var scr = ScreenRectPhysical();
+        int side = PageEdge.SideAt(x, y, scr, UiUnit);
+        if (side == 0) return false;
+        int cell = PageEdge.CellAt(x, y, scr, side < 0, UiUnit);
+        if (cell < 0) return true;      // 两格之间的缝：吃掉，不落墨
+        if (cell == 1) return true;     // 中格 = 页码，只读
+        PageEdgeFlip(cell == 2);
+        _dirty = true;
+        return true;
+    }
+
+    /// <summary>
+    /// 边缘翻页条的翻页分派：白板 / 文档 = 相机翻页；PPT = 走 COM；
+    /// **桌面批注（没有白板/文档/PPT）= 相机翻一屏**——以前落到 `PptPrev/NextFromUi`
+    /// 上什么也不做，表现就是"画笔模式下点不动"（用户 2026-11-25 报）。
+    /// </summary>
+    private void PageEdgeFlip(bool down)
+    {
+        if (PptMode && !BoardOn)
+        {
+            if (down) PptNextFromUi(); else PptPrevFromUi();
+            return;
+        }
+        ExitReplayForEdit("边缘翻页");
+        if (FlipPage(down)) NotifyUiStateChanged();
+    }
+}

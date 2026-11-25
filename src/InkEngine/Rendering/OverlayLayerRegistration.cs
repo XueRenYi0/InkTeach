@@ -119,6 +119,17 @@ public partial class InkEngine
             dismissPolicy: OverlayDismissPolicy.Escape,
             blocksInputBelow: false));
 
+        // 屏幕左右边缘的整页翻页条（2026-11-25）：点一下即翻页（按下就生效，和 PPT 条的箭头一致）。
+        // 白板 / 文档 / PPT / 桌面批注共用，分派在 BarPrev/BarNext；不吃移动、不捕获。
+        m.Register(new LegacyOverlayLayer(
+            "pageedge", 550,
+            visible: () => PageEdgeVisible,
+            bounds: ScreenRectPhysical,
+            hit: PageEdgeContains,
+            down: (x, y, id, type) => PageEdgePress(x, y),
+            wantsCapture: false,
+            blocksInputBelow: false));
+
         // P5.1：截图取景。整屏覆盖，但只接管“取消/确认/调整”这类已被截图吃掉的按下；
         // 没吃掉时 `blocksInputBelow=false`，落回 Tool.Capture 旧分支起新框。
         m.Register(new LegacyOverlayLayer(

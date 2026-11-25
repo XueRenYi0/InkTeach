@@ -323,6 +323,10 @@ internal sealed partial class OverlayWindow
         // 顶部居中，压在页和页码条之上（只有卡片矩形吃点击）。
         DrawDocResumeCard(app);
 
+        // 屏幕左右边缘的整页翻页条（2026-11-25）：常驻半透明，白板/文档/PPT/桌面批注都用。
+        // 和上面几条同一层（屏幕坐标），压在内容与底部控件条之上、提示/截图之下。
+        DrawPageEdges(app);
+
         // 引擎侧悬停提示（选中操作条 / PPT 条与长按菜单）：画在所有浮层之上、
         // 截图整层之下——截图时 TooltipShown 本来就是假的（进入截图会清掉）。
         DrawEngineTooltip(app);
@@ -695,6 +699,23 @@ internal sealed partial class OverlayWindow
             }
             if (!_pptBarRectPrev.IsEmpty) r.Add(_pptBarRectPrev);
             _pptBarRectPrev = cur;      // 窗口坐标，下一帧直接加（擦旧位置）
+        }
+
+        // 左右边缘翻页条（2026-11-25）：常驻，但隐藏/显示那一帧旧位置要擦掉，
+        // 所以上一帧的矩形同样并进来（同 PPT 条的套路）。
+        {
+            var cur = RectF.Empty;
+            if (app.PageEdgeVisible)
+            {
+                cur = app.PageEdgeGroupRect(true);
+                var re = app.PageEdgeGroupRect(false);
+                cur.Add(re.MinX, re.MinY);
+                cur.Add(re.MaxX, re.MaxY);
+                cur = ScreenRectToWindow(cur);
+                r.Add(cur.Inflate(4f));
+            }
+            if (!_pageEdgeRectPrev.IsEmpty) r.Add(_pageEdgeRectPrev);
+            _pageEdgeRectPrev = cur;
         }
 
         // 回放：控制条（悬停/拖动/数值都在变）＋ 正在长的那一条的前缀——都每帧在变，

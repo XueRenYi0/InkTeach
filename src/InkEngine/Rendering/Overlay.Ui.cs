@@ -1473,4 +1473,97 @@ internal sealed partial class OverlayWindow
         _libraryRectPrev = RectF.Empty;
     }
 
+    // ---- 屏幕左右边缘的三格翻页条（2026-11-25 用户定版）-------------------------
+
+    /// <summary>
+    /// 左右各三个圆角方格：上翻 / 页码 / 下翻。整体垂直居中、离屏幕边 8 逻辑像素。
+    /// **底色和描边直接用浮层主题的面板色**（和工具栏同一套，用户："透明度和工具栏同步"）；
+    /// 全局窗口透明度（设置里的那一档）会把它们一起淡出去。
+    /// </summary>
+    private void DrawPageEdges(InkEngine app)
+    {
+        if (!app.PageEdgeVisible) return;
+        float dpi = app.UiUnit;
+        var th = app.FloatingTheme;
+        float rad = PageEdge.Radius * dpi;
+        float lw = 1f * dpi;
+
+        for (int side = -1; side <= 1; side += 2)
+        {
+            bool left = side < 0;
+            for (int i = 0; i < 3; i++)
+            {
+                var r = app.PageEdgeCellRect(left, i);
+                var raw = new Vortice.RawRectF(r.MinX, r.MinY, r.MaxX, r.MaxY);
+                _scratch.Color = th.Panel;
+                _ctx.FillRoundedRectangle(new RoundedRectangle(raw, rad, rad), _scratch);
+                _scratch.Color = th.PanelBorder;
+                _ctx.DrawRoundedRectangle(new RoundedRectangle(raw, rad, rad), _scratch, lw);
+
+                if (i == 1)
+                {
+                    // 中格 = "当前/总数"（只读）：当前页正文色、"/总数"次要色。
+                    DrawPageEdgePageNumber(app, r, dpi);
+                    continue;
+                }
+                DrawPageEdgeArrow(r, up: i == 0, dpi, th.TextMuted);
+            }
+        }
+    }
+
+    /// <summary>上翻 ∧ / 下翻 ∨（手画两条线，不借 `IconPaths`——那张表是生成物）。</summary>
+    private void DrawPageEdgeArrow(in RectF r, bool up, float dpi, Color4 color)
+    {
+        float cx = (r.MinX + r.MaxX) * 0.5f, cy = (r.MinY + r.MaxY) * 0.5f;
+        float halfW = 8f * dpi, halfH = 5f * dpi;
+        float tipY = up ? cy - halfH : cy + halfH;
+        float wingY = up ? cy + halfH : cy - halfH;
+        _scratch.Color = color;
+        float lw = 2f * dpi;
+        _ctx.DrawLine(new Vector2(cx - halfW, wingY), new Vector2(cx, tipY), _scratch, lw);
+        _ctx.DrawLine(new Vector2(cx, tipY), new Vector2(cx + halfW, wingY), _scratch, lw);
+    }
+
+    /// <summary>中格页码格式：11 逻辑像素、两轴居中（48 方格要放得下 "12/100"）。</summary>
+    private IDWriteTextFormat PageEdgeFormat(float dpi)
+    {
+        float px = MathF.Max(9f, MathF.Round(11f * dpi));
+        if (_pageEdgeFmt == null || _pageEdgeFmtPx != px)
+        {
+            _pageEdgeFmt?.Dispose();
+            _pageEdgeFmt = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
+            _pageEdgeFmt.TextAlignment = TextAlignment.Center;
+            _pageEdgeFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _pageEdgeFmt.WordWrapping = WordWrapping.NoWrap;
+            _pageEdgeFmtPx = px;
+        }
+        return _pageEdgeFmt;
+    }
+
+    /// <summary>
+    /// 中格页码："当前/总数"。当前页用正文色、"/总数"用次要色（和底部 PPT 条同一种层级）；
+    /// 字排不下（总页数三位数）时退化成只画当前页，绝不画到格子外面去。
+    /// </summary>
+    private void DrawPageEdgePageNumber(InkEngine app, in RectF r, float dpi)
+    {
+        var fmt = PageEdgeFormat(dpi);
+        var th = app.FloatingTheme;
+        string cur = app.BarPageNow.ToString();
+        string rest = "/" + app.BarTotal;
+        float h = r.MaxY - r.MinY;
+        float wCur = MeasureTextWidth(cur, fmt);
+        float wRest = MeasureTextWidth(rest, fmt);
+        if (wCur + wRest > (r.MaxX - r.MinX) - 6f * dpi)
+        {
+            _scratch.Color = th.Text;
+            _ctx.DrawText(cur, fmt, new Rect(r.MinX, r.MinY, r.MaxX - r.MinX, h), _scratch);
+            return;
+        }
+        float x0 = (r.MinX + r.MaxX) * 0.5f - (wCur + wRest) * 0.5f;
+        _scratch.Color = th.Text;
+        _ctx.DrawText(cur, fmt, new Rect(x0, r.MinY, wCur, h), _scratch);
+        _scratch.Color = th.TextMuted;
+        _ctx.DrawText(rest, fmt, new Rect(x0 + wCur, r.MinY, wRest, h), _scratch);
+    }
 }
