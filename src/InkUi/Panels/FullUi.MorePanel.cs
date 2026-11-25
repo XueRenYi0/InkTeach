@@ -55,6 +55,14 @@ public sealed partial class FullUi
 
     private void RenderCore(ID2D1DeviceContext ctx)
     {
+        // 从托盘打开设置（工具栏本该被藏着）：只画面板，不画球/主条/色带。
+        if (BandSuppressed)
+        {
+            if (_moreOpen || _more.Running) DrawMorePanel(ctx);
+            if (_aiOpen || _ai.Running) DrawAiPanel(ctx);
+            return;
+        }
+
         float e = _expand.Value;
         var bar = BarRect();
         var panel = UnionRect();
@@ -1100,6 +1108,8 @@ public sealed partial class FullUi
         Row.DwellShape => _host == null || _host.State.DwellShapeOn,
         // 压感粗细：状态在**引擎**（渲染期开关），界面只是显示它
         Row.Pressure => _host == null || _host.State.PressureOn,
+        // 工具栏只在 PPT 显示：引擎持有状态（托盘显隐也读它），界面只是显示它
+        Row.BarOnlyPpt => _host == null || _host.State.BarOnlyPpt,
         // 笔锋：状态在**引擎**（渲染期开关），界面只是显示它
         Row.Taper => _host == null || _host.State.TaperOn,
         // 墨迹预测：同样在引擎（默认关，2026-10-16 起），界面只是显示它
@@ -2037,6 +2047,24 @@ public sealed partial class FullUi
             if (Rows[i].Label.Contains(labelPart, StringComparison.Ordinal))
                 return SettingsRowRectFor(Rows[i].Kind);
         return RectF.Empty;
+    }
+
+    /// <summary>
+    /// 托盘「打开设置」（2026-11-25）：走正常开合路径打开「更多 → 设置」。
+    /// 不能只 `SetMorePage`：`_moreOpen` 必须先立起来 `ToolbarHidden` 才会让位
+    /// （见那个属性的注释），否则引擎不跑动画、面板永远不出现。
+    /// </summary>
+    public void ShowSettings()
+    {
+        if (!_moreOpen) OpenMore();
+        SetMorePage(MorePage.Settings, push: true);
+        _settingsCat = SettingsCategory.General;
+        _settingsScroll = 0f;
+        _settingsScrollDrag = false;
+        _moreHover = MoreHitNone;
+        _morePress = -1;
+        ResetSettingsFocus();
+        Invalidate();
     }
 
     /// <summary>自检：直接打开设置页（不模拟点“更多”里的设置格）。</summary>

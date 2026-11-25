@@ -707,6 +707,26 @@ public partial class InkEngine
         NotifyUiStateChanged();
     }
 
+    /// <summary>
+    /// **工具栏只在 PPT 显示**（2026-11-25 用户定）。开 = 不在 PPT 放映时把主条（球 + 按钮带）
+    /// 整个藏起来；因为主窗口不占任务栏，这时靠**系统托盘图标**当兜底入口（见 TrayIcon）。
+    /// 引擎持有它（而不是界面），因为 UI 可见性和托盘显隐要读同一份状态。
+    /// </summary>
+    internal bool BarOnlyPpt;
+    /// <summary>托盘要不要露出来：工具栏被这个设置藏起来的时候才需要。</summary>
+    internal bool WantTray => BarOnlyPpt && !PptMode;
+
+    internal void SetBarOnlyPptFromUi(bool on)
+    {
+        if (BarOnlyPpt == on) return;
+        BarOnlyPpt = on;
+        // 默认关：只写"开了"这一种情况（老规矩）。
+        SetUiPref("barOnlyPpt", on ? "1" : null);
+        _tray?.Update(WantTray);
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
     /// <summary>底纹间距（逻辑像素）。InkClass 的范围是 16～240，我们按逻辑像素存。</summary>
     internal float BoardPatternStepLogical = 40f;
 
@@ -2510,6 +2530,8 @@ public partial class InkEngine
     // InkTeach 通过 InternalsVisibleTo 继承引擎、直接读内部状态来做自动化
     // 测量。产品界面走 IOverlayUi，不碰这些。
     internal readonly List<OverlayWindow> _windows = new();
+    /// <summary>系统托盘图标（工具栏被「只在 PPT 显示」藏起来时的兜底入口；自检模式不建）。</summary>
+    private TrayIcon _tray;
     internal IntPtr _hInstance;
     internal string _className;
     private Native.WndProcDelegate _wndProc;

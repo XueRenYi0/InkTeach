@@ -177,6 +177,9 @@ public interface IOverlayUi
     /// 退出穿透，并把收起的工具条展开。默认空实现，给只需要“提到前面”的界面用。
     /// </summary>
     void Activate() { }
+
+    /// <summary>托盘兜底入口：把「更多 → 设置」打开。默认空实现（无界面/自检宿主不需要）。</summary>
+    void ShowSettings() { }
 }
 
 /// <summary>引擎提供给界面的能力。</summary>
@@ -584,6 +587,12 @@ public interface IEngineCommands
     /// 能透出下面的 PPT / 桌面；命中测试、书写、穿透都不变。默认 1（不透明）。
     /// </summary>
     void SetWindowOpacity(float opacity);
+
+    /// <summary>
+    /// **工具栏只在 PPT 显示**（2026-11-25）：开 = 不在放映时隐藏主条（球 + 按钮带），
+    /// 由托盘图标兜底入口。默认关。
+    /// </summary>
+    void SetBarOnlyPpt(bool on);
 
     /// <summary>
     /// 「设置 → 导出日志…」（2026-10-16 用户定）：把运行日志（+环境摘要）打包成 zip，
@@ -1381,6 +1390,8 @@ public readonly struct UiState
     public float BoardPatternStep { get; init; }
     /// <summary>白板的不透明度（1 = 实心；调小能隐约看见下面的题目）。</summary>
     public float BoardOpacity { get; init; }
+    /// <summary>工具栏只在 PPT 显示（设置页那个开关的当前值）。</summary>
+    public bool BarOnlyPpt { get; init; }
     /// <summary>整个批注窗口的透明度（1 = 不透明；设置页用它显示当前百分比）。
     /// 注意：UiState 是 struct，不能带字段初始值；无窗口宿主自己给初值（见 SettingsAudit.AuditHost）。</summary>
     public float WindowOpacity { get; init; }

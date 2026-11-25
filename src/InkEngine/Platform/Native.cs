@@ -908,6 +908,65 @@ internal static class Native
     public static extern short GetAsyncKeyState(int vKey);
 
     /// <summary>
+    /// 托盘图标回调消息（WM_APP + 0x52）。**0x51 已被"激活"占用，别复用**。
+    /// </summary>
+    public const uint WM_INKTRAY = 0x8000 + 0x52;
+
+    // ---- 系统托盘（Shell_NotifyIcon + 右键菜单）--------------------------
+    public const uint NIM_ADD = 0, NIM_DELETE = 2, NIM_SETVERSION = 4;
+    public const uint NIF_MESSAGE = 1, NIF_ICON = 2, NIF_TIP = 4;
+    public const int NIN_SELECT = 0x0400, NIN_KEYSELECT = 0x0401;
+    public const int WM_LBUTTONUP = 0x0202, WM_LBUTTONDBLCLK = 0x0203, WM_RBUTTONUP = 0x0205;
+    public const int WM_CONTEXTMENU = 0x007B;
+    public const uint MF_STRING = 0, TPM_RIGHTBUTTON = 0x0002, TPM_RETURNCMD = 0x0100;
+    public static readonly IntPtr IDI_APPLICATION = (IntPtr)32512;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct NOTIFYICONDATA
+    {
+        public int cbSize;
+        public IntPtr hWnd;
+        public uint uID;
+        public uint uFlags;
+        public uint uCallbackMessage;
+        public IntPtr hIcon;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string szTip;
+        public uint dwState;
+        public uint dwStateMask;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string szInfo;
+        public uint uVersion;              // 与 uTimeout 共用同一格（union），这里只认版本号
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string szInfoTitle;
+        public uint dwInfoFlags;
+        public Guid guidItem;
+        public IntPtr hBalloonIcon;
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool Shell_NotifyIconW(uint msg, ref NOTIFYICONDATA data);
+
+    /// <summary>从 PE 资源里取图标（返回值 = 取到几个；大/小图标要自己 DestroyIcon）。</summary>
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern int ExtractIconExW(string file, int index, out IntPtr large, out IntPtr small, int count);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr LoadIconW(IntPtr instance, IntPtr name);
+
+    [DllImport("user32.dll")]
+    public static extern bool DestroyIcon(IntPtr icon);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr CreatePopupMenu();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool AppendMenuW(IntPtr menu, uint flags, UIntPtr item, string text);
+
+    [DllImport("user32.dll")]
+    public static extern int TrackPopupMenu(IntPtr menu, uint flags, int x, int y, int reserved, IntPtr hwnd, IntPtr rect);
+
+    [DllImport("user32.dll")]
+    public static extern bool DestroyMenu(IntPtr menu);
+
+    /// <summary>
     /// 第二个进程唤醒已有实例的自定义消息（WM_APP + 0x51）。
     /// 产品里由 Program.BringExistingToFront 发送，Engine.WndProc 接。
     /// </summary>

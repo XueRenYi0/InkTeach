@@ -204,6 +204,8 @@ internal sealed class UiHost : IUiHost, IEngineCommands
 
     public void SetWindowOpacity(float opacity) => _engine.SetWindowOpacityFromUi(opacity);
 
+    public void SetBarOnlyPpt(bool on) => _engine.SetBarOnlyPptFromUi(on);
+
     /// <summary>「设置 → 导出日志…」：运行日志打包 zip（2026-10-16）。</summary>
     public void ExportLogs(string note, bool includeOlder)
         => _engine.ExportLogsFromUi(note, includeOlder);

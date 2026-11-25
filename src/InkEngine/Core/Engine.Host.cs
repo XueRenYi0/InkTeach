@@ -726,6 +726,8 @@ public partial class InkEngine
             LineDash = (StrokeDash)dash;
         // 「箭头清屏」（2026-11-12）：只在桌面批注生效。
         ClearOnArrow = GetUiPref("clearOnArrow") == "1";
+        // 工具栏只在 PPT 显示（2026-11-25）：默认关，只认显式的 "1"。
+        BarOnlyPpt = GetUiPref("barOnlyPpt") == "1";
         // **粗细的"数值"版**：滑条拖动现在**吸附在档上**，所以这份数值正常就等于某档；
         // 早期版本存过任意值（如 2.37）——读回来时吸附到最近的档，界面不会显示一个"不存在"的档。
         if (float.TryParse(GetUiPref("wv.pen"), out float vPen))
@@ -1193,6 +1195,13 @@ public partial class InkEngine
         PressureSim.DpiScale = DpiScale;    // 模拟压力按 72dpi 口径换算距离（见 PressureSim）
         PressureSim.BumpVersion();
 
+        // 托盘图标（2026-11-25）：工具栏被「只在 PPT 显示」藏起来时的兜底入口。
+        // **必须等窗口建好**（Shell_NotifyIcon 要有效 hwnd；放进 Run() 会 _windows[0] 越界，
+        // 2026-11-25 真机启动崩过一次）；自检模式不建，
+        // 免得几十个自检进程往托盘里堆图标。显不显由主循环每帧 Update(WantTray) 决定。
+        if (!SelfCheckMode && _windows.Count > 0)
+            _tray = new TrayIcon(_windows[0].Hwnd, ShowSettingsFromTray, QuitFromUi);
+
         Host?.UpdateScreen(UiLogicalScreen);
         Host?.UpdateWorkArea(UiLogicalWorkArea);
         Console.WriteLine($"DPI 缩放 {DpiScale:F2}（逻辑 {_windows[0].Width / DpiScale:F0}x{_windows[0].Height / DpiScale:F0}），"
@@ -1406,6 +1415,7 @@ public partial class InkEngine
             if (_rawRegistered && ActiveStroke == null) SetRawCapture(false);
 
             NowMs = _clock.Elapsed.TotalMilliseconds;
+            _tray?.Update(WantTray);          // 幂等：内部只做"该不该显示"的比较
             MaybeAutoCheckUpdate();       // 静默查更新：气泡 / 更多上的红点靠它出现
             PumpKeyGestures();            // 工具键的手势：长按判定 + 连按换色的延迟结算
             PumpRadialPalette();          // 呼出盘：出盘延迟 / 松手轮询 / 超时
@@ -2414,6 +2424,10 @@ public partial class InkEngine
                 // 2026-11-16 残影评审 P2）。
                 _dirty = true;
                 RequestFullFrames();
+                return IntPtr.Zero;
+
+            case Native.WM_INKTRAY:
+                _tray?.HandleMessage(wParam, lParam);
                 return IntPtr.Zero;
 
             case Native.WM_CLOSE:

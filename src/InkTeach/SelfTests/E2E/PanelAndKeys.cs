@@ -3599,6 +3599,32 @@ internal sealed partial class App
                   tipRow.IsEmpty && !ui.IsToggleRowByLabelForTest("功能提示"),
                   $"行空 = {tipRow.IsEmpty}");
         }
+        // ---- 工具栏只在 PPT 显示（2026-11-25）：非放映隐藏、进放映回来 ----
+        {
+            SetBarOnlyPptFromUi(true);
+            SetPptModeForTest(false);
+            NotifyUiStateForTest();
+            SettleFrames(200);
+            Check("工具栏只在PPT：非放映时隐藏（不占地方、点击直通）",
+                  ui != null && !ui.Visible && ui.QueryBounds().IsEmpty,
+                  $"可见={ui?.Visible}");
+
+            SetPptModeForTest(true);
+            NotifyUiStateForTest();
+            SettleFrames(200);
+            Check("工具栏只在PPT：进入放映后自动回来",
+                  ui != null && ui.Visible && !ui.QueryBounds().IsEmpty,
+                  $"可见={ui?.Visible}");
+
+            SetPptModeForTest(false);
+            SetBarOnlyPptFromUi(false);
+            NotifyUiStateForTest();
+            SettleFrames(200);
+            Check("工具栏只在PPT：关掉开关后都可见",
+                  ui != null && ui.Visible,
+                  $"可见={ui?.Visible}");
+        }
+
         SaveSettingsForTest();
 
         string prefsPath = InkSettings.PathOverride ?? "";

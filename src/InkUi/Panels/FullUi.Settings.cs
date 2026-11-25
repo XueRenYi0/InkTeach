@@ -1905,7 +1905,7 @@ public sealed partial class FullUi
     }
 
     private static bool IsToggleRow(Row kind)
-        => kind is Row.DarkTheme or Row.AutoHide or Row.RailPin or Row.DwellShape
+        => kind is Row.DarkTheme or Row.AutoHide or Row.RailPin or Row.BarOnlyPpt or Row.DwellShape
            or Row.Pressure or Row.Taper or Row.Predict or Row.Privacy or Row.RestoreInk or Row.PptAutoSave
            or Row.AutoStart or Row.ClearOnArrow;
 
@@ -2081,6 +2081,7 @@ public sealed partial class FullUi
         Row.RailPin => "settings.general.railPin",
         Row.UiSize => "settings.general.uiSize",
         Row.WindowOpacity => "settings.general.windowOpacity",
+        Row.BarOnlyPpt => "settings.general.barOnlyPpt",
         Row.Language => "settings.general.language",
         Row.AutoStart => "settings.general.autoStart",
         Row.DwellShape => "settings.writing.dwellShape",
@@ -2113,6 +2114,13 @@ public sealed partial class FullUi
     /// </summary>
     private void CycleWindowOpacity() =>
         _host.Commands.SetWindowOpacity(NextWindowOpacity(_host.State.WindowOpacity));
+
+    /// <summary>工具栏只在 PPT 显示：翻转开关并让界面偏好落盘（引擎自己写 "barOnlyPpt"）。</summary>
+    private void ToggleBarOnlyPpt()
+    {
+        _host.Commands.SetBarOnlyPpt(!_host.State.BarOnlyPpt);
+        SavePrefs();
+    }
 
     /// <summary>
     /// 窗口透明度的下一档：1 → .85 → .70 → .55 → .40 → 1（到顶回头）。
@@ -2169,6 +2177,8 @@ public sealed partial class FullUi
                 _host.Commands.SetUiScale(next);
                 break;
             }
+
+            case Row.BarOnlyPpt: ToggleBarOnlyPpt(); break;
 
             case Row.WindowOpacity: CycleWindowOpacity(); break;
 
@@ -2326,7 +2336,7 @@ public sealed partial class FullUi
         { "工具栏", "常规", "书写", "墨迹", "AI 服务", "备份", "关于" };
 
     private static readonly Row[] SettingsGeneralRows =
-        { Row.DarkTheme, Row.AutoHide, Row.RailPin, Row.UiSize, Row.WindowOpacity, Row.Language, Row.AutoStart };
+        { Row.DarkTheme, Row.AutoHide, Row.RailPin, Row.BarOnlyPpt, Row.UiSize, Row.WindowOpacity, Row.Language, Row.AutoStart };
     private static readonly Row[] SettingsWritingRows =
         { Row.DwellShape, Row.Pressure, Row.Taper, Row.Predict, Row.TouchMode, Row.ClearOnArrow };
     private static readonly Row[] SettingsInkRows =

@@ -416,7 +416,7 @@ public sealed partial class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。外观 / 书写 / 墨迹三列并排；
     /// `AutoStart` 排在表尾，但由 <see cref="MoreRowRect"/> 画在外观列最后一格。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, Language, DwellShape, Pressure, Taper, Predict, TouchMode, ClearOnArrow, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart, AiApi, WindowOpacity }
+    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, Language, DwellShape, Pressure, Taper, Predict, TouchMode, ClearOnArrow, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart, AiApi, WindowOpacity, BarOnlyPpt }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -487,6 +487,10 @@ public sealed partial class FullUi : IOverlayUi
         // 引擎立刻生效（合成期属性：设在 DirectComposition 根视觉上，笔迹和工具栏一起淡出）；
         // 落盘在引擎里（"windowOpacity"，默认档不写项），界面只负责点。
         (Row.WindowOpacity, "窗口透明度", false, false, "整个批注窗口（笔迹和工具栏）的透明度；点一下换一档（100%～40%）"),
+        // 工具栏只在 PPT 显示（2026-11-25）：开 = 不在放映时把主条整个藏起来。
+        // 主窗口不占任务栏，所以藏起来时由**系统托盘图标**兜底（打开设置 / 退出）。
+        (Row.BarOnlyPpt, "工具栏只在 PPT 显示", false, false,
+         "不在 PPT 放映时隐藏工具条；托盘图标可打开设置或退出"),
         // 板书历史本身没有开关（默认留、默认不显示）；上限是"总量 1 GB、份数不限"，
         // 见 BoardHistory。老师想清空就删 `%LOCALAPPDATA%\InkTeach\History`，或把这一行设成 7 天。
         // ⚠ 「精细笔迹」开关 2026-10-09 晚撤掉（默认开）；「触摸模式」2026-10-24
@@ -523,11 +527,32 @@ public sealed partial class FullUi : IOverlayUi
     }
 
     public string Name => "完整界面";
-    public bool Visible => true;
+
+    /// <summary>
+    /// 「工具栏只在 PPT 显示」这一刻是不是把主条藏起来了（2026-11-25）。
+    ///
+    /// ⚠ 全屏模态 / 开合动画期间**不许藏**：`Visible=false` 时引擎连 PrepareFrame 都不调，
+    /// 「更多」面板就没法淡入淡出——老师从托盘点「打开设置」会什么都看不见。
+    /// （`_lastPpt` 是 OnStateChanged 缓存的放映状态，别每帧去读 State 快照。）
+    /// </summary>
+    private bool ToolbarHidden =>
+        _host != null && _host.State.BarOnlyPpt && !_lastPpt
+        && !_moreOpen && !_more.Running && !_aiOpen && !_ai.Running;
+
+    public bool Visible => !ToolbarHidden;
+
+    /// <summary>
+    /// 工具栏本来就该被设置藏着（不在 PPT），只是**从托盘打开了设置**所以 Visible 让了位
+    /// （见 <see cref="ToolbarHidden"/> 的模态豁免）。这种时候**只画「更多」面板**，
+    /// 球 / 主条 / 色带一律不画——用户 2026-11-25："托盘打开设置之后工具栏出现了，
+    /// 应该只出现设置不出现工具栏"。
+    /// </summary>
+    private bool BandSuppressed => _host != null && _host.State.BarOnlyPpt && !_lastPpt;
     public bool IsAnimating
     {
         get
         {
+            if (ToolbarHidden) return false;         // 藏起来了就别再每帧要帧
             // 贴边隐藏那条"离开一会儿才收"是靠**继续要帧**实现的：
             // 没有帧就没有时机去收（引擎只在有脏区或界面说要动时才渲染）。
             if (_peek.Running) return true;
@@ -805,6 +830,11 @@ public sealed partial class FullUi : IOverlayUi
 
     public RectF QueryBounds()
     {
+        // 「工具栏只在 PPT 显示」：不在放映 → 这一刻不占地方（=点击直通画布）。
+        // 引擎有几条路径绕过 Visible 直接读这份矩形（收藏面板锚点 / 轮盘避让），
+        // 所以这里必须也早退，否则会贴着一条看不见的条摆位置。
+        if (ToolbarHidden) return RectF.Empty;
+
         // 「更多」面板打开（含开合动画）时：我们占**整块屏幕**——这是全屏模态的根
         //（命中测试、裁剪、接输入小窗都按这份矩形走，理由见「更多」面板那一节）。
         // 关掉（动画也跑完）立刻回到主条那一条，一帧都不多占。
@@ -829,9 +859,9 @@ public sealed partial class FullUi : IOverlayUi
     /// **主条本身**的占用矩形（不含下拉/动作菜单/粗细预览这些临时弹层）。
     /// 收藏面板定位只认它：否则一开菜单，面板会跟着弹层往上跳（见 IOverlayUi.ChromeBounds）。
     /// </summary>
-    public RectF ChromeBounds => FinishBounds(BaseBoundsLocal());
+    public RectF ChromeBounds => ToolbarHidden ? RectF.Empty : FinishBounds(BaseBoundsLocal());
 
-    public RectF BarBounds => FinishBounds(BarRect());
+    public RectF BarBounds => ToolbarHidden ? RectF.Empty : FinishBounds(BarRect());
 
     private RectF BaseBoundsLocal() => UnionRect();
 
@@ -908,7 +938,8 @@ public sealed partial class FullUi : IOverlayUi
     /// 只影响裁剪与脏区，不参与命中测试——不会出现"提示旁边点不动"。
     /// </summary>
     public float PaintMargin
-        => TipWanted || _tipFade.Value > 0f ? Tokens.TipPaintMargin : Tokens.PaintMargin;
+        => ToolbarHidden ? 0f
+         : TipWanted || _tipFade.Value > 0f ? Tokens.TipPaintMargin : Tokens.PaintMargin;
 
     private RectF BarRect()
     {
