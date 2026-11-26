@@ -488,3 +488,7 @@ InkTeach   宿主：命令行 / 自检 / 基准（发布版双击 InkTeach.exe�
 
 参考过思路但未复制代码的项目（Ink Canvas / Inkeys / perfect-freehand / $P 等）的出处与许可，
 见 [src/InkEngine/THIRD-PARTY-NOTICES.md](src/InkEngine/THIRD-PARTY-NOTICES.md)。
+
+**想参与开发？** 先读 [CONTRIBUTING.md](CONTRIBUTING.md)。所有贡献都需要签署
+[CLA](CLA.md)（保留你的版权，同时授权维护者以任意许可含专有许可再分发）——
+不这么做的话，一份按 GPL-3.0 并入的第三方代码会让项目永久锁死在 GPLv3。
