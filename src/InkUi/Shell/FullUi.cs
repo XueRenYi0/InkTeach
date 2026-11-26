@@ -416,7 +416,7 @@ public sealed partial class FullUi : IOverlayUi
 
     /// <summary>设置子页里的行（启动器的底栏不在这张表里）。外观 / 书写 / 墨迹三列并排；
     /// `AutoStart` 排在表尾，但由 <see cref="MoreRowRect"/> 画在外观列最后一格。</summary>
-    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, Language, DwellShape, Pressure, Taper, Predict, TouchMode, ClearOnArrow, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart, AiApi }
+    private enum Row { DarkTheme, AutoHide, RailPin, UiSize, Language, DwellShape, Pressure, Taper, Predict, TouchMode, ClearOnArrow, Privacy, RestoreInk, PptAutoSave, HistoryDays, BackupAll, RestoreAll, AutoStart, AiApi, WindowOpacity, PageEdge, BarOnlyPpt }
 
     /// <summary>
     /// 行表：**绘制 / 命中 / 执行 / 自检都读这一份**（本仓"同一份名单写两处必漏一处"的老毛病）。
@@ -438,6 +438,20 @@ public sealed partial class FullUi : IOverlayUi
         // 点一下换一档、到顶回头。**缩的是界面自己**（工具带 / 色带 / 抽屉 / 设置页 / 图库面板）；
         // 笔宽、画布内容这些"纸上的尺"不跟着动。
         (Row.UiSize, "界面大小", false, false, "工具带和面板的大小；点一下换一档（0.8～1.3，五档）"),
+        // 窗口整体透明度（2026-11-25）：五档循环、到顶回头。**合成期**属性——
+        // 笔迹、工具栏、面板一起淡出，能透出下面的 PPT / 桌面；命中与书写不受影响。
+        // 落盘在引擎（"windowOpacity"，默认档不写项），界面只负责点。
+        (Row.WindowOpacity, "窗口透明度", false, false,
+         "整个批注窗口（笔迹和工具栏）的透明度；点一下换一档（100%～40%）"),
+        // 左右边缘翻页条（2026-11-25，**默认关**）：PPT 放映 / 白板时在屏幕左右中部
+        // 各出一条三格小控件（上翻 / 页码 / 下翻）。平时几乎不可见、指针靠近才显形。
+        // ⚠ 文档（PDF / 图片）**没有**它：底部已经有翻页条，再来一套就是三套入口。
+        (Row.PageEdge, "边缘翻页条", false, false,
+         "放映和白板时在屏幕左右中部显示上/下翻页；平时几乎看不见，指针靠近才显形（默认关）"),
+        // 工具栏只在 PPT 显示（2026-11-25，**默认关**）：开 = 不在放映时把主条整个藏起来。
+        // 主窗口不占任务栏，所以藏起来时由**系统托盘图标**兜底（打开设置 / 退出）。
+        (Row.BarOnlyPpt, "工具栏只在 PPT 显示", false, false,
+         "不在放映时隐藏工具条（桌面批注更干净）；托盘图标可打开设置或退出"),
         (Row.Language, "语言", false, false, "界面语言；切换后重启软件生效"),
         // 停顿成型（2026-09-23 第二十批，见 计划-图形工具.md §四十二）：
         // 手写一笔停住 400ms → 把它变成规整图形。**默认开**（用户定的：
@@ -519,11 +533,33 @@ public sealed partial class FullUi : IOverlayUi
     }
 
     public string Name => "完整界面";
-    public bool Visible => true;
+
+    /// <summary>
+    /// 「工具栏只在 PPT 显示」（2026-11-25）这一刻是不是把主条藏起来了。
+    ///
+    /// ⚠ **全屏模态 / 开合动画期间不许藏**：`Visible=false` 时引擎连 PrepareFrame 都不调，
+    /// 「更多」面板就没法淡入淡出——老师从托盘点「打开设置」会什么都看不见。
+    /// （`_lastPpt` 是 OnStateChanged 缓存的放映状态，别每帧去读 State 快照。）
+    /// </summary>
+    private bool ToolbarHidden =>
+        _host != null && _host.State.BarOnlyPpt && !_lastPpt
+        && !_moreOpen && !_more.Running && !_aiOpen && !_ai.Running;
+
+    public bool Visible => !ToolbarHidden;
+
+    /// <summary>
+    /// 工具栏本来就该被设置藏着（不在放映），只是**从托盘打开了设置**，所以 Visible 让了路
+    /// （见 <see cref="ToolbarHidden"/> 的模态豁免）。这种时候**只画「更多」面板**，
+    /// 球 / 主条 / 色带一律不画——用户 2026-11-25：从托盘打开设置之后工具栏出现了，
+    /// "应该只出现设置，不出现工具栏"。
+    /// </summary>
+    private bool BandSuppressed => _host != null && _host.State.BarOnlyPpt && !_lastPpt;
+
     public bool IsAnimating
     {
         get
         {
+            if (ToolbarHidden) return false;         // 藏起来了就别再每帧要帧
             // 贴边隐藏那条"离开一会儿才收"是靠**继续要帧**实现的：
             // 没有帧就没有时机去收（引擎只在有脏区或界面说要动时才渲染）。
             if (_peek.Running) return true;
@@ -801,6 +837,11 @@ public sealed partial class FullUi : IOverlayUi
 
     public RectF QueryBounds()
     {
+        // 「工具栏只在 PPT 显示」：不在放映、这一刻也不该出现 → 不占地方（= 点击直通画布）。
+        // 引擎有几条路径绕过 Visible 直接读这份矩形（收藏面板锚点 / 轮盘避让），
+        // 所以这里必须也早退，否则会贴着一条看不见的条摆位置。
+        if (ToolbarHidden) return RectF.Empty;
+
         // 「更多」面板打开（含开合动画）时：我们占**整块屏幕**——这是全屏模态的根
         //（命中测试、裁剪、接输入小窗都按这份矩形走，理由见「更多」面板那一节）。
         // 关掉（动画也跑完）立刻回到主条那一条，一帧都不多占。
@@ -825,9 +866,9 @@ public sealed partial class FullUi : IOverlayUi
     /// **主条本身**的占用矩形（不含下拉/动作菜单/粗细预览这些临时弹层）。
     /// 收藏面板定位只认它：否则一开菜单，面板会跟着弹层往上跳（见 IOverlayUi.ChromeBounds）。
     /// </summary>
-    public RectF ChromeBounds => FinishBounds(BaseBoundsLocal());
+    public RectF ChromeBounds => ToolbarHidden ? RectF.Empty : FinishBounds(BaseBoundsLocal());
 
-    public RectF BarBounds => FinishBounds(BarRect());
+    public RectF BarBounds => ToolbarHidden ? RectF.Empty : FinishBounds(BarRect());
 
     private RectF BaseBoundsLocal() => UnionRect();
 
@@ -904,7 +945,8 @@ public sealed partial class FullUi : IOverlayUi
     /// 只影响裁剪与脏区，不参与命中测试——不会出现"提示旁边点不动"。
     /// </summary>
     public float PaintMargin
-        => TipWanted || _tipFade.Value > 0f ? Tokens.TipPaintMargin : Tokens.PaintMargin;
+        => ToolbarHidden ? 0f
+         : TipWanted || _tipFade.Value > 0f ? Tokens.TipPaintMargin : Tokens.PaintMargin;
 
     private RectF BarRect()
     {

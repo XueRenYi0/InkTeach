@@ -1907,7 +1907,7 @@ public sealed partial class FullUi
     private static bool IsToggleRow(Row kind)
         => kind is Row.DarkTheme or Row.AutoHide or Row.RailPin or Row.DwellShape
            or Row.Pressure or Row.Taper or Row.Predict or Row.Privacy or Row.RestoreInk or Row.PptAutoSave
-           or Row.AutoStart or Row.ClearOnArrow;
+           or Row.AutoStart or Row.ClearOnArrow or Row.PageEdge or Row.BarOnlyPpt;
 
     private bool IsToggleRow(int i) => IsToggleRow(Rows[i].Kind);
 
@@ -2080,6 +2080,9 @@ public sealed partial class FullUi
         Row.AutoHide => "settings.general.autoHide",
         Row.RailPin => "settings.general.railPin",
         Row.UiSize => "settings.general.uiSize",
+        Row.WindowOpacity => "settings.general.windowOpacity",
+        Row.PageEdge => "settings.general.pageEdge",
+        Row.BarOnlyPpt => "settings.general.barOnlyPpt",
         Row.Language => "settings.general.language",
         Row.AutoStart => "settings.general.autoStart",
         Row.DwellShape => "settings.writing.dwellShape",
@@ -2099,7 +2102,7 @@ public sealed partial class FullUi
 
     private static UiActionKind RowActionKind(Row kind) => kind switch
     {
-        Row.UiSize or Row.HistoryDays or Row.Language => UiActionKind.Choice,
+        Row.UiSize or Row.WindowOpacity or Row.HistoryDays or Row.Language => UiActionKind.Choice,
         Row.AiApi => UiActionKind.Navigate,
         _ when IsToggleRow(kind) => UiActionKind.Toggle,
         _ => UiActionKind.Command,
@@ -2114,46 +2117,9 @@ public sealed partial class FullUi
 
     private void LegacyActivateRow(int i)
     {
+        if (ActivateAppearanceRow(Rows[i].Kind)) { Invalidate(); return; }
         switch (Rows[i].Kind)
         {
-            case Row.DarkTheme:
-                _dark = !_dark;
-                SavePrefs();
-                PushFloatingTheme();       // 浮层（操作条/小面板）也得跟着换
-                break;
-            case Row.AutoHide:
-                _hideEnabled = !_hideEnabled;
-                _peek.Jump(1f);          // 刚打开时先给个完整的，别一开就缩起来
-                SavePrefs();
-                break;
-
-            // 色带常开（2026-10-05）：打开时立刻把它摊开；关掉后交回悬停那套（触摸仍有自适应）。
-            case Row.RailPin:
-                _railPinned = !_railPinned;
-                if (_railPinned) _rail.To(1f, Tokens.RailMs);
-                SavePrefs();
-                break;
-
-            // 悬停提示（2026-10-02 的「功能提示」开关）：**2026-10-16 撤除、改常开**——
-            // 逻辑变成"第一次慢、之后快"（Tokens.TipDelayMs / TipFastDelayMs），不再有开关。
-
-            // 界面大小（2026-10-10）：五档循环、到顶回头。引擎立刻生效（重排 + 重画），
-            // 界面落盘 "uiscale"——**标准档不写项**（只写和默认不一样的，老规矩）。
-            case Row.UiSize:
-            {
-                float next = UiScalePresets.Next(_host.UiScale);
-                _host.SetPref("uiscale", UiScalePresets.StoreValue(next));
-                _host.Commands.SetUiScale(next);
-                break;
-            }
-
-            // 语言（2026-11-13）：**不再点一下就直接重启**，改成常规下拉。
-            // 选中只落盘 `ui.lang`；底部“重启以应用”才重启。不在当前进程里热切换：
-            // 文字格式/布局缓存、帮助页、系统对话框都按启动时语言建，重启换取确定性。
-            case Row.Language:
-                OpenLangMenu();
-                break;
-
             // 停顿成型：翻转开关 → 推给引擎 → 落盘（**只写"关过的"那一份**：
             // 配置里没有这一项就是默认开，以后默认值改了老配置不会把新默认顶掉）。
             case Row.DwellShape:
@@ -2229,6 +2195,76 @@ public sealed partial class FullUi
         Invalidate();
     }
 
+    /// <summary>
+    /// 「外观 / 界面」这几行（主题、贴边、色带、界面大小、窗口透明度、边缘翻页条、语言）。
+    /// 抽出来是为了让 <see cref="LegacyActivateRow"/> 保持在 120 行以下（ADR-005 D5）：
+    /// 这批行的共同点很一致——要么是界面自己的偏好（SavePrefs），要么交给引擎立刻生效。
+    /// 返回 true = 这一行归这里处理。
+    /// </summary>
+    private bool ActivateAppearanceRow(Row kind)
+    {
+        switch (kind)
+        {
+            case Row.DarkTheme:
+                _dark = !_dark;
+                SavePrefs();
+                PushFloatingTheme();       // 浮层（操作条/小面板）也得跟着换
+                return true;
+
+            case Row.AutoHide:
+                _hideEnabled = !_hideEnabled;
+                _peek.Jump(1f);          // 刚打开时先给个完整的，别一开就缩起来
+                SavePrefs();
+                return true;
+
+            // 色带常开（2026-10-05）：打开时立刻把它摊开；关掉后交回悬停那套（触摸仍有自适应）。
+            case Row.RailPin:
+                _railPinned = !_railPinned;
+                if (_railPinned) _rail.To(1f, Tokens.RailMs);
+                SavePrefs();
+                return true;
+
+            // 界面大小（2026-10-10）：五档循环、到顶回头。引擎立刻生效（重排 + 重画），
+            // 界面落盘 "uiscale"——**标准档不写项**（只写和默认不一样的，老规矩）。
+            case Row.UiSize:
+            {
+                float next = UiScalePresets.Next(_host.UiScale);
+                _host.SetPref("uiscale", UiScalePresets.StoreValue(next));
+                _host.Commands.SetUiScale(next);
+                return true;
+            }
+
+            // 窗口整体透明度（2026-11-25）：五档循环（100→85→70→55→40→100）。
+            // **引擎立刻生效**（合成期属性，下一帧刷到根视觉上）；落盘也由引擎做
+            //（"windowOpacity"，默认档不写项），界面这边不重复存。
+            case Row.WindowOpacity:
+                _host.Commands.SetWindowOpacity(WindowOpacityPresets.Next(_host.State.WindowOpacity));
+                return true;
+
+            // 边缘翻页条（2026-11-25，默认关）：引擎是权威（它落 `pageEdge`、管输入小窗），
+            // 界面只翻转开关。开了立刻能看见——显形进度是从"几乎不可见"淡进来的。
+            case Row.PageEdge:
+                _host.Commands.SetPageEdge(!_host.State.PageEdgeOn);
+                return true;
+
+            // 工具栏只在 PPT 显示（2026-11-25，默认关）：引擎持有状态并同步托盘显隐，
+            // 界面只翻转开关。关掉的那一刻工具条立刻回来（不留"什么都没了"的空窗）。
+            case Row.BarOnlyPpt:
+                _host.Commands.SetBarOnlyPpt(!_host.State.BarOnlyPpt);
+                return true;
+
+            // 语言（2026-11-13）：**不再点一下就直接重启**，改成常规下拉。
+            // 选中只落盘 `ui.lang`；底部“重启以应用”才重启。不在当前进程里热切换：
+            // 文字格式/布局缓存、帮助页、系统对话框都按启动时语言建，重启换取确定性。
+            case Row.Language:
+                OpenLangMenu();
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
     /// <summary>切档。切完要检查"当前工具还在不在这一档里"——不在就落到笔。</summary>
     private void SetProfile(Profile p)
     {
@@ -2301,7 +2337,7 @@ public sealed partial class FullUi
         { "工具栏", "常规", "书写", "墨迹", "AI 服务", "备份", "关于" };
 
     private static readonly Row[] SettingsGeneralRows =
-        { Row.DarkTheme, Row.AutoHide, Row.RailPin, Row.UiSize, Row.Language, Row.AutoStart };
+        { Row.DarkTheme, Row.AutoHide, Row.RailPin, Row.UiSize, Row.WindowOpacity, Row.PageEdge, Row.BarOnlyPpt, Row.Language, Row.AutoStart };
     private static readonly Row[] SettingsWritingRows =
         { Row.DwellShape, Row.Pressure, Row.Taper, Row.Predict, Row.TouchMode, Row.ClearOnArrow };
     private static readonly Row[] SettingsInkRows =

@@ -665,8 +665,68 @@ public partial class InkEngine
         _dirty = true;
         NotifyUiStateChanged();
     }
+
+    /// <summary>
+    /// **整个批注窗口的透明度**（用户 2026-11-25）。和 <see cref="BoardOpacity"/> 不同：
+    /// 它**不碰任何画进分块缓存的内容**，是**合成期**属性——渲染时设在 DirectComposition
+    /// 根视觉的效果组上，交换链和系统湿墨一起淡出，所以笔迹 / 浮层 / 界面整体半透明，
+    /// 能透出下面的 PPT / 桌面。
+    ///
+    /// 命中测试看的是窗口样式与 WM_NCHITTEST 区域，**不受它影响**：
+    /// 书写、框选、穿透全都照旧。
+    ///
+    /// 1 = 不透明（默认）；调小 → 整个窗口变淡。档表见 <see cref="WindowOpacityPresets"/>。
+    /// </summary>
+    internal float WindowOpacity = 1f;
+
+    internal void SetWindowOpacityFromUi(float v)
+    {
+        v = WindowOpacityPresets.Snap(v);
+        if (MathF.Abs(WindowOpacity - v) < 0.005f) return;
+        WindowOpacity = v;
+        // 默认档不写项（只写和默认不一样的，老规矩）；下次启动由 Engine.Host 读回。
+        SetUiPref("windowOpacity", WindowOpacityPresets.StoreValue(v));
+        // 只影响合成，不动分块缓存：标脏让下一帧把视觉透明度刷上（见 Overlay.RenderFrame）。
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
     /// <summary>底纹间距（逻辑像素）。InkClass 的范围是 16～240，我们按逻辑像素存。</summary>
     internal float BoardPatternStepLogical = 40f;
+
+    // ======================================================================
+    //  「工具栏只在 PPT 显示」（2026-11-25 用户定）
+    //
+    //  开 = **不在放映时把主条（球 + 按钮带 + 色带）整个藏起来**，只在 PPT 放映中显示。
+    //  这样桌面批注时屏幕上只剩笔迹，一点界面都不挡。
+    //
+    //  兜底入口：主窗口是 `WS_EX_TOOLWINDOW`（不占任务栏），藏起来后屏幕上没有任何
+    //  入口能打开设置/退出——所以这时必须有一个**系统托盘图标**（见 TrayIcon）。
+    //
+    //  状态放引擎而不是界面：界面可见性和托盘显隐要读**同一份**判断，
+    //  写两份必然出现"工具条藏了、托盘也没出来"这种锁死。
+    // ======================================================================
+
+    /// <summary>「工具栏只在 PPT 显示」开着吗（落盘 "barOnlyPpt"；默认关）。</summary>
+    internal bool BarOnlyPpt;
+
+    /// <summary>这一刻该不该藏工具条（开 + 不在放映）。界面只读这一个。</summary>
+    internal bool BarSuppressedNow => BarOnlyPpt && !PptMode;
+
+    /// <summary>托盘要不要露出来：只有工具条真被藏起来时才需要（平时屏幕上有球和条）。</summary>
+    internal bool WantTray => BarSuppressedNow;
+
+    internal void SetBarOnlyPptFromUi(bool on)
+    {
+        if (BarOnlyPpt == on) return;
+        BarOnlyPpt = on;
+        // 默认关：只写"开过"那一种情况（老规矩）。
+        SetUiPref("barOnlyPpt", on ? "1" : null);
+        _dirty = true;
+        NotifyUiStateChanged();
+    }
+
+    /// <summary>自检用：手动推一次界面状态快照（`SetBarOnlyPptFromUi` 会推，这里给测试用）。</summary>
+    internal void NotifyUiStateForTest() => NotifyUiStateChanged();
 
     /// <summary>底纹间距（画布像素 = 物理像素）。</summary>
     internal float BoardPatternStepPx => Math.Clamp(BoardPatternStepLogical, 8f, 240f) * DpiScale;
@@ -2475,6 +2535,13 @@ public partial class InkEngine
     internal bool _quit;
     internal bool _dirty = true;
     internal bool _drawing;
+
+    /// <summary>
+    /// 系统托盘图标（「工具栏只在 PPT 显示」的兜底入口；2026-11-25）。
+    /// **自检模式不建**：几十个自检进程各往托盘里塞一个图标，用户托盘就废了。
+    /// 显不显由主循环每帧 <see cref="TrayIcon.Update"/> 按 <see cref="WantTray"/> 决定。
+    /// </summary>
+    private TrayIcon _tray;
 
     /// <summary>书写中包含"刚按下还没收到点"的那一小段（`_drawing`），只读给渲染层判预算。</summary>
     internal bool IsDrawingNow => _drawing;

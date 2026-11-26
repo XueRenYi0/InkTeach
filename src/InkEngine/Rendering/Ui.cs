@@ -177,6 +177,13 @@ public interface IOverlayUi
     /// 退出穿透，并把收起的工具条展开。默认空实现，给只需要“提到前面”的界面用。
     /// </summary>
     void Activate() { }
+
+    /// <summary>
+    /// **托盘兜底入口**（2026-11-25）：把「更多 → 设置」打开。
+    /// 只在「工具栏只在 PPT 显示」把工具条藏起来时才用得到——那时屏幕上没有别的入口。
+    /// 默认空实现（无界面 / 自检宿主不需要）。
+    /// </summary>
+    void ShowSettings() { }
 }
 
 /// <summary>引擎提供给界面的能力。</summary>
@@ -576,6 +583,31 @@ public interface IEngineCommands
     /// 而**笔迹照样是实的**（半透明只作用于底色那一层）。
     /// </summary>
     void SetBoardOpacity(float opacity);
+
+    /// <summary>
+    /// **整个批注窗口的透明度**（2026-11-25）。档位：1 / 0.85 / 0.70 / 0.55 / 0.40。
+    ///
+    /// 和 <see cref="SetBoardOpacity"/> 的区别：那是**白板底色**半透明（笔迹仍然实），
+    /// 这是**合成期**的整体半透明——笔迹、工具栏、面板一起淡出，能透出下面的 PPT / 桌面。
+    /// 命中测试、书写、穿透都不受影响。默认 1（不透明）。
+    /// </summary>
+    void SetWindowOpacity(float opacity);
+
+    /// <summary>
+    /// **屏幕左右边缘的整页翻页条**（2026-11-25，默认关）。开着时 PPT 放映和白板
+    /// 会在左右中部各画三条小方块（上翻 / 页码 / 下翻），平时近乎不可见、指针靠近才显形。
+    /// 文档（PDF / 图片）不加：底部已经有翻页条，不再来第二套入口。
+    /// </summary>
+    void SetPageEdge(bool on);
+
+    /// <summary>
+    /// **工具栏只在 PPT 显示**（2026-11-25，默认关）。开 = 不在放映时把主条（球 + 按钮带 +
+    /// 色带）整个藏起来，桌面批注时屏幕上只剩笔迹。
+    ///
+    /// 兜底入口是**系统托盘图标**（主窗口不占任务栏，藏起来后屏幕上没有别的入口）：
+    /// 单击 = 打开设置，右键 = 打开设置 / 退出。由引擎持有状态并同步托盘显隐。
+    /// </summary>
+    void SetBarOnlyPpt(bool on);
 
     /// <summary>
     /// 「设置 → 导出日志…」（2026-10-16 用户定）：把运行日志（+环境摘要）打包成 zip，
@@ -1373,6 +1405,21 @@ public readonly struct UiState
     public float BoardPatternStep { get; init; }
     /// <summary>白板的不透明度（1 = 实心；调小能隐约看见下面的题目）。</summary>
     public float BoardOpacity { get; init; }
+    /// <summary>
+    /// **整个批注窗口的透明度**（1 = 不透明；设置页用它显示当前百分比）。
+    /// 合成期属性：笔迹 / 浮层 / 界面一起淡出，命中测试与书写都不受影响。
+    /// ⚠ 这是 struct，不能带字段初始值；无窗口的宿主自己给初值（见 SettingsAudit.AuditHost）。
+    /// </summary>
+    public float WindowOpacity { get; init; }
+
+    /// <summary>「工具栏只在 PPT 显示」开着吗（设置页那一行的开关）。</summary>
+    public bool BarOnlyPpt { get; init; }
+
+    /// <summary>
+    /// 屏幕左右边缘的整页翻页条开着吗（2026-11-25；**默认关**，老用户升级后完全无感）。
+    /// 只有 PPT 放映和白板会画它（文档底部本来就有翻页条，不再加第二套）。
+    /// </summary>
+    public bool PageEdgeOn { get; init; }
     /// <summary>截图模式：true = 隐藏批注截取（只有下层内容），false = 直接截取（连板书一起拍）。</summary>
     public bool CaptureHideInk { get; init; }
     /// <summary>框选的选择方式（界面用它高亮"矩形/套索"那一格）。</summary>

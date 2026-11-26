@@ -119,6 +119,26 @@ public partial class InkEngine
             dismissPolicy: OverlayDismissPolicy.Escape,
             blocksInputBelow: false));
 
+        // 左右边缘翻页条（2026-11-25，默认关）：**没有 Esc 语义**——它不是浮层菜单，
+        // 是一条常驻的控件；按 Esc 不该把它关掉（关它去设置页）。
+        // ⚠ bounds 给左边那一块就够：管理器只用它做诊断，命中走 `hit`（两块都认）。
+        //    给"两块的外接矩形"会变成横跨整屏的一条带子。
+        m.Register(new LegacyOverlayLayer(
+            "pageedge", 550,
+            visible: () => PageEdgeVisible,
+            bounds: () => PageEdgeGroupRect(left: true),
+            hit: PageEdgeContains,
+            down: (x, y, id, type) => PageEdgePress(x, y),
+            move: (x, y, id) => PageEdgePointerMove(x, y),
+            up: (x, y, id) =>
+            {
+                // 翻页在按下那一刻就走了；抬手只收"按着"的标记（显形会自然淡回去）。
+                _pageEdge.Release();
+                return true;
+            },
+            wantsCapture: false,
+            blocksInputBelow: false));
+
         // P5.1：截图取景。整屏覆盖，但只接管“取消/确认/调整”这类已被截图吃掉的按下；
         // 没吃掉时 `blocksInputBelow=false`，落回 Tool.Capture 旧分支起新框。
         m.Register(new LegacyOverlayLayer(

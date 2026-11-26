@@ -741,6 +741,15 @@ public partial class InkEngine
         if (float.TryParse(GetUiPref("uiscale"), System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture, out float usPref))
             UiScale = UiScalePresets.Snap(usPref);
+        // **窗口整体透明度**（2026-11-25）：只认档位（1 / .85 / .70 / .55 / .40），
+        // 配置里存数值，手改过的怪值先吸附到最近一档；缺省 / 非法 = 不透明。
+        if (float.TryParse(GetUiPref("windowOpacity"), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out float wOpPref))
+            WindowOpacity = WindowOpacityPresets.Snap(wOpPref);
+        // **左右边缘翻页条**（2026-11-25）：默认关，只认 "1"。
+        _pageEdge.Enabled = GetUiPref("pageEdge") == "1";
+        // **工具栏只在 PPT 显示**（2026-11-25）：默认关，只认显式的 "1"。
+        BarOnlyPpt = GetUiPref("barOnlyPpt") == "1";
         for (int i = 0; i < args.Length - 1; i++)
             if (args[i] == "--uiscale" && float.TryParse(args[i + 1],
                     System.Globalization.NumberStyles.Float,
@@ -1190,6 +1199,12 @@ public partial class InkEngine
 
         Host?.UpdateScreen(UiLogicalScreen);
         Host?.UpdateWorkArea(UiLogicalWorkArea);
+
+        // 托盘图标（2026-11-25）：**必须等窗口建完**（Shell_NotifyIcon 要有真 hwnd）。
+        // 自检模式不建：几十个自检进程各往托盘塞一个图标，用户托盘就废了。
+        // 显不显由主循环每帧 `Update(WantTray)` 决定（只在工具条被藏起来时需要）。
+        if (!SelfCheckMode && _windows.Count > 0)
+            _tray = new TrayIcon(_windows[0].Hwnd, ShowSettingsFromTray, QuitFromUi);
         Console.WriteLine($"DPI 缩放 {DpiScale:F2}（逻辑 {_windows[0].Width / DpiScale:F0}x{_windows[0].Height / DpiScale:F0}），"
                           + $"界面缩放 {UiScale:F2}（{UiScalePresets.Name(UiScale)}）");
 
@@ -1423,6 +1438,8 @@ public partial class InkEngine
             StepDocAutoSave();                // 文档批注的节流保存（自动保存开着才写）
             StepDocResume();                  // 文档阅读位置的节流保存（跨会话"继续"用）
             StepPptBar();                     // 底部那条：引导过期 / "再点确认"过期（没有长按了）
+            StepPageEdge();                   // 左右翻页条：显隐动画 / 穿透下的接输入小窗
+            _tray?.Update(WantTray);          // 托盘：只在工具条被藏起来时露出来（幂等）
             StepToast();                      // 轻提示到点自动消失（2s，不吞输入）
             StepSelectionMenu();              // 选中被清空时弹层跟着关
             StepEngineTooltip();              // 引擎侧悬停提示的 500ms 延迟（到点点亮）
@@ -1762,6 +1779,7 @@ public partial class InkEngine
         // 两边都是幂等的（TakeDirty 取走就清、SameAs 挡重复）。
         StepPpt();
         StepPptBar();     // 底部那条：引导过期 / "再点确认"过期（理由同上，自检那条路也走它）
+        StepPageEdge();   // 左右翻页条：显隐动画 / 穿透下的接输入小窗（理由同上）
         StepDocResume();  // 阅读位置节流保存（自检用"抽消息＋渲染"驱动，也走它）
         StepToast();      // 轻提示到点消失（2s；自检也用"抽消息＋渲染"驱动）
         StepSelectionMenu(); // 选中被清空时弹层跟着关（自检也走这一条）
@@ -2173,6 +2191,15 @@ public partial class InkEngine
             return IntPtr.Zero;
         }
 
+        // explorer 重启（任务栏重生）：托盘图标跟着没了，**重新加一次**。
+        // 不接这一条的话：老师重启一次资源管理器，兜底入口永久消失——
+        // 而那时工具栏很可能正被「只在 PPT 显示」藏着，等于软件打不开了。
+        if (_tray != null && msg != 0 && msg == TrayIcon.TaskbarCreatedMessage)
+        {
+            _tray.HandleTaskbarCreated();
+            return IntPtr.Zero;
+        }
+
         // 面板的"接输入小窗"（方案 B）：它只收输入，什么都不画。
         if (_uiInputHwnd != IntPtr.Zero && hWnd == _uiInputHwnd)
             return UiInputWndProc(hWnd, msg, wParam, lParam);
@@ -2187,6 +2214,10 @@ public partial class InkEngine
         // 课堂计时卡片的"接输入小窗"（同一套方案；卡片和 PPT 条不相邻，所以单开一块）。
         if (_timerInputHwnd != IntPtr.Zero && hWnd == _timerInputHwnd)
             return TimerInputWndProc(hWnd, msg, wParam, lParam);
+
+        // 左右边缘翻页条的"接输入小窗"（同一套方案；左右各一块，见 PageEdgeBar）。
+        if (_pageEdge.IsInputWindow(hWnd))
+            return PageEdgeInputWndProc(hWnd, msg, wParam, lParam);
 
         // 点名卡片的"接输入小窗"（同上）。
         if (_rollInputHwnd != IntPtr.Zero && hWnd == _rollInputHwnd)
@@ -2279,7 +2310,10 @@ public partial class InkEngine
                 HitTestPoint(lParam, out float hitX, out float hitY);
                 // PPT 条（放映时底部那两条）也算"我的地盘"：**开着穿透时老师照样得能
                 // 点翻页 / 拖进度条**——不然那一下会落到下层 PPT 上，被它当成翻页点击。
+                // 左右边缘翻页条同理（2026-11-25）：它就在屏幕左右中部，穿透下漏给下层
+                // 就是"点了一下 PPT 自己翻页 / 误操作"。
                 bool mine = UiContains(hitX, hitY) || PptBarContains(hitX, hitY)
+                         || PageEdgeContains(hitX, hitY)
                          || ReplayBarContains(hitX, hitY)
                          || TimerCardContains(hitX, hitY) || RollCardContains(hitX, hitY);
                 if (mine) _cntNcHitClient++;
@@ -2411,6 +2445,11 @@ public partial class InkEngine
                 RequestFullFrames();
                 return IntPtr.Zero;
 
+            // 托盘图标（「工具栏只在 PPT 显示」的兜底入口）。
+            case Native.WM_INKTRAY:
+                _tray?.HandleMessage(wParam, lParam);
+                return IntPtr.Zero;
+
             case Native.WM_CLOSE:
                 _quit = true;
                 return IntPtr.Zero;
@@ -2481,7 +2520,8 @@ public partial class InkEngine
         if (h == IntPtr.Zero) return false;
         foreach (var w in _windows) if (w.Hwnd == h) return true;
         return h == _uiInputHwnd || h == _pptInputHwnd
-            || h == _timerInputHwnd || h == _rollInputHwnd;
+            || h == _timerInputHwnd || h == _rollInputHwnd
+            || _pageEdge.IsInputWindow(h);
     }
 
     /// <summary>

@@ -459,6 +459,13 @@ internal sealed partial class App
             // 无窗口自检：不建覆盖层、不注入鼠标、不抢前台；用户在用电脑时也能跑。
             return SettingsAudit.Run();
         }),
+        new("--traytest", "工具栏只在 PPT 显示 + 托盘兜底（纯判定，不碰真实托盘）", args =>
+        {
+            // 纯判定，不建窗口：托盘图标会真在用户托盘里留一格，自检不该碰。
+            ExitCode = SelfTests.TrayTest.Run();
+            _quit = true;
+            return null;
+        }),
         new("--smoothflashtest", "[--off]  “画的时候闪不闪”专项检测（合成鼠标画过去，看已经画过的墨还动不动）", args =>
         {
             _autoExitAt = double.MaxValue;

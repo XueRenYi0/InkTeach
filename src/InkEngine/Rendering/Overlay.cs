@@ -391,6 +391,12 @@ internal sealed partial class OverlayWindow : IDisposable
     private IDCompositionVisual _inkVisual;
     private IDCompositionInkTrailDevice _inkTrailDevice;
     private IDCompositionDelegatedInkTrail _inkTrail;
+    /// <summary>窗口整体透明度的合成期状态（效果组挂在根视觉上；见 WindowOpacityFx）。</summary>
+    private readonly WindowOpacityFx _opacityFx = new();
+
+    // 边缘翻页条页码格的小号字（按 DPI 生成 + 缓存；见 Overlay.PageEdge.cs）。
+    private IDWriteTextFormat _pageEdgeFmt;
+    private float _pageEdgeFmtPx;
     private bool _inkTrailRuntimeFailed;
     private ID2D1DeviceContext _ctx;
     /// <summary>
@@ -1203,6 +1209,9 @@ internal sealed partial class OverlayWindow : IDisposable
         //   （2026-10-13 实测：白板 + 系统轨迹 0 像素，桌面正常），
         //   因为白板的底色把下面的一切都盖住了；松手干墨进文档后才重新可见。
         _visual = _dcomp.CreateVisual();
+        // 窗口整体透明度（2026-11-25）：效果组挂在**根视觉**上 → 交换链与系统湿墨一起淡出。
+        // 建不出来就退化为"永远不透明"，不影响任何其它功能。
+        _opacityFx.Create(_dcomp, _visual);
         _swapVisual = _dcomp.CreateVisual();
         _swapVisual.SetContent(_swapChain).CheckError();
         _visual.AddVisual(_swapVisual, false, null).CheckError();

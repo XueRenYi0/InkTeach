@@ -260,6 +260,13 @@ internal static class WindowSkipScheduler
     {
         var r = RectF.Empty;
         if (app.PageBarVisible) r.Add(app.PptBarRect());
+        // 左右边缘翻页条（屏幕左右中部）：**两块分开并**——合成外接矩形会变成
+        // 横跨整屏的一条带子，副屏跳过判断就会以为"这一帧全屏都有浮层"。
+        if (app.PageEdgeVisible)
+        {
+            r.Add(app.PageEdgeGroupRect(left: true));
+            r.Add(app.PageEdgeGroupRect(left: false));
+        }
         if (app.ReplayActive) r.Add(app.ReplayBarRect());
         if (app.TimerCardOpen) r.Add(app.TimerCardRect());
         if (app.RollCardOpen) r.Add(app.RollCardRect());

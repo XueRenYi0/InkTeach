@@ -1,6 +1,6 @@
 # 目录树（自动生成，勿手改）
 
-> 生成：2026-11-25 ／ 脚本：`tools/gen-tree-map.ps1`
+> 生成：2026-11-26 ／ 脚本：`tools/gen-tree-map.ps1`
 > 用途：目录 = 功能域、文件名 = 功能块；先看树定位目录，再看行数决定读哪一段。
 > 语义导航（“某个需求该看哪 1–2 个文件”）看 `docs/module-map.md`；段落行号看 `docs/section-map.md`。
 
@@ -22,8 +22,8 @@
     **InkEngine/Core/**
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 170 行
-      - `Engine.cs` 2,924 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
-      - `Engine.Host.cs` 2,584 行 — 启动、消息循环、窗口过程（WndProc）。
+      - `Engine.cs` 2,991 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
+      - `Engine.Host.cs` 2,624 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
       - `Engine.Selection.Gesture.cs` 1,466 行 — 框选/套索/拖动/对齐吸附/美化入口。
@@ -50,7 +50,7 @@
     **InkEngine/Doc/**
       - `DocImageSource.cs` 292 行
       - `DocImport.cs` 800 行 — 文档导入与文档页空间：打开图片 / PDF / PPT、批注读回、关文档回收。
-      - `DocImport.Pan.cs` 506 行 — 文档「手掌」拖页 + 双指捏合缩放 / 放大后平移 / 触控板捏合缩放（文档相机）。
+      - `DocImport.Pan.cs` 729 行 — 文档「手掌」拖页 + 双指捏合缩放 / 放大后平移 / 触控板捏合缩放（文档相机）。
       - `DocMemory.cs` 86 行
       - `DocPages.cs` 690 行 — 文档页底层：页配方、惰性生成、视口窗口回收；缩放只记相机倍率（页位图恒 1×）。
       - `DocPatch.cs` 796 行 — PDF 页的**视口高清补丁**：1× 整页底图之上，只为可见区域渲一块设备分辨率小图（单 worker、单在飞、落稳 120ms）。
@@ -73,9 +73,9 @@
     **InkEngine/Input/**
       - `CurveFit.cs` 88 行
       - `DwellAssist.cs` 122 行
-      - `Engine.Capture.cs` 533 行 — 截图状态、确认/取消、手柄与读数。
+      - `Engine.Capture.cs` 535 行 — 截图状态、确认/取消、手柄与读数。
       - `Engine.Clipboard.cs` 506 行
-      - `Engine.Input.cs` 2,034 行 — 指针输入、停顿成型、动态橡皮。
+      - `Engine.Input.cs` 2,067 行 — 指针输入、停顿成型、动态橡皮。
       - `Engine.TouchGestures.cs` 794 行 — 触摸手势：单指/双指/三指/长按/惯性。
       - `GoogleInkSlidingWindow.cs` 670 行 — Google Ink 滑动窗口输入。
       - `InkModel.cs` 285 行
@@ -100,10 +100,10 @@
       - `AutoStart.cs` 196 行
       - `Backup.cs` 457 行
       - `DiagLog.cs` 1,270 行 — 运行日志、设备卡、日志上传同意。
-      - `Engine.Hotkey.cs` 632 行 — 热键处理：WM_HOTKEY → 动作。
+      - `Engine.Hotkey.cs` 637 行 — 热键处理：WM_HOTKEY → 动作。
       - `Engine.Keyboard.cs` 634 行 — 键盘模式与键盘手势：工具键、色带键、滚轮/↑↓ 视野平移。
       - `Engine.Radial.cs` 710 行 — 呼出盘：按住/划向扇区/松手（清屏格单击即清，可撤销）。
-      - `Engine.Update.cs` 1,138 行 — 自动更新：检查/下载/换壳。
+      - `Engine.Update.cs` 1,146 行 — 自动更新：检查/下载/换壳。
       - `EraserTelemetry.cs` 329 行
       - `FramePressureValve.cs` 117 行 — 高压保险丝时间驱动状态机：连续慢帧 → 进入高压（收紧分块预算、暂停离屏预取），连续快帧/空闲 → 退出。
       - `GcLatency.cs` 109 行
@@ -111,16 +111,20 @@
       - `KeyBindings.cs` 578 行 — 键位表、作用域、冲突检测、解析。
       - `Latency.cs` 216 行
       - `LogFeedback.cs` 93 行
-      - `Native.cs` 1,573 行 — Win32 P/Invoke 集合。
+      - `Native.cs` 1,660 行 — Win32 P/Invoke 集合。
       - `Privacy.cs` 62 行
       - `SelfTestCancel.cs` 140 行
       - `Toast.cs` 52 行
       - `Tooltip.cs` 285 行
+      - `TrayIcon.cs` 193 行 — 系统托盘图标（工具栏被「只在 PPT 显示」藏起来时的兜底入口：打开设置 / 退出）。
       - `UiScale.cs` 63 行
       - `Update.cs` 994 行 — 自动更新：版本比较、清单解析、下载/换壳。
       - `UpdateProbe.cs` 364 行
+      - `WindowOpacityPresets.cs` 49 行
 
     **InkEngine/Ppt/**
+      - `PageEdge.cs` 121 行 — 屏幕左右边缘的整页翻页条：三格几何（上翻 / 页码 / 下翻）。几何与命中共用一份。
+      - `PageEdgeBar.cs` 297 行 — 边缘翻页条的运行期状态：显隐动画 + 穿透下的"接输入小窗"（左右各一块）+ 悬停。
       - `Ppt.cs` 1,963 行 — PPT 批注：放映联动、按页落盘、翻页。
       - `PptBar.cs` 407 行
       - `PptComLate.cs` 347 行
@@ -135,29 +139,30 @@
       - `CanvasTiles.cs` 716 行 — 内容层分块光栅缓存：画布空间分块、脏区/补画、分帧预算、预取与淘汰。
       - `Cursors.cs` 505 行
       - `Engine.Cursor.cs` 800 行 — 光标形状与滚动条交互。
-      - `Engine.UiBridge.cs` 1,024 行 — 引擎 ↔ 界面边界：IOverlayUi 命令转发。
+      - `Engine.UiBridge.cs` 1,039 行 — 引擎 ↔ 界面边界：IOverlayUi 命令转发。
       - `GlyphFill.cs` 341 行
       - `Icons.Paths.cs` 142 行
       - `LegacyOverlayLayer.cs` 74 行
-      - `MultiMonitorSkip.cs` 433 行 — 多屏按窗跳帧：这一帧某扇覆盖窗口要不要 RenderFrame+Present 的纯判定、帧级事实收集、每窗一帧记忆。
+      - `MultiMonitorSkip.cs` 440 行 — 多屏按窗跳帧：这一帧某扇覆盖窗口要不要 RenderFrame+Present 的纯判定、帧级事实收集、每窗一帧记忆。
       - `Overlay.Capture.cs` 832 行 — 截图取景框绘制：遮罩/准线/读数/手柄。
       - `Overlay.Content.cs` 784 行 — 内容层合成：分块光栅、相机变换、缩放合成、滚动条。
-      - `Overlay.cs` 1,457 行 — 覆盖层主文件：窗口/初始化/生命周期。
-      - `Overlay.Frame.cs` 1,896 行 — 覆盖层帧渲染：内容/界面/装饰合成。
+      - `Overlay.cs` 1,466 行 — 覆盖层主文件：窗口/初始化/生命周期。
+      - `Overlay.Frame.cs` 1,923 行 — 覆盖层帧渲染：内容/界面/装饰合成。
       - `Overlay.PptBar.cs` 794 行 — PPT 条/回放条/滚动条绘制。
       - `Overlay.Radial.cs` 651 行 — 呼出盘绘制。
-      - `Overlay.Readout.cs` 1,572 行 — 读数、收藏面板、滚动条、回放/PPT 条绘制。
+      - `Overlay.Readout.cs` 1,680 行 — 读数、收藏面板、滚动条、回放/PPT 条绘制。
       - `Overlay.SelectionBar.cs` 1,064 行 — 选中操作条/色板/字体/图层/菜单的绘制。
       - `Overlay.Toast.cs` 339 行
       - `Overlay.Ui.cs` 1,476 行 — 界面层合成与界面位图上传。
       - `OverlayCoords.cs` 65 行 — 覆盖窗口的坐标换算（画布 ↔ 窗口 ↔ 屏幕）与窗口裁剪：纯数学、无状态，OverlayWindow 与单测共用。
       - `OverlayLayerManager.cs` 192 行
-      - `OverlayLayerRegistration.cs` 215 行
+      - `OverlayLayerRegistration.cs` 235 行
       - `StrokeTaper.cs` 238 行 — 收笔笔锋（速度尖尾）：抬笔前末段快 → 笔画末端渐尖；慢 → 等宽。
       - `SvgPath.cs` 271 行
-      - `Ui.cs` 1,697 行 — 界面接入契约：IOverlayUi / IEngineCommands / UiState。
-      - `UiHost.cs` 266 行
+      - `Ui.cs` 1,744 行 — 界面接入契约：IOverlayUi / IEngineCommands / UiState。
+      - `UiHost.cs` 270 行
       - `UiImageBytes.cs` 40 行
+      - `WindowOpacityFx.cs` 96 行 — 窗口整体透明度的 DirectComposition 合成期状态（每个覆盖窗口一份）。
 
     **InkEngine/Replay/**
       - `Replay.cs` 560 行
@@ -245,7 +250,7 @@
       - `App.Modes.Doc.cs` 94 行 — 自检模式注册表：Doc 域（ADR-005 D2）。新增模式只改本文件。
       - `App.Modes.Ink.cs` 614 行 — 自检模式注册表：Ink 域（ADR-005 D2）。新增模式只改本文件。
       - `App.Modes.Shape.cs` 251 行 — 自检模式注册表：Shape 域（ADR-005 D2）。新增模式只改本文件。
-      - `App.Modes.Sys.cs` 588 行 — 自检模式注册表：Sys 域（ADR-005 D2）。新增模式只改本文件。
+      - `App.Modes.Sys.cs` 595 行 — 自检模式注册表：Sys 域（ADR-005 D2）。新增模式只改本文件。
       - `App.Modes.Ui.cs` 398 行 — 自检模式注册表：Ui 域（ADR-005 D2）。新增模式只改本文件。
       - `Program.cs` 545 行
 
@@ -288,14 +293,14 @@
         - `PhotoBeautifyShow.cs` 80 行
         - `PlotFromCard.cs` 174 行
         - `PlotSuiteTest.cs` 205 行
-        - `PptStorage.cs` 1,850 行 — PPT 批注落盘 E2E。
+        - `PptStorage.cs` 1,976 行 — PPT 批注落盘 E2E。
         - `PredictLinear.cs` 167 行
         - `Qr.cs` 77 行
         - `SelAiShow.cs` 126 行
         - `SelBarShow.cs` 40 行
         - `Selection.cs` 2,956 行 — 选择/套索/变换 E2E。
         - `SelMenuTest.cs` 215 行
-        - `SettingsAudit.cs` 550 行
+        - `SettingsAudit.cs` 552 行
         - `ShapeAudit.cs` 104 行
         - `ShapeLibrary.cs` 4,475 行 — 图形面板/收藏 E2E。
         - `ShapeMelt.cs` 320 行 — 图形面积擦除"零变形"像素级 E2E：熔墨前后未擦区域逐像素对比。
@@ -314,6 +319,9 @@
         - `Zoom.cs` 797 行 — 文档缩放 E2E（阶段 2：渲染核心 + 引擎缩放 API）。
         - `ZoomSelection.cs` 211 行 — 文档缩放 E2E（选中家具：手柄 / 操作条 / 面板 / 旋转柄在缩放下的屏幕恒定性）。
         - `ZoomShots.cs` 776 行 — 文档缩放 E2E：出图（50/100/200/300 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
+
+    **InkTeach/SelfTests/**
+      - `TrayTest.cs` 73 行 — 「工具栏只在 PPT 显示 + 托盘兜底」自检：状态机 / 界面让路 / 托盘开关判据。
 
       **InkTeach/SelfTests/Unit/**
         - `UnitTestRunner.cs` 179 行
@@ -347,12 +355,12 @@
       - `UiActionTable.cs` 45 行
 
     **InkUi/Panels/**
-      - `FullUi.MorePanel.cs` 2,808 行 — 更多面板：首页/设置/说明/日志/AI 服务入口。
+      - `FullUi.MorePanel.cs` 2,853 行 — 更多面板：首页/设置/说明/日志/AI 服务入口。
       - `FullUi.Pages.cs` 478 行 — 更多面板的各页（启动器 / 设置 / 说明 / 日志 / AI 服务 / 最近文档）：绘制与命中。
-      - `FullUi.Settings.cs` 3,055 行 — 设置页：工具条/通用/书写/墨迹/AI/备份。
+      - `FullUi.Settings.cs` 3,091 行 — 设置页：工具条/通用/书写/墨迹/AI/备份。
       - `HelpUi.cs` 500 行
 
     **InkUi/Shell/**
       - `Anim.cs` 89 行
-      - `FullUi.cs` 1,887 行 — 工具条/球/上带/色带的主体布局与绘制。
-      - `FullUi.Interaction.cs` 2,301 行 — 界面命中、开合、换页、贴边隐藏。
+      - `FullUi.cs` 1,929 行 — 工具条/球/上带/色带的主体布局与绘制。
+      - `FullUi.Interaction.cs` 2,302 行 — 界面命中、开合、换页、贴边隐藏。

@@ -1569,4 +1569,112 @@ internal sealed partial class OverlayWindow
                       new Rect(box.MinX, box.MinY, box.MaxX - box.MinX, box.MaxY - box.MinY), _scratch);
     }
 
+
+    /// <summary>
+    /// **屏幕左右边缘的整页翻页条**（2026-11-25，自研；几何在 <see cref="PageEdge"/>、
+    /// 状态在 <see cref="PageEdgeBar"/>）。每边三格：∧ 上一页 / 页码 / ∨ 下一页。
+    ///
+    /// 视觉上刻意**比底部 PPT 条更轻**：
+    ///   · 三格是**独立的圆角小方块**，不是一条长条——它压在画布左右中部，
+    ///     一条实心长条会像"一个面板"横在那儿；三个小方块更像"边缘上的控件"；
+    ///   · 平时 alpha 只有 <see cref="PageEdge.IdleAlpha"/>（10%），指针靠近 / 按下
+    ///     才淡到不透明（用户 2026-11-25：常驻会挡内容、会被掌根误触）；
+    ///   · 不画投影（投影是"浮在上面的面板"的语汇，这条要的是"贴边的窄控件"）。
+    ///
+    /// ⚠ 画在**屏幕坐标浮层组**里（`Overlay.Frame.cs` 那段整体平移之下），
+    /// 所以这里**不许再自己减一次窗口原点**（见那里的注释）。
+    /// </summary>
+    private void DrawPageEdges(InkEngine app)
+    {
+        if (!app.PageEdgeVisible) return;
+        float dpi = app.UiUnit;
+        var theme = app.FloatingTheme;
+        float alpha = app._pageEdge.Alpha;
+        if (alpha <= 0.004f) return;
+
+        int hover = app._pageEdge.HoverCell;
+
+        for (int side = 0; side < 2; side++)
+        {
+            bool left = side == 0;
+            for (int i = 0; i < 3; i++)
+            {
+                var cell = app.PageEdgeCellRect(left, i);
+                bool hot = hover == (left ? 100 : 200) + i;
+                bool isPage = i == 1;
+
+                // 圆角小方块：底色 + 1px 描边。悬停时底色换成 Hover（同 PPT 条的手感）。
+                float radius = PageEdge.Radius * dpi;
+                var box = new Vortice.RawRectF(cell.MinX, cell.MinY, cell.MaxX, cell.MaxY);
+
+                var panel = theme.Panel;
+                _scratch.Color = hot
+                    ? new Color4(theme.Hover.R, theme.Hover.G, theme.Hover.B,
+                                 MathF.Max(theme.Hover.A, 0.9f) * alpha)
+                    : new Color4(panel.R, panel.G, panel.B, MathF.Max(panel.A, 0.88f) * alpha);
+                _ctx.FillRoundedRectangle(new RoundedRectangle(box, radius, radius), _scratch);
+
+                var border = theme.PanelBorder;
+                _scratch.Color = new Color4(border.R, border.G, border.B,
+                                            MathF.Max(border.A, 0.55f) * alpha);
+                _ctx.DrawRoundedRectangle(new RoundedRectangle(box, radius, radius), _scratch, 1f * dpi);
+
+                if (isPage)
+                {
+                    // 中格 = 只读读数："当前 / 总数"。两侧（上/下）能点，它不能——
+                    // 所以刻意**不给悬停底色**（见 PageEdgePress 的 cell == 1 分支）。
+                    string cur = app.BarPageNow.ToString();
+                    string rest = $"/{app.BarTotal}";
+                    float px = MathF.Max(9f, MathF.Round(12f * dpi));
+                    var pfmt = PageEdgePageFormat(px);
+                    float wCur = MeasureTextWidth(cur, pfmt);
+                    float wRest = MeasureTextWidth(rest, pfmt);
+                    float total = wCur + wRest;
+                    float x0 = (cell.MinX + cell.MaxX) * 0.5f - total * 0.5f;
+                    float h = cell.MaxY - cell.MinY;
+
+                    var text = theme.Text;
+                    _scratch.Color = new Color4(text.R, text.G, text.B, text.A * alpha);
+                    _ctx.DrawText(cur, pfmt, new Rect(x0, cell.MinY, wCur, h), _scratch);
+                    var muted = theme.TextMuted;
+                    _scratch.Color = new Color4(muted.R, muted.G, muted.B, muted.A * alpha);
+                    _ctx.DrawText(rest, pfmt, new Rect(x0 + wCur, cell.MinY, wRest, h), _scratch);
+                }
+                else
+                {
+                    // 上下格 = ∧ / ∨。和底部 PPT 条同一套自绘 chevron（1.5 线宽、次要色、
+                    // 悬停转深）——两条控件是"同一族"，视觉重量必须一致。
+                    float cx = (cell.MinX + cell.MaxX) * 0.5f;
+                    float cy = (cell.MinY + cell.MaxY) * 0.5f;
+                    float half = 6f * dpi;          // 半宽
+                    float rise = 4f * dpi;          // 尖端抬起多少
+                    bool up = i == 0;               // 上格 = 尖朝上
+                    var tipY = up ? cy - rise : cy + rise;
+                    var wingY = up ? cy + rise : cy - rise;
+
+                    var ink = hot ? theme.Text : theme.TextMuted;
+                    _scratch.Color = new Color4(ink.R, ink.G, ink.B, ink.A * alpha);
+                    float lw = 1.5f * dpi;
+                    _ctx.DrawLine(new Vector2(cx - half, wingY), new Vector2(cx, tipY), _scratch, lw);
+                    _ctx.DrawLine(new Vector2(cx, tipY), new Vector2(cx + half, wingY), _scratch, lw);
+                }
+            }
+        }
+    }
+
+    /// <summary>页码格的小号文字格式（按 DPI 生成 + 缓存；量盒子与画字必须同一份）。</summary>
+    private IDWriteTextFormat PageEdgePageFormat(float px)
+    {
+        if (_pageEdgeFmt == null || _pageEdgeFmtPx != px)
+        {
+            _pageEdgeFmt?.Dispose();
+            _pageEdgeFmt = Gfx.WriteFactory.CreateTextFormat(Loc.FontFamily, null,
+                FontWeight.SemiBold, FontStyle.Normal, FontStretch.Normal, px, Loc.LocaleName);
+            _pageEdgeFmt.TextAlignment = TextAlignment.Center;
+            _pageEdgeFmt.ParagraphAlignment = ParagraphAlignment.Center;
+            _pageEdgeFmt.WordWrapping = WordWrapping.NoWrap;
+            _pageEdgeFmtPx = px;
+        }
+        return _pageEdgeFmt;
+    }
 }

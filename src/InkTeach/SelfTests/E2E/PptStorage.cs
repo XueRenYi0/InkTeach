@@ -1374,6 +1374,132 @@ internal sealed partial class App
                   $"板开={BoardOn} PPT={PptMode} slot={Doc.PageKey}");
         }
 
+        // ---- ⑩ 左右边缘翻页条（2026-11-25，默认关）----
+        //
+        // 用户定的三条：默认关（老用户无感）/ PDF 和图片文档不加 / 平时几乎不可见。
+        // 这一组验的是**判据和几何**（自检看不见像素，只验"该出现的出现、该没有的没有"）。
+        {
+            // 回到桌面，先确认"默认关 = 完全不出现"。
+            SetPassThroughFromUi(false);
+            SettleFrames(80);
+            Check("边缘翻页条：出厂默认关", !PageEdgeOn && !PageEdgeVisible,
+                  $"开关={PageEdgeOn} 可见={PageEdgeVisible}");
+
+            // 文档模式（PDF / 图片）**加进来也不出现**：底部已有翻页条，不再来第二套。
+            fake.Showing = true; fake.Slide = 1; fake.SlideId = 256; fake.Total = 3;
+            Step();
+            PageEdgeOn = true;                     // 直接开开关（设置页那条路见 --settingstest）
+            SettleFrames(80);
+            Check("边缘翻页条：PPT 放映时出现", PageEdgeVisible, $"可见={PageEdgeVisible}");
+
+            // 几何：左右各一组、垂直居中、贴屏幕左右边缘；两组隔得很远。
+            var scrEdge = new RectF { MinX = _virtualX, MinY = _virtualY,
+                                      MaxX = _virtualX + _virtualW, MaxY = _virtualY + _virtualH };
+            var gL = PageEdgeGroupRect(left: true);
+            var gR = PageEdgeGroupRect(left: false);
+            float wantMargin = PageEdge.EdgeMargin * UiUnit;
+            float wantH = PageEdge.GroupH * UiUnit;
+            Check("边缘翻页条：贴左右边缘、垂直居中",
+                  MathF.Abs(gL.MinX - (scrEdge.MinX + wantMargin)) < 1.5f
+                  && MathF.Abs(gR.MaxX - (scrEdge.MaxX - wantMargin)) < 1.5f
+                  && MathF.Abs((gL.MinY + gL.MaxY) * 0.5f - (scrEdge.MinY + scrEdge.MaxY) * 0.5f) < 2f
+                  && MathF.Abs((gL.MaxY - gL.MinY) - wantH) < 1.5f,
+                  $"左 {gL.MinX:F0} 右 {gR.MaxX:F0} 高 {gL.MaxY - gL.MinY:F0}（应 {wantH:F0}）");
+
+            // 按下 = 翻页：左组上格 = 上一页、下格 = 下一页；中格（页码）不翻页。
+            int nc0 = fake.NextCalls, pc0 = fake.PrevCalls;
+            var upCell = PageEdgeCellRect(left: true, index: 0);
+            var downCell = PageEdgeCellRect(left: true, index: 2);
+            var pageCell = PageEdgeCellRect(left: true, index: 1);
+            bool ateUp = PageEdgePress((upCell.MinX + upCell.MaxX) * 0.5f,
+                                       (upCell.MinY + upCell.MaxY) * 0.5f);
+            Check("边缘翻页条：点上格 = 上一页", ateUp && fake.PrevCalls == pc0 + 1,
+                  $"吃掉={ateUp} PrevCalls={fake.PrevCalls}（应 {pc0 + 1}）");
+            _pageEdge.Release();
+            bool ateDown = PageEdgePress((downCell.MinX + downCell.MaxX) * 0.5f,
+                                         (downCell.MinY + downCell.MaxY) * 0.5f);
+            Check("边缘翻页条：点下格 = 下一页", ateDown && fake.NextCalls == nc0 + 1,
+                  $"吃掉={ateDown} NextCalls={fake.NextCalls}（应 {nc0 + 1}）");
+            _pageEdge.Release();
+            int nc1 = fake.NextCalls, pc1 = fake.PrevCalls;
+            bool atePage = PageEdgePress((pageCell.MinX + pageCell.MaxX) * 0.5f,
+                                         (pageCell.MinY + pageCell.MaxY) * 0.5f);
+            Check("边缘翻页条：中格（页码）只吃掉、不翻页",
+                  atePage && fake.NextCalls == nc1 && fake.PrevCalls == pc1,
+                  $"吃掉={atePage} Next/Prev={fake.NextCalls}/{fake.PrevCalls}");
+            _pageEdge.Release();
+
+            // 两组之间（屏幕正中）**不是它**：那是画布，点下去得照常画。
+            Check("边缘翻页条：屏幕中部不是它（不误吃一笔）",
+                  !PageEdgeContains((scrEdge.MinX + scrEdge.MaxX) * 0.5f,
+                                    (scrEdge.MinY + scrEdge.MaxY) * 0.5f),
+                  "");
+
+            // ⚠ **两块必须分开算**：脏区 / 多屏跳过 / 浮层 bounds 都不许用"外接矩形"。
+            // 合成一块 = 横跨整屏的一条带子，每悬停一次就重画半个屏幕（性能断崖），
+            // 副屏也会被误判成"这一帧全屏都有浮层"。
+            var lRect = PageEdgeGroupRect(left: true);
+            var rRect = PageEdgeGroupRect(left: false);
+            Check("边缘翻页条：左右两块分开、不合成横条",
+                  (rRect.MinX - lRect.MaxX) > scrEdge.MaxX * 0.5f - scrEdge.MinX,
+                  $"间隙 {rRect.MinX - lRect.MaxX:F0}（应 > 半屏）");
+
+            // 平时几乎不可见（alpha = IdleAlpha），靠近才淡到 1。
+            Check("边缘翻页条：平时几乎不可见（10%）",
+                  MathF.Abs(_pageEdge.Alpha - PageEdge.IdleAlpha) < 0.02f,
+                  $"alpha={_pageEdge.Alpha:F3}");
+
+            // 穿透 + 放映：两块接输入小窗铺上（这是"穿透下点得到"的硬件前提），
+            // 而且**左右各一块**——合成一块会把屏幕中间一整条横带都吃掉。
+            SetPassThroughFromUi(true);
+            SettleFrames(120);
+            var inL = PageEdgeInputShownForTest(0);
+            var inR = PageEdgeInputShownForTest(1);
+            Check("边缘翻页条：穿透下左右接输入小窗都铺上", inL && inR,
+                  $"左={inL} 右={inR}");
+            Check("边缘翻页条：穿透下照样能点（点下格仍然翻页）",
+                  PageEdgeContains((downCell.MinX + downCell.MaxX) * 0.5f,
+                                   (downCell.MinY + downCell.MaxY) * 0.5f),
+                  "");
+            SetPassThroughFromUi(false);
+            SettleFrames(120);
+
+            // 关掉开关：立刻不可见、小窗收掉、**旧位置也要擦**（脏区记忆会清）。
+            PageEdgeOn = false;
+            SettleFrames(120);
+            Check("边缘翻页条：关掉后立刻不可见、小窗收掉",
+                  !PageEdgeVisible && !PageEdgeInputShownForTest(0) && !PageEdgeInputShownForTest(1),
+                  $"可见={PageEdgeVisible} 左={PageEdgeInputShownForTest(0)} 右={PageEdgeInputShownForTest(1)}");
+
+            // 白板也用它（白板本身就是"一页一屏"）；文档则不然——
+            // 判据写在 `PageEdgeVisible` 一处：`BoardOn || (PptMode && !DocView.IsOpen)`，
+            // 文档打开时后半个分支当场垮掉，所以文档模式**开关开着也不出现**。
+            PageEdgeOn = true;                     // 上一段关掉了，这里打开再验白板
+            SetBoardFromUi(true);
+            SettleFrames(120);
+            Check("边缘翻页条：白板也显示（同一套翻屏）", PageEdgeVisible,
+                  $"板开={BoardOn} 可见={PageEdgeVisible}");
+            int boardNc = fake.NextCalls;
+            var bDown = PageEdgeCellRect(left: false, index: 2);
+            bool ateBoard = PageEdgePress((bDown.MinX + bDown.MaxX) * 0.5f,
+                                          (bDown.MinY + bDown.MaxY) * 0.5f);
+            _pageEdge.Release();
+            Check("边缘翻页条：白板上点下格 = 下一屏（不走 PPT）",
+                  ateBoard && fake.NextCalls == boardNc,
+                  $"吃掉={ateBoard} NextCalls={fake.NextCalls}（应不变 {boardNc}）");
+            SetBoardFromUi(false);
+            SettleFrames(120);
+            // 关白板 = 回到 PPT 页（还在放映）→ 条仍在：它服务放映，这是对的。
+            Check("边缘翻页条：关白板回放映，条还在",
+                  PptMode && PageEdgeVisible, $"放映={PptMode} 可见={PageEdgeVisible}");
+
+            fake.Showing = false;
+            Step();
+            PageEdgeOn = false;
+            SettleFrames(80);
+            Check("边缘翻页条：退出放映后不可见", !PageEdgeVisible, $"可见={PageEdgeVisible}");
+        }
+
         Console.WriteLine();
         Console.WriteLine(fail == 0
             ? $"  PASS：PPT 模式正确（隔离 / 页内滚动 / 清除全部墨迹=所有页且可撤销 / 退出写盘 / 再进读回 / 按钮走 PPT）——共 {pass} 项"

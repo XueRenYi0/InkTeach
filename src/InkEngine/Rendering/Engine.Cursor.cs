@@ -157,8 +157,8 @@ public partial class InkEngine
         if (!menu.IsEmpty && menu.Contains(PointerX, PointerY)) return true;
         // 画布坐标 → 屏幕坐标走相机（阶段 1 = `y + ViewOffsetY`、x 不变）。
         float sx = CanvasToScreenX(PointerX), sy = CanvasToScreenY(PointerY);
-        return PptBarContains(sx, sy) || TimerCardContains(sx, sy) || RollCardContains(sx, sy)
-            || (Tool == Tool.Marquee && TextBoxContains(sx, sy));
+        return PptBarContains(sx, sy) || PageEdgeContains(sx, sy) || TimerCardContains(sx, sy)
+            || RollCardContains(sx, sy) || (Tool == Tool.Marquee && TextBoxContains(sx, sy));
     }
 
     /// <summary>

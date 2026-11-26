@@ -939,6 +939,7 @@ public sealed partial class FullUi
         {
             Row.HistoryDays => HistoryDaysName(_host.GetPref("historyDays")),
             Row.UiSize => UiScalePresets.Name(_host.UiScale),
+            Row.WindowOpacity => $"{(int)MathF.Round(_host.State.WindowOpacity * 100f)}%",
             Row.Language => Loc.DisplayName(PendingLangPref),
             Row.TouchMode => _host.State.TouchGesturesOn ? "手势" : "单指",
             Row.AiApi => "管理…",

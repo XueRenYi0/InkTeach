@@ -286,6 +286,19 @@ public partial class InkEngine
             return;
         }
 
+        // 左右边缘的整页翻页条（2026-11-25，默认关）：同上——排在界面之后、穿透之前。
+        // **必须在穿透之前**：PET 模式下老师照样得能左右翻页（穿透时有接输入小窗撑着）。
+        // 顺序放在 PPT 条之后：两条在屏幕上的位置完全不搭边（底部 vs 左右中部），
+        // 前后只影响"哪条先问"，都不重叠。
+        if (PageEdgePress(screenX, screenY))
+        {
+            _drawing = false;
+            Native.SetCapture(hWnd);   // 拖动要持续收到移动（会滑出条）
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
         // 界面之外的穿透：交下层窗口，我们不收这一下。
         if (PassThrough) return;
 
@@ -1426,6 +1439,15 @@ public partial class InkEngine
             return;
         }
 
+        // 左右边缘翻页条（默认关）：悬停格 / "靠近就显形"。
+        // 排在穿透之前——穿透下它也靠这两块接输入小窗接指针消息。
+        if (!_drawing && PageEdgePointerMove(screenX, screenY))
+        {
+            ApplyCursor();
+            _dirty = true;
+            return;
+        }
+
         // 穿透模式：我们不收输入，也不该动光标（那是下层窗口的事）。
         if (PassThrough) { ClearEngineTooltip(); _dirty = true; return; }
 
@@ -1712,6 +1734,17 @@ public partial class InkEngine
         {
             _pptCapturing = false;
             PptBarPointerUp(bx, by);
+            Native.ReleaseCapture();
+            _drawing = false;
+            _dirty = true;
+            ApplyCursor();
+            return;
+        }
+
+        // 边缘翻页条（默认关）：按下归过它就由它收尾（翻页在按下那一刻已经走了）。
+        if (_pageEdge.Capturing)
+        {
+            _pageEdge.Release();
             Native.ReleaseCapture();
             _drawing = false;
             _dirty = true;

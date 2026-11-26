@@ -502,5 +502,228 @@ public partial class InkEngine
     // ---- 自检钩子（--touchtest）：H / 空格走同一条判据，不另写一套 ----------------
 
     internal bool DocPanSpaceHeldForTest => _docTouch.PanBySpace;
+
+    // ======================================================================
+    //  左右边缘整页翻页条（2026-11-25，自研；几何/状态见 Ppt/PageEdge.cs、PageEdgeBar.cs）
+    //
+    //  放在这里而不是 Ppt.cs 的原因：它服务的**不只是 PPT**——白板也用它翻屏
+    //  （白板本身就是"一页一屏"，见 PageBarVisible 的注释）；而 Ppt.cs 已经有 1900 行。
+    //
+    //  三条硬规矩（用户 2026-11-25 定的）：
+    //    1. **默认关**（"兼容之前"= 老用户升级后完全无感），开关落 `ui.pageEdge`；
+    //    2. **PDF / 图片文档不加**（文档底部已经有翻页条，再加左右两套就是三套入口）；
+    //    3. 平时几乎不可见，指针靠近 / 按下才显形（它压在画布左右中部，会挡内容）。
+    // ======================================================================
+
+    /// <summary>边缘翻页条的运行期状态（显隐 / 悬停 / 两块接输入小窗）。</summary>
+    internal readonly PageEdgeBar _pageEdge = new();
+
+    /// <summary>设置页那个开关（"ui.pageEdge"；**默认关**，所以默认值不落盘）。</summary>
+    internal bool PageEdgeOn
+    {
+        get => _pageEdge.Enabled;
+        set
+        {
+            if (_pageEdge.Enabled == value) return;
+            _pageEdge.Enabled = value;
+            SetUiPref("pageEdge", value ? "1" : null);
+            if (!value) _pageEdge.HideInputWindows();
+            _dirty = true;
+            NotifyUiStateChanged();
+        }
+    }
+
+    /// <summary>
+    /// 条这一刻该不该画 / 该不该点得到。判据写一处，绘制 / 命中 / 脏区 / 输入小窗全读它。
+    ///
+    /// **PPT 放映 + 白板**；以下一律没有：
+    ///   · 文档（PDF / 图片）——理由见上面第 2 条；
+    ///   · 回放 / 截图 / 吸管 / 收藏落点 / 反馈二维码 / 文本框编辑——这些是**整屏模态**
+    ///     或正在占用指针，屏幕上不该有第二个能被点的东西（同 MultiMonitorSkip 的判据）；
+    ///   · 穿透：**PPT 放映例外**——那时有条的接输入小窗撑着，老师仍然要能左右翻页
+    ///     （和底部 PPT 条同一条口径）；其他模式穿透 = 全让开。
+    /// </summary>
+    internal bool PageEdgeVisible =>
+        _pageEdge.Enabled
+        && (BoardOn || (PptMode && !DocView.IsOpen))
+        && !ReplayActive && !CaptureActive && !ColorPickActive
+        && !LibraryPlacementMode && !FeedbackQrVisible && !_textBoxEditing
+        && (PptMode || !PassThrough);
+
+    /// <summary>某一边的整组矩形（物理屏幕坐标；绘制 / 命中 / 脏区都读它）。</summary>
+    internal RectF PageEdgeGroupRect(bool left)
+        => PageEdge.GroupRect(ScreenRectPhysical(), left, UiUnit);
+
+    /// <summary>某一边第 <paramref name="index"/> 格（0 上翻 / 1 页码 / 2 下翻）。</summary>
+    internal RectF PageEdgeCellRect(bool left, int index)
+        => PageEdge.CellRect(ScreenRectPhysical(), left, index, UiUnit);
+
+    /// <summary>
+    /// 两边的整组**外接矩形**（物理屏幕坐标）。⚠ 它横跨整屏，**只能用于诊断/报告**，
+    /// 不许拿它算脏区或多屏跳过（那会变成每次悬停重画半个屏幕，见 Overlay.Frame 的注释）。
+    /// </summary>
+    internal RectF PageEdgeBothRect()
+    {
+        var l = PageEdgeGroupRect(true);
+        var r = PageEdgeGroupRect(false);
+        l.Add(r.MinX, r.MinY);
+        l.Add(r.MaxX, r.MaxY);
+        return l;
+    }
+
+    /// <summary>这一下点在某一边的整组上吗（**只有看得见的那一块算**——同 PptBarContains）。</summary>
+    internal bool PageEdgeContains(float x, float y)
+        => PageEdgeVisible && PageEdge.SideAt(x, y, ScreenRectPhysical(), UiUnit) != 0;
+
+    /// <summary>
+    /// 按下：返回 true = 这一下归翻页条（引擎别再当笔画 / 别漏给下层）。
+    /// 判定顺序：**先看点在哪一格**——
+    ///   · 上格 = 上一页；下格 = 下一页（**按下即翻页**，触屏没有 hover，最跟手）；
+    ///   · 中格（页码）：只显形，不翻页（它是"第几页"的读数，点了也不该跳）。
+    /// 点在两格之间的缝里也算它的（吃掉这一下，别落墨 / 别漏给下层）。
+    /// </summary>
+    internal bool PageEdgePress(float x, float y)
+    {
+        if (!PageEdgeVisible) return false;
+        var screen = ScreenRectPhysical();
+        float dpi = UiUnit;
+        int side = PageEdge.SideAt(x, y, screen, dpi);
+        if (side == 0) return false;
+
+        _pageEdge.Press(x, y, screen, dpi);
+        int cell = PageEdge.CellAt(x, y, screen, left: side < 0, dpi);
+        if (cell == 0) BarPrev();
+        else if (cell == 2) BarNext();
+        _dirty = true;
+        return true;
+    }
+
+    /// <summary>移动：更新悬停格与"靠近就显形"的位置；返回 true = 指针就在条上（吃掉这一下）。</summary>
+    internal bool PageEdgePointerMove(float x, float y)
+    {
+        if (!_pageEdge.Enabled) return false;
+        var screen = ScreenRectPhysical();
+        _pageEdge.Track(x, y, screen, UiUnit);
+        return PageEdgeVisible && PageEdge.SideAt(x, y, screen, UiUnit) != 0;
+    }
+
+    /// <summary>指针离开覆盖层：不再算"靠近"（条自己会淡回去）。</summary>
+    internal void PageEdgePointerLeft()
+    {
+        if (!_pageEdge.Enabled) return;
+        _pageEdge.PointerLeft();
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// 每帧推进：显隐动画 + 穿透下的两块接输入小窗。
+    /// **两处都调**（主循环 Loop + RenderAll），和 StepPptBar 同一个理由：
+    /// 自检是"抽消息＋渲染"驱动的，挂主循环里那条路永远验不到。
+    /// </summary>
+    internal void StepPageEdge()
+    {
+        var screen = ScreenRectPhysical();
+        bool vis = PageEdgeVisible;
+        int hoverBefore = _pageEdge.HoverCell;
+        _pageEdge.Step(NowMs, vis, screen, UiUnit);
+
+        // 穿透 + 放映：覆盖层收不到指针消息，靠这两块 1/255 的小窗接。
+        // 不穿透时覆盖层自己就收得到，小窗一律收掉（别多一层吃点击）。
+        _pageEdge.SyncInputWindows(_hInstance, _className, screen, UiUnit, needed: vis && PassThrough);
+
+        if (!vis) return;
+        if (_pageEdge.HoverCell != hoverBefore || _pageEdge.Animating) { _dirty = true; ApplyCursor(); }
+    }
+
+    /// <summary>
+    /// 接输入小窗的消息。**只喂翻页条**（按下 / 移动 / 抬起），坐标是**物理屏幕坐标**；
+    /// `PointerX/PointerY` 同时换成画布坐标（光标 / 落点反馈读它），和 PptInputWndProc 逐句对齐。
+    /// </summary>
+    private IntPtr PageEdgeInputWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+    {
+        void SetPointerCanvas(float sx, float sy)
+        {
+            float cx = sx, cy = sy;
+            ScreenToCanvas(ref cx, ref cy);
+            PointerX = cx; PointerY = cy; PointerInside = true;
+        }
+
+        switch (msg)
+        {
+            case Native.WM_NCHITTEST: _cntNcHitTest++; _cntNcHitClient++; return new IntPtr(Native.HTCLIENT);
+            case Native.WM_MOUSEACTIVATE: return new IntPtr(Native.MA_NOACTIVATE);
+            case Native.WM_SETCURSOR: ApplyCursor(force: true); return new IntPtr(1);
+            case Native.WM_ERASEBKGND: return new IntPtr(1);
+            case Native.WM_PAINT:
+                Native.BeginPaint(hWnd, out var ps); Native.EndPaint(hWnd, ref ps); return IntPtr.Zero;
+
+            case Native.WM_POINTERDOWN:
+            {
+                uint id = (uint)(wParam.ToInt64() & 0xFFFF);
+                if (!ReadPointer(id, out float sx, out float sy, out _, out _, out uint ptype))
+                    return IntPtr.Zero;
+                StampInput(); _cntDown++; LastPointerType = ptype;
+                SetPointerCanvas(sx, sy);
+                if (PageEdgePress(sx, sy))
+                {
+                    _drawing = false;
+                    Native.SetCapture(hWnd);       // 拖动要持续收到消息（会滑出小窗）
+                }
+                _dirty = true; ApplyCursor();
+                return IntPtr.Zero;
+            }
+
+            case Native.WM_POINTERUPDATE:
+            {
+                uint id = (uint)(wParam.ToInt64() & 0xFFFF);
+                if (!ReadPointer(id, out float sx, out float sy, out _, out _, out uint ptype))
+                    return IntPtr.Zero;
+                StampInput(); _cntMove++; LastPointerType = ptype;
+                SetPointerCanvas(sx, sy);
+                PageEdgePointerMove(sx, sy);
+                _dirty = true; ApplyCursor();
+                return IntPtr.Zero;
+            }
+
+            case Native.WM_POINTERUP:
+            {
+                uint id = (uint)(wParam.ToInt64() & 0xFFFF);
+                if (ReadPointer(id, out float sx, out float sy, out _, out _, out _))
+                {
+                    StampInput(); _cntUp++;
+                    SetPointerCanvas(sx, sy);
+                }
+                _pageEdge.Release();
+                // 必须无条件放开（按下那一刻 SetCapture 过）：不然整机鼠标挂在小窗上。
+                Native.ReleaseCapture();
+                _drawing = false; _dirty = true; ApplyCursor();
+                return IntPtr.Zero;
+            }
+
+            case Native.WM_POINTERCAPTURECHANGED:
+                _cntCaptureLost++;
+                _pageEdge.Release();
+                _dirty = true;
+                return IntPtr.Zero;
+
+            // 指针滑出小窗：悬停收掉（条会淡回去）。
+            case Native.WM_POINTERLEAVE:
+                _pageEdge.PointerLeft();
+                _dirty = true;
+                return IntPtr.Zero;
+
+            default:
+                return IntPtr.Zero;    // 它不画任何东西，别的消息一概不问
+        }
+    }
+
+    /// <summary>自检用：条此刻的显形进度（0 = 几乎不可见，1 = 完全显形）。</summary>
+    internal float PageEdgeRevealForTest => _pageEdge.Reveal;
+
+    /// <summary>自检用：指针落在哪一格（100＋格号 左 / 200＋格号 右 / -1）。</summary>
+    internal int PageEdgeHoverForTest => _pageEdge.HoverCell;
+
+    /// <summary>自检用：穿透下的接输入小窗在不在（0 左 / 1 右）。</summary>
+    internal bool PageEdgeInputShownForTest(int side) => _pageEdge.InputShownForTest(side);
 }
 

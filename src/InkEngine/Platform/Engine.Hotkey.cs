@@ -562,6 +562,10 @@ public partial class InkEngine
     /// </summary>
     protected virtual void Shutdown()
     {
+        // 托盘图标**必须先删**：NIM_DELETE 要一个还活着的 hwnd（下面那个 foreach 会销毁窗口）。
+        _tray?.Dispose();
+        _tray = null;
+
         foreach (var w in _windows)
         {
             Native.KillTimer(w.Hwnd, (IntPtr)1);
@@ -612,6 +616,7 @@ public partial class InkEngine
             _rollInputHwnd = IntPtr.Zero;
             _rollInputShown = false;
         }
+        _pageEdge.Dispose();
 
         _windows.Clear();
         s_map.Clear();

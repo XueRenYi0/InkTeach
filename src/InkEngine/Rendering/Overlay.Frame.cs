@@ -147,6 +147,11 @@ internal sealed partial class OverlayWindow
             return;
         }
 
+        // **窗口整体透明度**（2026-11-25）：合成期属性，只在档位真的变了时提交一次。
+        // 设在根视觉上 → 交换链和系统湿墨轨迹一起淡出：笔迹 / 工具栏 / 面板整体半透明。
+        // 命中测试与穿透按窗口样式 + WM_NCHITTEST 判定，不受它影响。
+        _opacityFx.Apply(_dcomp, app.WindowOpacity);
+
         // 回放：推进"现在演到哪"必须**排在 SyncTiles 之前**。
         //
         // 为什么（用户 2026-10-01 报"每写完一笔还是会闪一下"的根因）：一条笔迹
@@ -309,6 +314,10 @@ internal sealed partial class OverlayWindow
         // 它们的矩形是**屏幕坐标**（贴屏幕底边、只跟屏幕走），画在上面的画布变换里
         // 会被相机整体平移——相机一滚，条就跟着跑偏（和 HUD、滚动条同一批，同一理由）。
         DrawPptBar(app);
+
+        // 左右边缘的整页翻页条（2026-11-25，默认关）：同一层、同一套屏幕坐标。
+        // 画在 PPT 条之后：它压不到 PPT 条（左右中部 vs 底部），前后只决定重叠时的层级。
+        DrawPageEdges(app);
 
         // 回放控制条：和 PPT 条同一层（屏幕坐标、`Identity` 变换之下），贴屏幕底边居中。
         DrawReplayBar(app);
@@ -695,6 +704,24 @@ internal sealed partial class OverlayWindow
             }
             if (!_pptBarRectPrev.IsEmpty) r.Add(_pptBarRectPrev);
             _pptBarRectPrev = cur;      // 窗口坐标，下一帧直接加（擦旧位置）
+        }
+
+        // 左右边缘翻页条（2026-11-25，默认关）：悬停 / 淡入淡出每帧都在变，
+        // 按当前矩形算进脏区；**关开关 / 退出放映那一帧**旧位置也要擦掉，
+        // 所以上一帧那两份矩形同样并进来（同 PPT 条、图库面板的做法）。
+        // ⚠ **左右分开算**：合成一块外接矩形会变成"横跨整屏的一条带子"，
+        //    每次悬停都变成重画半个屏幕（自检量得出来）。
+        // 脏区记忆放在 PageEdgeBar 里（ADR-005 D3：不给 Overlay 再加私有字段）。
+        {
+            var pad = 2f + app.FloatingTheme.ShadowReachLogical * Dpi / 96f;
+            var curL = app.PageEdgeVisible ? ScreenRectToWindow(app.PageEdgeGroupRect(left: true)).Inflate(pad) : RectF.Empty;
+            var curR = app.PageEdgeVisible ? ScreenRectToWindow(app.PageEdgeGroupRect(left: false)).Inflate(pad) : RectF.Empty;
+            if (!curL.IsEmpty) r.Add(curL);
+            if (!curR.IsEmpty) r.Add(curR);
+            if (!app._pageEdge.DirtyPrevL.IsEmpty) r.Add(app._pageEdge.DirtyPrevL);
+            if (!app._pageEdge.DirtyPrevR.IsEmpty) r.Add(app._pageEdge.DirtyPrevR);
+            app._pageEdge.DirtyPrevL = curL;
+            app._pageEdge.DirtyPrevR = curR;
         }
 
         // 回放：控制条（悬停/拖动/数值都在变）＋ 正在长的那一条的前缀——都每帧在变，

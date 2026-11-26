@@ -44,6 +44,8 @@ public partial class InkEngine
         if (_pptInputHwnd != IntPtr.Zero) list.Add(_pptInputHwnd);
         if (_timerInputHwnd != IntPtr.Zero) list.Add(_timerInputHwnd);
         if (_rollInputHwnd != IntPtr.Zero) list.Add(_rollInputHwnd);
+        // 左右边缘翻页条的两块小窗（同上：1/255 的一层灰拍进图里就是脏）。
+        _pageEdge.AppendInputWindows(list);
         return list.ToArray();
     }
 

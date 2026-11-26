@@ -53,8 +53,23 @@ public sealed partial class FullUi
         }
     }
 
+    /// <summary>
+    /// 「工具栏只在 PPT 显示」把主条藏起来时，**只画模态面板**（更多 / AI）。
+    /// 球、主条、色带一律不画——它们本来就不该在屏幕上（用户 2026-11-25：
+    /// "应该只出现设置不出现工具栏"）。
+    /// </summary>
+    private void RenderPanelsOnly(ID2D1DeviceContext ctx)
+    {
+        if (_moreOpen || _more.Running) DrawMorePanel(ctx);
+        if (_aiOpen || _ai.Running) DrawAiPanel(ctx);
+    }
+
     private void RenderCore(ID2D1DeviceContext ctx)
     {
+        // 从托盘打开设置（工具栏本来就该被藏着）：**只画面板**，不画球/主条/色带。
+        // 用户 2026-11-25：托盘打开设置之后工具栏出现了，"应该只出现设置不出现工具栏"。
+        if (BandSuppressed) { RenderPanelsOnly(ctx); return; }
+
         float e = _expand.Value;
         var bar = BarRect();
         var panel = UnionRect();
@@ -1112,6 +1127,10 @@ public sealed partial class FullUi
         Row.AutoStart => _host != null && _host.State.AutoStartOn,
         // 「箭头清屏」：引擎持有（只在桌面批注生效，界面只显示开关）。
         Row.ClearOnArrow => _host != null && _host.State.ClearOnArrow,
+        // 边缘翻页条（2026-11-25，默认关）：引擎持有；界面只显示开关。
+        Row.PageEdge => _host != null && _host.State.PageEdgeOn,
+        // 工具栏只在 PPT 显示（2026-11-25，默认关）：引擎持有（托盘显隐读同一份）。
+        Row.BarOnlyPpt => _host != null && _host.State.BarOnlyPpt,
         _ => _hideEnabled,
     };
 
@@ -2037,6 +2056,32 @@ public sealed partial class FullUi
             if (Rows[i].Label.Contains(labelPart, StringComparison.Ordinal))
                 return SettingsRowRectFor(Rows[i].Kind);
         return RectF.Empty;
+    }
+
+    /// <summary>
+    /// **托盘「打开设置」**（2026-11-25，实现 <see cref="IOverlayUi.ShowSettings"/>）：
+    /// 走正常开合路径打开「更多 → 设置（常规页）」。
+    ///
+    /// ⚠ **不能只调 `SetMorePage`**：`_moreOpen` 必须先立起来，`ToolbarHidden` 才会让路
+    /// （见那个属性的模态豁免），否则引擎不跑开合动画、面板永远不出现。
+    /// 这里不用 `OpenMore()`：它会把页面压回启动器首页并重放动画，从托盘点进来时
+    /// 直接"已经在设置页"更合理（托盘那一格本来就是"设置"入口）。
+    /// </summary>
+    public void ShowSettings()
+    {
+        EnsurePageHost();
+        _moreOpen = true;
+        SetMorePage(MorePage.Settings, push: false);
+        _settingsCat = SettingsCategory.General;
+        _settingsScroll = 0f;
+        _settingsScrollDrag = false;
+        ResetSettingsTouch();
+        ResetSettingsFocus();
+        _moreHover = MoreHitNone;
+        _morePress = -1;
+        _more.Jump(1f);
+        _moreH.Jump(MoreTargetH());
+        Invalidate();
     }
 
     /// <summary>自检：直接打开设置页（不模拟点“更多”里的设置格）。</summary>
