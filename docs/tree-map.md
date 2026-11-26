@@ -1,6 +1,6 @@
 # 目录树（自动生成，勿手改）
 
-> 生成：2026-11-25 ／ 脚本：`tools/gen-tree-map.ps1`
+> 生成：2026-11-26 ／ 脚本：`tools/gen-tree-map.ps1`
 > 用途：目录 = 功能域、文件名 = 功能块；先看树定位目录，再看行数决定读哪一段。
 > 语义导航（“某个需求该看哪 1–2 个文件”）看 `docs/module-map.md`；段落行号看 `docs/section-map.md`。
 
@@ -22,8 +22,8 @@
     **InkEngine/Core/**
       - `BackgroundSaver.cs` 157 行
       - `BoardHistory.cs` 170 行
-      - `Engine.cs` 2,988 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
-      - `Engine.Host.cs` 2,603 行 — 启动、消息循环、窗口过程（WndProc）。
+      - `Engine.cs` 3,003 行 — 引擎核心状态、自动存档、板书历史、主循环字段（主文件）。
+      - `Engine.Host.cs` 2,617 行 — 启动、消息循环、窗口过程（WndProc）。
       - `Engine.Selection.Beautify.cs` 163 行 — 选中图片的本地美化（应用/回退）。
       - `Engine.Selection.cs` 68 行
       - `Engine.Selection.Gesture.cs` 1,466 行 — 框选/套索/拖动/对齐吸附/美化入口。
@@ -75,7 +75,7 @@
       - `DwellAssist.cs` 122 行
       - `Engine.Capture.cs` 533 行 — 截图状态、确认/取消、手柄与读数。
       - `Engine.Clipboard.cs` 506 行
-      - `Engine.Input.cs` 2,044 行 — 指针输入、停顿成型、动态橡皮。
+      - `Engine.Input.cs` 2,048 行 — 指针输入、停顿成型、动态橡皮。
       - `Engine.TouchGestures.cs` 794 行 — 触摸手势：单指/双指/三指/长按/惯性。
       - `GoogleInkSlidingWindow.cs` 670 行 — Google Ink 滑动窗口输入。
       - `InkModel.cs` 285 行
@@ -100,10 +100,10 @@
       - `AutoStart.cs` 196 行
       - `Backup.cs` 457 行
       - `DiagLog.cs` 1,270 行 — 运行日志、设备卡、日志上传同意。
-      - `Engine.Hotkey.cs` 636 行 — 热键处理：WM_HOTKEY → 动作。
+      - `Engine.Hotkey.cs` 660 行 — 热键处理：WM_HOTKEY → 动作。
       - `Engine.Keyboard.cs` 634 行 — 键盘模式与键盘手势：工具键、色带键、滚轮/↑↓ 视野平移。
       - `Engine.Radial.cs` 710 行 — 呼出盘：按住/划向扇区/松手（清屏格单击即清，可撤销）。
-      - `Engine.Update.cs` 1,147 行 — 自动更新：检查/下载/换壳。
+      - `Engine.Update.cs` 1,293 行 — 自动更新：检查/下载/换壳。
       - `EraserTelemetry.cs` 329 行
       - `FramePressureValve.cs` 117 行 — 高压保险丝时间驱动状态机：连续慢帧 → 进入高压（收紧分块预算、暂停离屏预取），连续快帧/空闲 → 退出。
       - `GcLatency.cs` 109 行
@@ -123,7 +123,7 @@
 
     **InkEngine/Ppt/**
       - `PageEdge.cs` 71 行 — 屏幕左右边缘的整页翻页条：三格几何（上翻 / 页码 / 下翻），绘制与命中共用。
-      - `Ppt.cs` 1,963 行 — PPT 批注：放映联动、按页落盘、翻页。
+      - `Ppt.cs` 1,970 行 — PPT 批注：放映联动、按页落盘、翻页。
       - `PptBar.cs` 407 行
       - `PptComLate.cs` 347 行
       - `PptComSource.cs` 561 行
@@ -154,11 +154,11 @@
       - `Overlay.Ui.cs` 1,569 行 — 界面层合成与界面位图上传。
       - `OverlayCoords.cs` 65 行 — 覆盖窗口的坐标换算（画布 ↔ 窗口 ↔ 屏幕）与窗口裁剪：纯数学、无状态，OverlayWindow 与单测共用。
       - `OverlayLayerManager.cs` 192 行
-      - `OverlayLayerRegistration.cs` 226 行
+      - `OverlayLayerRegistration.cs` 216 行
       - `StrokeTaper.cs` 238 行 — 收笔笔锋（速度尖尾）：抬笔前末段快 → 笔画末端渐尖；慢 → 等宽。
       - `SvgPath.cs` 271 行
       - `Ui.cs` 1,719 行 — 界面接入契约：IOverlayUi / IEngineCommands / UiState。
-      - `UiHost.cs` 270 行
+      - `UiHost.cs` 275 行
       - `UiImageBytes.cs` 40 行
 
     **InkEngine/Replay/**
@@ -318,10 +318,10 @@
         - `ZoomShots.cs` 776 行 — 文档缩放 E2E：出图（50/100/200/300 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
 
       **InkTeach/SelfTests/Unit/**
-        - `UnitTestRunner.cs` 179 行
+        - `UnitTestRunner.cs` 181 行
         - `UnitTests.Algo.cs` 130 行 — L1 纯逻辑测试：空闲瘦身状态机（IdleMemoryTrimmer）。
         - `UnitTests.Camera.cs` 65 行
-        - `UnitTests.Core.cs` 335 行
+        - `UnitTests.Core.cs` 351 行
         - `UnitTests.Overlay.cs` 84 行
         - `UnitTests.Perf.cs` 557 行 — L1 纯逻辑测试：多屏跳帧判定 / 高压保险丝 / 三段式点抽稀 / 熔墨精确折线 / 顶点圆心吸附 + Shift 正比例。
         - `UnitTests.Ppt.cs` 68 行
@@ -356,5 +356,5 @@
 
     **InkUi/Shell/**
       - `Anim.cs` 89 行
-      - `FullUi.cs` 1,922 行 — 工具条/球/上带/色带的主体布局与绘制。
+      - `FullUi.cs` 1,924 行 — 工具条/球/上带/色带的主体布局与绘制。
       - `FullUi.Interaction.cs` 2,302 行 — 界面命中、开合、换页、贴边隐藏。
