@@ -286,14 +286,18 @@ public partial class InkEngine
             return;
         }
 
-        // 屏幕左右边缘的三格翻页条（2026-11-25）：和 PPT 条同一条规矩——
-        // 排在界面之后、**穿透之前**（穿透下也要能点；NCHITTEST 给它开了区域豁免）。
-        if (OverlayLayers.PointerDown(screenX, screenY, id, ptype, 550, 550))
+        // 屏幕左右边缘的三格翻页条（2026-11-25）：**直接判定**，不再经过浮层管理器——
+        // 管理器那条链上任何一环没接住这个按下（可见/命中/优先级区间），点击就会漏给下层
+        // PowerPoint，被它当成"点击翻页"（用户 2026-11-26：上下键都变成往后翻）。
+        if (PageEdgeVisible)
         {
-            _drawing = false;
-            _dirty = true;
-            ApplyCursor();
-            return;
+            if (PageEdgePress(screenX, screenY))
+            {
+                _drawing = false;
+                _dirty = true;
+                ApplyCursor();
+                return;
+            }
         }
 
         // 界面之外的穿透：交下层窗口，我们不收这一下。

@@ -165,7 +165,12 @@ internal sealed class UiHost : IUiHost, IEngineCommands
     public void Undo() => _engine.UndoFromUi();
     public void Redo() => _engine.RedoFromUi();
     public void Clear() => _engine.ClearCurrentPageFromUi();
-    public void SetPassThrough(bool on) => _engine.SetPassThroughFromUi(on, toPen: !on);
+    public void SetPassThrough(bool on)
+    {
+        if (!on && _engine.PassThroughLockedByHiddenBar) return;   // 藏工具条期间不许关
+        _engine.SetPassThroughFromUi(on, toPen: !on);
+        _engine.RememberPassThrough(on);                           // 只记用户自己的选择
+    }
     public void ToggleDocPan() => _engine.ToggleDocPanFromUi();
     public void SetDocZoom(float zoom) => _engine.SetDocZoomFromUi(zoom);
     public void DocZoomIn() => _engine.DocZoomIn();

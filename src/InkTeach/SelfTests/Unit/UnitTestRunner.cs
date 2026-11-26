@@ -96,6 +96,8 @@ internal static class UnitTestRunner
             UnitTestsOverlay.OverlayCoords_SecondaryScreen_VisibleCanvas_NoDoubleOrigin),
         (nameof(UnitTestsOverlay.OverlayCoords_SecondaryScreen_Clip_And_ScreenToWindow),
             UnitTestsOverlay.OverlayCoords_SecondaryScreen_Clip_And_ScreenToWindow),
+        (nameof(UnitTestsCore.PageEdge_TopIsPrev_BottomIsNext),
+            UnitTestsCore.PageEdge_TopIsPrev_BottomIsNext),
         (nameof(UnitTestsPpt.PptComSource_NativePowerPointMoniker_IsRecognized),
             UnitTestsPpt.PptComSource_NativePowerPointMoniker_IsRecognized),
         (nameof(UnitTestsPpt.ComLate_TwoArgOrder_IsReversed),

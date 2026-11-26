@@ -1202,6 +1202,13 @@ public partial class InkEngine
         if (!SelfCheckMode && _windows.Count > 0)
             _tray = new TrayIcon(_windows[0].Hwnd, ShowSettingsFromTray, QuitFromUi);
 
+        // 先恢复**用户自己的穿透偏好**（只有用户入口会写这个键），再按"工具条藏没藏"收口：
+        //   · 偏好=光标 → 启动就是光标；
+        //   · 偏好=画笔但工具条被藏 → 先强制光标（否则桌面点不动），偏好原样留着，
+        //     进 PPT / 关开关后 SyncBarOnlyPptMode 会把它退回去。
+        if (GetUiPref("passThrough") == "1" && !PassThrough) SetPassThrough(true);
+        SyncBarOnlyPptMode();
+
         Host?.UpdateScreen(UiLogicalScreen);
         Host?.UpdateWorkArea(UiLogicalWorkArea);
         Console.WriteLine($"DPI 缩放 {DpiScale:F2}（逻辑 {_windows[0].Width / DpiScale:F0}x{_windows[0].Height / DpiScale:F0}），"
@@ -1416,6 +1423,8 @@ public partial class InkEngine
 
             NowMs = _clock.Elapsed.TotalMilliseconds;
             _tray?.Update(WantTray);          // 幂等：内部只做"该不该显示"的比较
+            SyncBarOnlyPptMode();             // 幂等：工具条藏/显与穿透的一致性（见该方法注释）
+            SyncEdgeInputWindow();            // 穿透下边缘条靠专用小窗接点击（见该方法注释）
             MaybeAutoCheckUpdate();       // 静默查更新：气泡 / 更多上的红点靠它出现
             PumpKeyGestures();            // 工具键的手势：长按判定 + 连按换色的延迟结算
             PumpRadialPalette();          // 呼出盘：出盘延迟 / 松手轮询 / 超时
@@ -2198,6 +2207,11 @@ public partial class InkEngine
         // 系统跳过命中测试，豁免根本执行不到）。
         if (_pptInputHwnd != IntPtr.Zero && hWnd == _pptInputHwnd)
             return PptInputWndProc(hWnd, msg, wParam, lParam);
+
+        // 左右边缘翻页条的接输入小窗（同 PPT 条：穿透下主窗收不到点击）。
+        if ((_edgeInputL != IntPtr.Zero && hWnd == _edgeInputL)
+            || (_edgeInputR != IntPtr.Zero && hWnd == _edgeInputR))
+            return EdgeInputWndProc(hWnd, msg, wParam, lParam);
 
         // 课堂计时卡片的"接输入小窗"（同一套方案；卡片和 PPT 条不相邻，所以单开一块）。
         if (_timerInputHwnd != IntPtr.Zero && hWnd == _timerInputHwnd)

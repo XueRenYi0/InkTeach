@@ -373,6 +373,53 @@ public partial class InkEngine
     }
 
     /// <summary>
+    /// 「工具栏只在 PPT 显示」的一致性收口（2026-11-26 用户报：切到画笔后再打开这个开关、
+    /// 关掉设置，整个桌面点不动了）。
+    ///
+    /// 规则：**工具条被这个设置藏起来的时候，必须同时处在光标/穿透模式**——否则老师手里
+    /// 还拿着画笔、又没有任何工具条入口，桌面谁也点不到（只能靠托盘开设置，但设置一关又回去）。
+    /// 退出 PPT 的那条路本来就会切穿透（见 ExitPptMode）；这里补的是"在非 PPT 状态打开开关"
+    /// 和"启动时开关本来就是开的"这两条。
+    /// 文档模式例外：穿透会把 PDF 整层让开，所以文档里不藏工具条（见 FullUi.ToolbarHidden）。
+    /// </summary>
+    /// <summary>工具条被「只在 PPT 显示」藏着的这段时间里，穿透**不能关**：
+    /// 否则就是"没工具条 + 没穿透"的死局（桌面点不动）。</summary>
+    internal bool PassThroughLockedByHiddenBar => BarOnlyPpt && !PptMode && !DocView.IsOpen;
+
+    /// <summary>记住用户**自己**的穿透偏好。只给用户入口调；强制路径不写，免得把偏好带偏。</summary>
+    internal void RememberPassThrough(bool on) => SetUiPref("passThrough", on ? "1" : null);
+
+    internal void SyncBarOnlyPptMode()
+    {
+        // ② 退出放映时自动切的光标：**再进放映**就退回用户偏好（不然老师进放映还得手动切笔）
+        if (PptMode && _autoCursorAfterPpt)
+        {
+            _autoCursorAfterPpt = false;
+            bool pref = GetUiPref("passThrough") == "1";
+            if (PassThrough != pref) SetPassThroughFromUi(pref, force: true);
+            return;
+        }
+
+        // ① 工具条藏着 → 必须穿透（用户关不掉，见 PassThroughLockedByHiddenBar）
+        if (PassThroughLockedByHiddenBar)
+        {
+            if (!PassThrough)
+            {
+                _forcedCursor = true;
+                SetPassThroughFromUi(true, force: true);
+            }
+            return;
+        }
+        // ③ 工具条重新可见 → 退出"被强制"的光标，回到用户自己的偏好（不是一律回画笔）
+        if (_forcedCursor)
+        {
+            _forcedCursor = false;
+            bool pref = GetUiPref("passThrough") == "1";
+            if (PassThrough != pref) SetPassThroughFromUi(pref, force: true);
+        }
+    }
+
+    /// <summary>
     /// 用户入口这一刻能不能进穿透：**文档模式不行**（2026-11-15 定，PDF 像放映）。
     /// 主条那一格和全局热键走同一条判据（界面那边也按 DocOpen 先分派到手，这里是兜底）。
     /// 返回 true = 挡住了，原因已经写进状态行。
@@ -939,6 +986,7 @@ public partial class InkEngine
         if (uiActive) UiPrepareFrameNow();
         RectF logical = uiActive ? UiQueryBoundsNow() : RectF.Empty;
 
+
         if (logical.IsEmpty)
         {
             // **不看 `_uiInputShown`**：HiddenOverlay 恢复窗口时不会同步这个标志，
@@ -973,6 +1021,105 @@ public partial class InkEngine
 
         _uiInputRect = phys;
         _uiInputShown = true;
+    }
+
+    // ---- 左右边缘翻页条的"接输入小窗"（和 PPT 条同一套方案）-------------------
+    //
+    //  为什么需要：穿透给覆盖层加了 WS_EX_TRANSPARENT，系统直接跳过命中测试——
+    //  NCHITTEST 的豁免根本执行不到，点击会落到下层 PowerPoint 被当成"点击翻页"
+    //  （用户 2026-11-26：穿透模式下按上/下都往后翻）。
+    //  左右各一个小窗（**不能并成一个大窗**：两个条在屏幕两端，外接矩形会把整块 PPT 挡住）。
+    private void SyncEdgeInputWindow()
+    {
+        bool wanted = PassThrough && PageEdgeVisible;
+        if (!wanted) { HideEdgeInputWindows(); return; }
+
+        EnsureEdgeInputWindow();
+        if (_edgeInputL == IntPtr.Zero || _edgeInputR == IntPtr.Zero) return;
+
+        Place(_edgeInputL, PageEdgeGroupRect(true), ref _edgeInputRectL);
+        Place(_edgeInputR, PageEdgeGroupRect(false), ref _edgeInputRectR);
+        _edgeInputShown = true;
+
+        void Place(IntPtr h, RectF box, ref RectF memo)
+        {
+            if (_edgeInputShown && memo.Equals(box)) return;
+            Native.SetWindowPos(h, Native.HWND_TOPMOST,
+                (int)MathF.Floor(box.MinX), (int)MathF.Floor(box.MinY),
+                Math.Max(1, (int)MathF.Ceiling(box.MaxX - box.MinX)),
+                Math.Max(1, (int)MathF.Ceiling(box.MaxY - box.MinY)),
+                Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
+            memo = box;
+        }
+    }
+
+    private void HideEdgeInputWindows()
+    {
+        if (!_edgeInputShown) return;
+        if (_edgeInputL != IntPtr.Zero) Native.ShowWindow(_edgeInputL, Native.SW_HIDE);
+        if (_edgeInputR != IntPtr.Zero) Native.ShowWindow(_edgeInputR, Native.SW_HIDE);
+        _edgePressActive = false;
+        _edgeInputShown = false;
+    }
+
+    private void EnsureEdgeInputWindow()
+    {
+        if (_edgeInputL != IntPtr.Zero) return;
+        _edgeInputL = CreateEdge("InkTeachEdgeL");
+        _edgeInputR = CreateEdge("InkTeachEdgeR");
+
+        IntPtr CreateEdge(string title)
+        {
+            long exStyle = Native.WS_EX_TOPMOST | Native.WS_EX_TOOLWINDOW
+                         | Native.WS_EX_NOACTIVATE | Native.WS_EX_LAYERED;
+            var h = Native.CreateWindowEx(exStyle, _className, title,
+                0x80000000L /*WS_POPUP*/, 0, 0, 1, 1,
+                IntPtr.Zero, IntPtr.Zero, _hInstance, IntPtr.Zero);
+            if (h == IntPtr.Zero)
+            {
+                Console.WriteLine("边缘翻页条接输入小窗创建失败: " + Marshal.GetLastWin32Error()
+                                  + "（穿透模式下边缘条会点不动）");
+                return IntPtr.Zero;
+            }
+            // 1/255 不透明度：看不见，但命中测试里它实实在在在这（同界面/PPT 条那两块）。
+            Native.SetLayeredWindowAttributes(h, 0, 1, Native.LWA_ALPHA);
+            Native.DisableSystemPressAndHold(h);
+            return h;
+        }
+    }
+
+    /// <summary>边缘条小窗的消息：只做一件事——把按下翻成翻页，然后吞掉。</summary>
+    private IntPtr EdgeInputWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+    {
+        switch (msg)
+        {
+            case Native.WM_NCHITTEST: return new IntPtr(Native.HTCLIENT);
+            case Native.WM_MOUSEACTIVATE: return new IntPtr(Native.MA_NOACTIVATE);
+            case Native.WM_ERASEBKGND: return new IntPtr(1);
+            case Native.WM_SETCURSOR: ApplyCursor(force: true); return new IntPtr(1);
+            case Native.WM_POINTERDOWN:
+            {
+                uint id = (uint)(wParam.ToInt64() & 0xFFFF);
+                if (!ReadPointer(id, out float sx, out float sy, out _, out _, out _))
+                    return IntPtr.Zero;
+                StampInput(); _cntDown++;
+                if (PageEdgePress(sx, sy))
+                {
+                    _edgePressActive = true;
+                    _dirty = true;
+                }
+                return IntPtr.Zero;
+            }
+            case Native.WM_POINTERUP:
+                if (_edgePressActive)
+                {
+                    _edgePressActive = false;
+                    _dirty = true;
+                }
+                return IntPtr.Zero;
+            default:
+                return Native.DefWindowProc(hWnd, msg, wParam, lParam);
+        }
     }
 
     private void EnsureUiInputWindow()
@@ -1062,7 +1209,6 @@ public partial class InkEngine
                 StampInput(); _cntDown++;
                 LastPointerType = ptype;
                 _uiHover = true;
-
                 if (UiPointerDown(sx, sy, pressure, ptype == Native.PT_PEN, inverted,
                                   ptype == Native.PT_TOUCH, id))
                 {

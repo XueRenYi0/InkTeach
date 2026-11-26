@@ -53,11 +53,14 @@ public partial class InkEngine
             // 穿透开关（全局 Ctrl+Alt+Shift+T 这条同一条路）：退出时恢复进穿透前的板态，
             // 见 SetPassThrough 的 restoreBoard。用户主动退出 = 回到画笔（2026-10-24）。
             case KeyAction.TogglePassThrough:
+                // 工具条被「只在 PPT 显示」藏着时，穿透**不能关**（否则没工具条又没穿透）。
+                if (PassThrough && PassThroughLockedByHiddenBar) break;
                 // 文档模式里用户入口不开穿透（2026-11-15；和主条那格同一条判据）。
                 if (!PassThrough && BlockUserPassThroughInDoc()) break;
                 // 和点箭头同一条路：进穿透前按设置清桌面（白板/PPT/文档不动）。
                 if (!PassThrough) ClearDesktopOnArrowFromUi();
                 SetPassThrough(!PassThrough, restoreBoard: true, toPen: PassThrough);
+                RememberPassThrough(PassThrough);      // 用户主动切的才记偏好
                 break;
             // 呼出盘：按住才出来的"标迹菜单"（松手确认，见 OpenRadialPalette）。
             case KeyAction.RadialPalette: OpenRadialPalette(); break;
@@ -418,6 +421,24 @@ public partial class InkEngine
     ///     "我现在就要写"，画布要保持眼前所见（露出来的下层应用），突然盖回白板反而是惊吓；
     ///     想回板，再点一下白板格就行（用户 2026-09-30 拍板，见《调研-快捷键-焦点与穿透》8.3）。
     /// </summary>
+    /// <summary>
+    /// 放映里开穿透 = **键盘也给下层**（用户 2026-11-26：穿透后 Esc 退不出放映）。
+    /// 平时"键盘归批注层"是用户的显式选择，这里只临时让位，退出穿透原样还回去。
+    /// </summary>
+    private void SyncPassThroughKeyboard(bool on)
+    {
+        if (on && PptMode && KeyboardMode)
+        {
+            _keyboardModeBeforePptPassThrough = true;
+            SetKeyboardMode(false);
+        }
+        else if (!on && _keyboardModeBeforePptPassThrough)
+        {
+            _keyboardModeBeforePptPassThrough = false;
+            SetKeyboardMode(true);
+        }
+    }
+
     private void SetPassThrough(bool on, bool restoreBoard = false, bool toPen = false)
     {
         // 进穿透 = 离开"文档模式"的交互（2026-11-15）：手掌先收掉，
@@ -439,6 +460,7 @@ public partial class InkEngine
 
         PassThrough = on;
         _dirty = true;                 // 藏 / 恢复收藏弹窗都要立刻重画
+        SyncPassThroughKeyboard(on);
         // 穿透 = "键盘让给下层"：放映临时全局键跟着挂/摘（用户 2026-09-30 定，
         // 见 PptHotkeys 那段注释）。不在放映时这一句是空操作。
         SyncPptHotkeys();
@@ -601,6 +623,8 @@ public partial class InkEngine
         if (_pptInputHwnd != IntPtr.Zero)
         {
             Native.DestroyWindow(_pptInputHwnd);
+            if (_edgeInputL != IntPtr.Zero) { Native.DestroyWindow(_edgeInputL); _edgeInputL = IntPtr.Zero; }
+            if (_edgeInputR != IntPtr.Zero) { Native.DestroyWindow(_edgeInputR); _edgeInputR = IntPtr.Zero; }
             _pptInputHwnd = IntPtr.Zero;
             _pptInputShown = false;
         }

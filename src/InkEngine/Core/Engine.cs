@@ -716,12 +716,19 @@ public partial class InkEngine
     /// <summary>托盘要不要露出来：工具栏被这个设置藏起来的时候才需要。</summary>
     internal bool WantTray => BarOnlyPpt && !PptMode;
 
+    /// <summary>当前这次穿透是"藏工具条"逼出来的（不是用户自己选的）。工具条回来时要退回用户偏好。</summary>
+    private bool _forcedCursor;
+    /// <summary>退出放映时"自动回桌面"切的光标（带「只在 PPT」开关时，下次进放映要退回用户偏好）。</summary>
+    private bool _autoCursorAfterPpt;
+
     internal void SetBarOnlyPptFromUi(bool on)
     {
         if (BarOnlyPpt == on) return;
         BarOnlyPpt = on;
         // 默认关：只写"开了"这一种情况（老规矩）。
         SetUiPref("barOnlyPpt", on ? "1" : null);
+        // 藏起来的同时切到光标模式（否则画笔 + 没有工具条 = 桌面点不动）。
+        SyncBarOnlyPptMode();
         _tray?.Update(WantTray);
         _dirty = true;
         NotifyUiStateChanged();
@@ -2761,6 +2768,14 @@ public partial class InkEngine
     // 于是"穿透"和"面板可点"天然同时成立。
     private IntPtr _uiInputHwnd;
     private bool _uiInputShown;
+    /// <summary>这一下按下被"边缘翻页条"吃了：抬起时也吞掉，别漏给界面/下层。</summary>
+    private bool _edgePressActive;
+    /// <summary>左右边缘翻页条的"接输入小窗"（和 PPT 条同一套方案；穿透下主窗收不到点击）。</summary>
+    private IntPtr _edgeInputL, _edgeInputR;
+    private RectF _edgeInputRectL = RectF.Empty, _edgeInputRectR = RectF.Empty;
+    private bool _edgeInputShown;
+    /// <summary>PPT 里进穿透前用户是"键盘归批注层"吗（退出穿透要还原用户的选择）。</summary>
+    private bool _keyboardModeBeforePptPassThrough;
     // 界面当前按住的指针（触摸可以同时有两根；不能用一个 bool 把第一根抬手后的第二根丢掉）。
     private readonly HashSet<uint> _uiPointers = new();
     private RectF _uiInputRect;                 // 物理像素

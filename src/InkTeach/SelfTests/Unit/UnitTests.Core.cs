@@ -332,4 +332,20 @@ internal static class UnitTestsCore
         InkEngine.DocColorInvert.ApplyInPlace(new byte[3], 3);
         InkEngine.DocColorInvert.ApplyInPlace(null);
     }
+
+    [UnitTest]
+    internal static void PageEdge_TopIsPrev_BottomIsNext()
+    {
+        var scr = new RectF { MinX = 0, MinY = 0, MaxX = 1920, MaxY = 1080 };
+        foreach (bool left in new[] { true, false })
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                var r = PageEdge.CellRect(scr, left, i, 1f);
+                float cx = (r.MinX + r.MaxX) * 0.5f, cy = (r.MinY + r.MaxY) * 0.5f;
+                Check.Equal(left ? -1 : 1, PageEdge.SideAt(cx, cy, scr, 1f), file: "PageEdge");
+                Check.Equal(i, PageEdge.CellAt(cx, cy, scr, left, 1f), file: "PageEdge");
+            }
+        }
+    }
 }

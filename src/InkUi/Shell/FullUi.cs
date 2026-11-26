@@ -537,6 +537,7 @@ public sealed partial class FullUi : IOverlayUi
     /// </summary>
     private bool ToolbarHidden =>
         _host != null && _host.State.BarOnlyPpt && !_lastPpt
+        && !_host.State.DocOpen          // 文档模式例外：穿透会让 PDF 整层让开，工具条必须留着
         && !_moreOpen && !_more.Running && !_aiOpen && !_ai.Running;
 
     public bool Visible => !ToolbarHidden;
@@ -547,7 +548,8 @@ public sealed partial class FullUi : IOverlayUi
     /// 球 / 主条 / 色带一律不画——用户 2026-11-25："托盘打开设置之后工具栏出现了，
     /// 应该只出现设置不出现工具栏"。
     /// </summary>
-    private bool BandSuppressed => _host != null && _host.State.BarOnlyPpt && !_lastPpt;
+    private bool BandSuppressed =>
+        _host != null && _host.State.BarOnlyPpt && !_lastPpt && !_host.State.DocOpen;
     public bool IsAnimating
     {
         get

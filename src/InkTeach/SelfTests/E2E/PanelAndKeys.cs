@@ -3605,9 +3605,9 @@ internal sealed partial class App
             SetPptModeForTest(false);
             NotifyUiStateForTest();
             SettleFrames(200);
-            Check("工具栏只在PPT：非放映时隐藏（不占地方、点击直通）",
-                  ui != null && !ui.Visible && ui.QueryBounds().IsEmpty,
-                  $"可见={ui?.Visible}");
+            Check("工具栏只在PPT：非放映时隐藏，并自动切到光标/穿透（桌面点得动）",
+                  ui != null && !ui.Visible && ui.QueryBounds().IsEmpty && PassThrough,
+                  $"可见={ui?.Visible}，穿透={PassThrough}");
 
             SetPptModeForTest(true);
             NotifyUiStateForTest();

@@ -511,9 +511,16 @@ public partial class InkEngine
             // 收场后如果还留着"白板关、穿透关"的全屏透明窗，下层程序谁也点不到。
             // 白板开着时不进穿透——留白板就是老师要继续在板上写（下面的 NotifyUiStateChanged
             // 顺手刷新顶部 / 悬浮条上的穿透按钮状态）。
-            if (!PassThrough) SetPassThrough(true);
+            if (!PassThrough)
+            {
+                if (BarOnlyPpt) _autoCursorAfterPpt = true;   // 进放映时退回用户偏好
+                SetPassThrough(true);
+            }
         }
         NotifyUiStateChanged();
+        // 「工具栏只在 PPT 显示」：退出放映后工具条就藏起来了，这时必须落在光标模式，
+        // 否则画笔 + 没有工具条 = 桌面点不动（白板开着也算——白板下同理没有入口）。
+        SyncBarOnlyPptMode();
         Console.WriteLine(BoardOn
             ? "[PPT] 退出放映；白板保持不动，关白板后回桌面"
             : "[PPT] 退出放映，已回到桌面批注");
