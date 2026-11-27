@@ -53,6 +53,7 @@ public partial class InkEngine
             // 穿透开关（全局 Ctrl+Alt+Shift+T 这条同一条路）：退出时恢复进穿透前的板态，
             // 见 SetPassThrough 的 restoreBoard。用户主动退出 = 回到画笔（2026-10-24）。
             case KeyAction.TogglePassThrough:
+                if (BarSuppressedNow) break;
                 // 文档模式里用户入口不开穿透（2026-11-15；和主条那格同一条判据）。
                 if (!PassThrough && BlockUserPassThroughInDoc()) break;
                 // 和点箭头同一条路：进穿透前按设置清桌面（白板/PPT/文档不动）。
@@ -60,7 +61,10 @@ public partial class InkEngine
                 SetPassThrough(!PassThrough, restoreBoard: true, toPen: PassThrough);
                 break;
             // 呼出盘：按住才出来的"标迹菜单"（松手确认，见 OpenRadialPalette）。
-            case KeyAction.RadialPalette: OpenRadialPalette(); break;
+            case KeyAction.RadialPalette:
+                if (BarSuppressedNow) break;
+                OpenRadialPalette();
+                break;
             // 工具键统一走 ToolKeyPress：**不管是应用内键还是"放映时的临时全局热键"**，
             // 都要有"已经是它 → 换色/换档"这条逻辑（用户 2026-09-30 实测：放映里 Ctrl+P
             // 能切到笔了，但已经是笔时再按不换色——就是因为这条热键路径漏了 ToolKeyPress）。
@@ -262,6 +266,7 @@ public partial class InkEngine
     /// </summary>
     private void SwitchTool(Tool t)
     {
+        if (BarSuppressedNow) return;
         // 用户换工具 = 已经决定自己动手：恢复提示关掉（打开文档顺手切回笔那一次除外）。
         if (DocResumeVisible && t != Tool && !_docResumeJustOpened)
             DismissDocResume("换工具");
@@ -420,6 +425,8 @@ public partial class InkEngine
     /// </summary>
     private void SetPassThrough(bool on, bool restoreBoard = false, bool toPen = false)
     {
+        // 硬不变量（「仅 PPT 显示」藏条时只能保持穿透，绝不允许无工具栏时在桌面全屏批注）
+        if (!on && BarSuppressedNow) return;
         // 进穿透 = 离开"文档模式"的交互（2026-11-15）：手掌先收掉，
         // 免得退回来时是"手里是笔、一动却是拖页"的混合态。
         if (on) ExitDocPan("进穿透");

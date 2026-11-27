@@ -1,4 +1,4 @@
-// [职责] 「非课件时工具栏」自检：三档落盘兼容、收球贴边两阶段、仅 PPT 显示桌面零痕迹与托盘单击呼出/收起。
+// [职责] 「退出 PPT 后」工具栏状态机自检：三档落盘兼容、收球贴边两阶段、隐藏到托盘桌面零痕迹与托盘单击呼出/收起。
 // [测试] --traytest（无窗口：驱动真实 FullUi、Engine 状态机与模拟 IUiHost，不建托盘/窗口）
 
 using System.Reflection;
@@ -11,14 +11,14 @@ using Vortice.Mathematics;
 namespace InkTeach.SelfTests;
 
 /// <summary>
-/// `--traytest`：验「非课件时工具栏」（沿用 <c>barOnlyPpt</c> 配置键）三档状态机。
+/// `--traytest`：验「退出 PPT 后」（沿用 <c>barOnlyPpt</c> 配置键）三档状态机。
 /// </summary>
 internal static class TrayTest
 {
     public static int Run()
     {
         Console.WriteLine();
-        Console.WriteLine("=== 非课件时工具栏（三档）自检 ===");
+        Console.WriteLine("=== 退出 PPT 后工具栏（三档）自检 ===");
 
         int pass = 0, fail = 0;
         void Check(string name, bool ok, string detail = "")
@@ -34,7 +34,7 @@ internal static class TrayTest
 
         Console.WriteLine();
         Console.WriteLine(fail == 0
-            ? $"  PASS：非课件时工具栏三档状态机正确——共 {pass} 项"
+            ? $"  PASS：退出 PPT 后工具栏三档状态机正确——共 {pass} 项"
             : $"  FAIL：{fail} 项不对（{pass} 项通过）");
         return fail == 0 ? 0 : 1;
     }
@@ -187,7 +187,7 @@ internal static class TrayTest
     {
         var engine = new global::InkEngine.InkEngine();
         engine.BarIdleMode = BarIdleMode.PptOnlyTray;
-        check("仅 PPT 显示·桌面初始：隐藏工具栏且常驻托盘",
+        check("隐藏到托盘·桌面初始：隐藏工具栏且常驻托盘",
               engine.BarSuppressedNow && engine.WantTray && !engine.BarTempShown,
               $"suppressed={engine.BarSuppressedNow} wantTray={engine.WantTray}");
 

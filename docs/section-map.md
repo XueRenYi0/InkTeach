@@ -473,7 +473,7 @@
 | 903 | 墨迹文件（.inkb）的保存 / 打开（墨迹 A，2026-10-01） |
 | 1109 | "打开文档…"（图片批量 / PDF；2026-10-07，图片与 PDF 导入第一步） |
 
-## src/InkEngine/Input/Engine.Input.cs（2,068 行）
+## src/InkEngine/Input/Engine.Input.cs（2,070 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -482,9 +482,9 @@
 | 行 | 段落 |
 | --- | --- |
 | 18 | Pointer input |
-| 720 | 停顿成型：计时 / 触发 / 按住调整 / 定型（规格见 计划-图形工具.md §四十二） |
-| 1149 | 自检入口（`--dwelltest` 用；四条都是"薄封装"，不含任何逻辑） |
-| 1181 | 黑匣子（`--reclive` / `--replayinput`）用的薄钩子 |
+| 722 | 停顿成型：计时 / 触发 / 按住调整 / 定型（规格见 计划-图形工具.md §四十二） |
+| 1151 | 自检入口（`--dwelltest` 用；四条都是"薄封装"，不含任何逻辑） |
+| 1183 | 黑匣子（`--reclive` / `--replayinput`）用的薄钩子 |
 
 ## src/InkEngine/Input/Engine.TouchGestures.cs（797 行）
 
@@ -626,7 +626,7 @@
 | 975 | 异步上传（2026-10-17）：点「日志」时界面绝不能被网络卡住 |
 | 1041 | 日志上云（2026-10-17 用户定） |
 
-## src/InkEngine/Platform/Engine.Hotkey.cs（637 行）
+## src/InkEngine/Platform/Engine.Hotkey.cs（644 行）
 
 | 行 | 顶层类型 |
 | --- | --- |
@@ -635,7 +635,7 @@
 | 行 | 段落 |
 | --- | --- |
 | 18 | Hotkeys |
-| 175 | 连续微调会话（2026-10-05） |
+| 179 | 连续微调会话（2026-10-05） |
 
 ## src/InkEngine/Platform/Engine.Keyboard.cs（641 行）
 
@@ -664,7 +664,7 @@
 | 20 | 来龙去脉：《调研-笔键方案.md》附录 C/D（键盘呼出版；笔身键版留待真机实测硬件）。 |
 | 465 | 呼出盘自检钩子（--radialtest / --radialshow） |
 
-## src/InkEngine/Platform/Engine.Update.cs（1,204 行）
+## src/InkEngine/Platform/Engine.Update.cs（1,206 行）
 
 | 行 | 顶层类型 |
 | --- | --- |

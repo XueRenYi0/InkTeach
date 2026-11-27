@@ -466,7 +466,7 @@ internal static class SettingsAudit
         public AuditHost(RectF screen) => _screen = screen;
 
         public IEngineCommands Commands { get; } = DispatchProxy.Create<IEngineCommands, NoopCommands>();
-        // UiState 是 struct，字段缺省是 0：界面上"窗口透明度"那一行会显示成 0%，
+        // UiState 是 struct，字段缺省是 0：界面上"整体透明度"那一行会显示成 0%，
         // 给一个和引擎一致的默认档（1 = 不透明）。
         public UiState State { get; } = new() { WindowOpacity = 1f };
         public RectF Screen => _screen;

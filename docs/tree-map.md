@@ -76,7 +76,7 @@
       - `DwellAssist.cs` 122 行
       - `Engine.Capture.cs` 535 行 — 截图状态、确认/取消、手柄与读数。
       - `Engine.Clipboard.cs` 506 行
-      - `Engine.Input.cs` 2,068 行 — 指针输入、停顿成型、动态橡皮。
+      - `Engine.Input.cs` 2,070 行 — 指针输入、停顿成型、动态橡皮。
       - `Engine.TouchGestures.cs` 797 行 — 触摸手势：单指/双指/三指/长按/惯性。
       - `GoogleInkSlidingWindow.cs` 670 行 — Google Ink 滑动窗口输入。
       - `InkModel.cs` 285 行
@@ -101,10 +101,10 @@
       - `AutoStart.cs` 196 行
       - `Backup.cs` 457 行
       - `DiagLog.cs` 1,270 行 — 运行日志、设备卡、日志上传同意。
-      - `Engine.Hotkey.cs` 637 行 — 热键处理：WM_HOTKEY → 动作。
+      - `Engine.Hotkey.cs` 644 行 — 热键处理：WM_HOTKEY → 动作。
       - `Engine.Keyboard.cs` 641 行 — 键盘模式与键盘手势：工具键、色带键、滚轮/↑↓ 视野平移。
       - `Engine.Radial.cs` 711 行 — 呼出盘：按住/划向扇区/松手（清屏格单击即清，可撤销）。
-      - `Engine.Update.cs` 1,204 行 — 自动更新：检查/下载/换壳。
+      - `Engine.Update.cs` 1,206 行 — 自动更新：检查/下载/换壳。
       - `EraserTelemetry.cs` 329 行
       - `FramePressureValve.cs` 117 行 — 高压保险丝时间驱动状态机：连续慢帧 → 进入高压（收紧分块预算、暂停离屏预取），连续快帧/空闲 → 退出。
       - `GcLatency.cs` 109 行
@@ -322,7 +322,7 @@
         - `ZoomShots.cs` 776 行 — 文档缩放 E2E：出图（50/100/200/300 + 黑墨清晰度）+ 分块倍率 / 防抖 / 预取环字节上限。
 
     **InkTeach/SelfTests/**
-      - `TrayTest.cs` 338 行 — 「非课件时工具栏」自检：三档落盘兼容、收球贴边两阶段、仅 PPT 显示桌面零痕迹与托盘单击呼出/收起。
+      - `TrayTest.cs` 338 行 — 「退出 PPT 后」工具栏状态机自检：三档落盘兼容、收球贴边两阶段、隐藏到托盘桌面零痕迹与托盘单击呼出/收起。
 
       **InkTeach/SelfTests/Unit/**
         - `UnitTestRunner.cs` 187 行

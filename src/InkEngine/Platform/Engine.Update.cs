@@ -903,6 +903,8 @@ public partial class InkEngine
             _uiInputShown = false;
         }
         _dirty = true;
+        // 最后的保险：UI 彻底停用时强制交还鼠标穿透，防止用户被困在无工具栏的画笔态。
+        if (!PassThrough) SetPassThrough(true);
     }
 
     private T UiGuard<T>(string what, Func<T> call, T fallback)

@@ -979,7 +979,7 @@ public sealed partial class FullUi
     private static string BarIdleModeName(BarIdleMode mode) => mode switch
     {
         BarIdleMode.StowEdge => "收球贴边",
-        BarIdleMode.PptOnlyTray => "仅 PPT 显示",
+        BarIdleMode.PptOnlyTray => "隐藏到托盘",
         _ => "保持显示",
     };
 

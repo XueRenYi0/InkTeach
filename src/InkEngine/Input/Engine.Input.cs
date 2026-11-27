@@ -25,6 +25,8 @@ public partial class InkEngine
         EnsureOverlayLayers();           // A4.1：注册浮层适配器（影子路由/后续切换；不产生输入副作用）
         // 反馈群 / 赞赏码是全屏覆盖层：任何一点都先关它，这一下不再落到画布/界面。
         if (FeedbackQrVisible) { HideFeedbackQr(); return; }
+        // 自愈兜底：无栏藏条态下若意外处于非穿透，立即交还鼠标穿透并吞掉这一笔。
+        if (!SelfCheckMode && BarSuppressedNow && !PassThrough) { SetPassThrough(true); return; }
         StopTouchFling();                // 任何按下（画布/界面/笔）= 先刹住双指惯性
         _cntDown++;
         ClearEngineTooltip();            // 按下 = 新动作开始，悬停提示先收
