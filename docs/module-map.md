@@ -47,7 +47,7 @@
 | AI 题卡 | `InkEngine/Ai/AiCard.cs` | `AiQuestionClient.cs` · `Shapes/FigureRenderer.cs` | `--imgcardtest` |
 | 左右边缘翻页条 | `InkEngine/Ppt/PageEdge.cs`（几何，绘制 / 命中 / 脏区共用一份） | `InkEngine/Ppt/PageEdgeBar.cs`（显隐 + 穿透下的两块接输入小窗） · `Doc/DocImport.Pan.cs` 的 `PageEdgeVisible` / `PageEdgePress` · 绘制在 `Rendering/Overlay.Readout.cs` 的 `DrawPageEdges` · 脏区在 `Rendering/Overlay.Frame.cs` · 每条形状的开关落 `ui.pageEdge`（默认关） | `--ppttest` |
 | 窗口整体透明度 | `InkEngine/Platform/WindowOpacityPresets.cs`（五档表，唯一来源） | `InkEngine/Rendering/WindowOpacityFx.cs`（DirectComposition 效果组） · `Rendering/Overlay.Frame.cs` 的 `_opacityFx.Apply` · 落 `windowOpacity`（默认档不写项） | `--settingsaudit` |
-| 工具栏只在 PPT 显示 + 托盘 | `InkEngine/Core/Engine.cs` 的 `BarOnlyPpt` / `WantTray` | `InkEngine/Platform/TrayIcon.cs`（Shell_NotifyIcon + TaskbarCreated 重建） · 界面让路在 `InkUi/Shell/FullUi.cs` 的 `ToolbarHidden` / `BandSuppressed` · 落 `barOnlyPpt`（默认关） | `--traytest` |
+| 非课件时工具栏（收球贴边 / 仅 PPT 显示+托盘） | `InkEngine/Core/Engine.cs` 的 `BarIdleMode` | `InkEngine/Platform/TrayIcon.cs`（系统托盘） · `InkUi/Shell/FullUi.cs` / `FullUi.Interaction.cs`（两阶段收球贴边 + `BarSuppressed` 桌面零痕迹） · 落 `barOnlyPpt` | `--traytest` |
 | OCR / 手写优化 | `InkEngine/Ai/OcrClient.cs` | `InkEngine/Text/HandwritingOptimize.cs` | `--handocr` / `--handreplace` |
 | 文本框 / 公式 | `InkEngine/Text/TextBoxEditing.cs` | `MathRenderer.cs` · `LatexCompat.cs` | `--textboxsim` |
 | 图形识别 | `InkEngine/Shapes/ShapeRecognize.cs` | `PointCloudRecognizer.cs` | `--inktest` |

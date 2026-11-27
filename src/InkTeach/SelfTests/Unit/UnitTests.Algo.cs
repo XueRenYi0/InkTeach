@@ -98,6 +98,37 @@ internal static class UnitTestsAlgo
         Check.True(!CanvasTileCache.CanRasterMore(budget * 5, budget, 3), "远超预算也只烘已烘的几块");
     }
 
+    /// <summary>
+    /// 分帧追帧状态转移：pending→pending(2)→justFinished(2, HasTileCatchUp=true)→next(1, HasTileCatchUp=false)→idle(0)。
+    /// </summary>
+    [UnitTest]
+    internal static void TileSyncCatchUp_Transitions_And_HasTileCatchUpWindow()
+    {
+        int c = 0;
+        // pending -> pending
+        c = CanvasTileCache.NextCatchUpFrames(c, wasPending: false, hasPending: true);
+        Check.Equal(2, c);
+        Check.True(c > 1, "pending 首帧 HasTileCatchUp 应为 true");
+
+        c = CanvasTileCache.NextCatchUpFrames(c, wasPending: true, hasPending: true);
+        Check.Equal(2, c);
+        Check.True(c > 1, "持续 pending 时 HasTileCatchUp 应为 true");
+
+        // pending -> justFinished
+        c = CanvasTileCache.NextCatchUpFrames(c, wasPending: true, hasPending: false);
+        Check.Equal(2, c);
+        Check.True(c > 1, "刚烘完那一帧 HasTileCatchUp 应为 true 以续出追帧");
+
+        // justFinished -> next (另一份后缓冲合成完成)
+        c = CanvasTileCache.NextCatchUpFrames(c, wasPending: false, hasPending: false);
+        Check.Equal(1, c);
+        Check.True(!(c > 1), "追帧后 HasTileCatchUp 应降为 false（停止续帧）");
+
+        // next -> idle
+        c = CanvasTileCache.NextCatchUpFrames(c, wasPending: false, hasPending: false);
+        Check.Equal(0, c);
+    }
+
     /// <summary>原始点集到"保留折线"的最大垂距（验证抽稀误差上界）。</summary>
     private static float MaxDeviationFromPolyline(List<InkPoint> origin, List<InkPoint> kept)
     {

@@ -748,8 +748,8 @@ public partial class InkEngine
             WindowOpacity = WindowOpacityPresets.Snap(wOpPref);
         // **左右边缘翻页条**（2026-11-25）：默认关，只认 "1"。
         _pageEdge.Enabled = GetUiPref("pageEdge") == "1";
-        // **工具栏只在 PPT 显示**（2026-11-25）：默认关，只认显式的 "1"。
-        BarOnlyPpt = GetUiPref("barOnlyPpt") == "1";
+        // **非课件时工具栏**（沿用 "barOnlyPpt" 键）："1"=仅 PPT 显示，"stow"=收球贴边，其余=保持显示。
+        BarIdleMode = ParseBarIdleMode(GetUiPref("barOnlyPpt"));
         for (int i = 0; i < args.Length - 1; i++)
             if (args[i] == "--uiscale" && float.TryParse(args[i + 1],
                     System.Globalization.NumberStyles.Float,
@@ -805,8 +805,9 @@ public partial class InkEngine
         if (mode.Length > 0 && !args.Contains("--hud")) ShowHud = false;
 
         // 界面是在 RunModeDispatch 里 Attach 的：先把“后台待命”的穿透态摆好，
-        // FullUi 首次 Attach 才能据此收成小球而不是展开工具条。
-        if (StartupMode) SetPassThrough(true, restoreBoard: false);
+        // FullUi 首次 Attach 才能据此收成小球而不是展开工具条；「仅 PPT 显示」同理防重启锁死桌面。
+        if (StartupMode || (!SelfCheckMode && BarSuppressedNow && !PassThrough))
+            SetPassThrough(true, restoreBoard: false);
 
         int dispatch = RunModeDispatch(mode, args);
         if (dispatch >= 0)
@@ -1200,11 +1201,11 @@ public partial class InkEngine
         Host?.UpdateScreen(UiLogicalScreen);
         Host?.UpdateWorkArea(UiLogicalWorkArea);
 
-        // 托盘图标（2026-11-25）：**必须等窗口建完**（Shell_NotifyIcon 要有真 hwnd）。
-        // 自检模式不建：几十个自检进程各往托盘塞一个图标，用户托盘就废了。
-        // 显不显由主循环每帧 `Update(WantTray)` 决定（只在工具条被藏起来时需要）。
+        // 托盘图标：自检模式不建，显隐由主循环每帧 Update(WantTray) 决定。
         if (!SelfCheckMode && _windows.Count > 0)
-            _tray = new TrayIcon(_windows[0].Hwnd, ShowSettingsFromTray, QuitFromUi);
+            _tray = new TrayIcon(_windows[0].Hwnd, ToggleBarFromTray, ExitPptOnlyFromTray,
+                ShowSettingsFromTray, QuitFromUi, () => !BarSuppressedNow);
+
         Console.WriteLine($"DPI 缩放 {DpiScale:F2}（逻辑 {_windows[0].Width / DpiScale:F0}x{_windows[0].Height / DpiScale:F0}），"
                           + $"界面缩放 {UiScale:F2}（{UiScalePresets.Name(UiScale)}）");
 
@@ -1439,7 +1440,7 @@ public partial class InkEngine
             StepDocResume();                  // 文档阅读位置的节流保存（跨会话"继续"用）
             StepPptBar();                     // 底部那条：引导过期 / "再点确认"过期（没有长按了）
             StepPageEdge();                   // 左右翻页条：显隐动画 / 穿透下的接输入小窗
-            _tray?.Update(WantTray);          // 托盘：只在工具条被藏起来时露出来（幂等）
+            _tray?.Update(WantTray);          // 托盘：「仅 PPT 显示」桌面零痕迹时常驻（幂等）
             StepToast();                      // 轻提示到点自动消失（2s，不吞输入）
             StepSelectionMenu();              // 选中被清空时弹层跟着关
             StepEngineTooltip();              // 引擎侧悬停提示的 500ms 延迟（到点点亮）
@@ -1660,7 +1661,45 @@ public partial class InkEngine
 
         // 冻结页（半透明白板）只画 1× 底图 → 整层不建补丁。
         patch.Sync(canvases[driver], NowMs, BoardFrozenDocActive ? BoardFrozenDocPage : -1,
-                   busy: _drawing || _textBoxEditing || _camAnimating);
+                   busy: _drawing || _textBoxEditing || _camAnimating || _docPanDragging || DocPanFlingActive);
+    }
+
+    internal long DocViewSyncedFrame;
+
+    private void SyncDocViewWindow()
+    {
+        if (_windows.Count == 0)
+        {
+            SyncDocViewWindow(ViewportCanvas.MinY, ViewportCanvas.MaxY);
+            return;
+        }
+        float minY = float.PositiveInfinity, maxY = float.NegativeInfinity;
+        foreach (var w in _windows)
+        {
+            var r = w.VisibleCanvasRect;
+            if (r.IsEmpty) continue;
+            if (r.MinY < minY) minY = r.MinY;
+            if (r.MaxY > maxY) maxY = r.MaxY;
+        }
+        if (minY <= maxY) SyncDocViewWindow(minY, maxY);
+        else DocViewSyncedFrame = FrameCounter;
+    }
+
+    internal void SyncDocViewWindow(float minY, float maxY)
+    {
+        DocViewSyncedFrame = FrameCounter;
+        if (!DocView.IsOpen) return;
+        bool hidden = PassThrough || (BoardOn && BoardOpacity >= 0.999f);
+        bool keepFrozen = BoardFrozenDocPage >= 0;
+        if (hidden && keepFrozen) { DocView.ReleaseAllExceptPinned(); DocPatch?.ReleaseAll(); }
+        else if (hidden) { DocView.ReleaseAll(); DocView.StopWanting(); DocPatch?.ReleaseAll(); }
+        else
+        {
+            int adopted = DocView.SyncWindow(minY, maxY, 1, DocMemory.CacheMarginScreens);
+            if (adopted > 0)
+                Console.WriteLine($"[文档] 页缓存 {DocView.ResidentPages} 页 / "
+                    + $"{DocView.ResidentBytes / 1048576.0:F1} MB");
+        }
     }
 
     /// <summary>
@@ -1784,6 +1823,7 @@ public partial class InkEngine
         StepToast();      // 轻提示到点消失（2s；自检也用"抽消息＋渲染"驱动）
         StepSelectionMenu(); // 选中被清空时弹层跟着关（自检也走这一条）
         StepTouchFling(); // 双指纵滑松手后的惯性（每帧衰减；自检也走这一条）
+        StepDocPanFling(); // PDF 手掌拖页松手后的惯性（每帧衰减；自检也走这一条）
         StepTimerCard();  // 课堂计时卡片同理：自检用"抽消息＋渲染"驱动，不走主循环
         StepRollCard();   // 课堂点名卡片同理
         PumpRadialPalette();   // 呼出盘同理：自检用"抽消息＋渲染"驱动，不走主循环
@@ -1825,6 +1865,9 @@ public partial class InkEngine
             w.ViewOffsetY = renderCamY;
             w.ViewScale = ViewScale;      // 阶段 1 = 1：渲染层先接上，不改观感
         }
+
+        // 文档页窗口：**每帧只同步一次**（按所有窗口可见画布并集），排在 SyncDocPatch 之前。
+        SyncDocViewWindow();
 
         // 高清补丁：**每帧一次、由引擎挑驱动窗口**（相机已经推给各窗口，所以这里算出来的
         // 可见矩形就是这一帧真正要画的那块）。判据见 ChooseDocPatchDriver。
@@ -1895,10 +1938,12 @@ public partial class InkEngine
         // 本帧的页层版本水位（下一帧据此判断"页图是不是刚变过、要不要全画"）。
         if (scene.Valid) SkipFrameState.Host.PagesVersionBaseline = pagesVerAtFrameStart;
 
-        // 补丁脏区是**广播**的：每个窗口都要把这块分块重铺一遍，所以**所有**窗口都渲染完之后
+        // 补丁/页层脏区是**广播**的：每个窗口都要把这块分块重铺一遍，所以**所有**窗口都渲染完之后
         // 才由引擎清（哪个窗口先清，后面的窗口就漏铺 → 副屏留着上一张高清图）。
         // 见 `OverlayWindow.SyncDocPages` 里那段"只标记、不清单"。
         DocPatch?.DirtyRects.Clear();
+        DocView.FullDirty = false;
+        DocView.DirtyRects.Clear();
 
         // **高压保险丝**（2026-11-25）：喂进去的是"这一帧**真的在做事**的墙钟"——从帧首到这里，
         // **不含** `Present` 的垂直同步阻塞（60Hz 下每次都要等 ~16ms，算进去的话会永远高压，
@@ -2184,19 +2229,17 @@ public partial class InkEngine
         if (msg == Native.WM_TABLET_QUERYSYSTEMGESTURESTATUS)
             return new IntPtr(Native.TABLET_DISABLE_PRESSANDHOLD);
 
+        // explorer 重启后任务栏会重发 TaskbarCreated：重新挂回托盘图标。
+        if (_tray != null && msg != 0 && msg == TrayIcon.TaskbarCreatedMessage)
+        {
+            _tray.HandleTaskbarCreated();
+            return IntPtr.Zero;
+        }
+
         // 第二个进程双击启动：叫醒已有实例（退出穿透 + 展开工具条）。
         if (msg == Native.WM_INKTEACH_ACTIVATE)
         {
             ActivateFromExternal();
-            return IntPtr.Zero;
-        }
-
-        // explorer 重启（任务栏重生）：托盘图标跟着没了，**重新加一次**。
-        // 不接这一条的话：老师重启一次资源管理器，兜底入口永久消失——
-        // 而那时工具栏很可能正被「只在 PPT 显示」藏着，等于软件打不开了。
-        if (_tray != null && msg != 0 && msg == TrayIcon.TaskbarCreatedMessage)
-        {
-            _tray.HandleTaskbarCreated();
             return IntPtr.Zero;
         }
 
@@ -2343,6 +2386,7 @@ public partial class InkEngine
                 // 否则手一移开，屏幕上就留下一个圈。
                 PointerInside = false;
                 ClearEngineTooltip();          // 悬停提示同理：人走了，提示不能留在屏幕上
+                if (!_pageEdge.Capturing) PageEdgePointerLeft();
                 _dirty = true;
                 ApplyCursor();
                 // 注意：**这里不能叫 Ui.PointerLeave()**。覆盖层的"离开"在面板接管输入时
@@ -2353,6 +2397,7 @@ public partial class InkEngine
             case Native.WM_MOUSELEAVE:
                 PointerInside = false;
                 ClearEngineTooltip();
+                if (!_pageEdge.Capturing) PageEdgePointerLeft();
                 _dirty = true;
                 ApplyCursor();
                 return IntPtr.Zero;
@@ -2394,6 +2439,8 @@ public partial class InkEngine
                 _cntCaptureLost++;
                 CancelLibraryPanelDrag();
                 CancelLibraryTouchScroll();
+                _pageEdge.Release();
+                EndDocPan(allowFling: false);
                 EndStroke();
                 return IntPtr.Zero;
 
@@ -2430,6 +2477,7 @@ public partial class InkEngine
                 // 纯属白烧电。
                 if (ShowHud) _dirty = true;
                 UpdateScrollBarHoverFromCursor();
+                ClearStalePassThroughUiHover();
                 var swTop = Stopwatch.StartNew();
                 ReassertTopmost();
                 swTop.Stop();
@@ -2445,13 +2493,12 @@ public partial class InkEngine
                 RequestFullFrames();
                 return IntPtr.Zero;
 
-            // 托盘图标（「工具栏只在 PPT 显示」的兜底入口）。
-            case Native.WM_INKTRAY:
-                _tray?.HandleMessage(wParam, lParam);
-                return IntPtr.Zero;
-
             case Native.WM_CLOSE:
                 _quit = true;
+                return IntPtr.Zero;
+
+            case Native.WM_INKTRAY:
+                _tray?.HandleMessage(wParam, lParam);
                 return IntPtr.Zero;
         }
         return Native.DefWindowProc(hWnd, msg, wParam, lParam);
@@ -2496,9 +2543,17 @@ public partial class InkEngine
         // 接输入小窗**必须排在最后抬**：两块都是置顶窗口，谁最后 SetWindowPos
         // 谁在上面（见 计划-底层对接界面.md 4.1 的"层序"纪律）。只在这一处抬，
         // 别处不许再抬它，否则会出现"面板偶尔被自己的笔迹层盖住"。
-        if (_uiInputShown && _uiInputHwnd != IntPtr.Zero)
-            Native.SetWindowPos(_uiInputHwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
-                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+        static void ReassertInput(IntPtr hwnd, bool shown)
+        {
+            if (shown && hwnd != IntPtr.Zero)
+                Native.SetWindowPos(hwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
+                    Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+        }
+        ReassertInput(_uiInputHwnd, _uiInputShown);
+        ReassertInput(_pptInputHwnd, _pptInputShown);
+        ReassertInput(_timerInputHwnd, _timerInputShown);
+        ReassertInput(_rollInputHwnd, _rollInputShown);
+        _pageEdge.ReassertTopmost();
     }
 
     /// <summary>
@@ -2547,6 +2602,7 @@ public partial class InkEngine
         if (SelFlashing) d |= FrameDrive.Selection;
         if (LibraryFeedbackActive) d |= FrameDrive.Selection;
         if (UiIsAnimatingNow) d |= FrameDrive.UiAnim;
+        if (PageEdgeVisible && _pageEdge.Animating) d |= FrameDrive.UiAnim;
         if (_camAnimating) d |= FrameDrive.Camera;
         if (_replayPlaying) d |= FrameDrive.Replay;
         if (TimerWantsFrame) d |= FrameDrive.Timer;
@@ -2557,14 +2613,15 @@ public partial class InkEngine
         // 缩放停手后的"换分块倍率"是一个**定时待办**（防抖 120ms）：不算进这里，
         // 界面不再置脏时主循环会睡在 WaitMessage 上，倍率永远换不了（拉伸糊图常驻）。
         if (_windows.Exists(w => w.TileScalePending)) d |= FrameDrive.Dirty;
-        // 分帧烘焙没做完：下一帧继续烘（烘干净后 HasPendingDirtyTiles 归 false，立刻回空闲 0 FPS）。
-        if (_windows.Exists(w => w.HasPendingDirtyTiles)) d |= FrameDrive.Dirty;
+        // 分帧烘焙没做完或刚收尾追帧：下一帧继续烘/合成（补齐双缓冲后归 0 FPS）。
+        if (_windows.Exists(w => w.HasPendingDirtyTiles || w.HasTileCatchUp)) d |= FrameDrive.Dirty;
         // 文档高清补丁：>100% 且"还缺补丁 / 等落稳 120ms / 有请求在飞"→ 定时待办。
         // 和分块倍率同一个理由：界面不再置脏时主循环会睡在 WaitMessage 上，补丁排不出来。
         // 缩回 100% 后的一次性空闲清理也由它报（待办期间即使 100% 也返回 true）。
         if (DocPatch is { WantsFrame: true }) d |= FrameDrive.Dirty;
         if (AlignSnapPulseActive) d |= FrameDrive.Align;
         if (_g2FlingActive) d |= FrameDrive.TouchFling;
+        if (DocPanFlingActive) d |= FrameDrive.TouchFling;
         // 后台"打开墨迹"在跑：继续出帧（提示可见、结果一到就采纳；否则主循环会睡在
         // WaitMessage 上等鼠标，加载中看起来像卡住）。
         if (InkOpenBusy) d |= FrameDrive.Dirty;

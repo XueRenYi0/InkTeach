@@ -301,6 +301,7 @@ public partial class InkEngine
 
         // 界面之外的穿透：交下层窗口，我们不收这一下。
         if (PassThrough) return;
+        if (DocPanFlingActive) StopDocPanFling();
 
         // 文档「手掌」（2026-11-15：PDF 像放映）：文档模式里手掌开着时，**画布按下 = 拖页**——
         // 不落墨、不选中、不进文本/图形。排在穿透之后（穿透下根本收不到这一下）、

@@ -294,4 +294,77 @@ internal sealed class PageEdgeBar : IDisposable
         Capturing = false;
         HoverCell = -1;
     }
+
+    /// <summary>周期性重申接输入小窗的置顶顺序（在覆盖层之上）。</summary>
+    internal void ReassertTopmost()
+    {
+        for (int i = 0; i < 2; i++)
+            if (_inputShown[i] && _inputHwnd[i] != IntPtr.Zero)
+                Native.SetWindowPos(_inputHwnd[i], Native.HWND_TOPMOST, 0, 0, 0, 0,
+                    Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+    }
+
+    // ---- 多屏屏幕矩形缓存（避免每帧绘制/命中多次 EnumWindows）----
+    private RectF _cachedScreen;
+    private double _cachedScreenAtMs = double.NegativeInfinity;
+    private bool _cachedScreenPpt;
+    private int _cachedScreenWinCount;
+
+    /// <summary>
+    /// 多屏下解析翻页条应该贴哪一块屏幕的物理矩形（500ms 节流缓存，防热路径反复 EnumWindows）。
+    /// 放映时优先跟放映窗中心所在屏；非放映或找不到放映窗时跟包含主屏原点 (0,0) 的窗。
+    /// </summary>
+    internal RectF ResolveScreenRect(double nowMs, bool pptMode, IReadOnlyList<OverlayWindow> windows,
+                                     float primaryW, float primaryH, RectF fallback)
+    {
+        if (windows == null || windows.Count <= 1) return fallback;
+        if (!_cachedScreen.IsEmpty && _cachedScreenPpt == pptMode
+            && _cachedScreenWinCount == windows.Count && nowMs - _cachedScreenAtMs < 500.0)
+            return _cachedScreen;
+
+        var rect = ComputeScreenRect(pptMode, windows, primaryW, primaryH, fallback);
+        _cachedScreen = rect;
+        _cachedScreenAtMs = nowMs;
+        _cachedScreenPpt = pptMode;
+        _cachedScreenWinCount = windows.Count;
+        return rect;
+    }
+
+    private static RectF ComputeScreenRect(bool pptMode, IReadOnlyList<OverlayWindow> windows,
+                                           float primaryW, float primaryH, RectF fallback)
+    {
+        if (windows == null || windows.Count <= 1) return fallback;
+
+        static RectF WindowRect(OverlayWindow w) => new()
+        {
+            MinX = w.OriginX, MinY = w.OriginY,
+            MaxX = w.OriginX + w.Width, MaxY = w.OriginY + w.Height,
+        };
+        static bool Contains(in RectF r, float x, float y)
+            => x >= r.MinX && x < r.MaxX && y >= r.MinY && y < r.MaxY;
+
+        if (pptMode)
+        {
+            var show = PptLaunch.FindShowWindow(out _);
+            if (show != IntPtr.Zero && Native.GetWindowRect(show, out var sr))
+            {
+                float cx = (sr.Left + sr.Right) * 0.5f;
+                float cy = (sr.Top + sr.Bottom) * 0.5f;
+                foreach (var w in windows)
+                {
+                    var wr = WindowRect(w);
+                    if (Contains(wr, cx, cy)) return wr;
+                }
+            }
+        }
+
+        foreach (var w in windows)
+        {
+            var wr = WindowRect(w);
+            if (Contains(wr, 0f, 0f)) return wr;
+        }
+        if (primaryW > 0f && primaryH > 0f)
+            return new RectF { MinX = 0f, MinY = 0f, MaxX = primaryW, MaxY = primaryH };
+        return fallback;
+    }
 }

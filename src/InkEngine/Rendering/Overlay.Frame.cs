@@ -57,8 +57,8 @@ internal sealed partial class OverlayWindow
         }
 
         _tiles.Sync(VisibleCanvasRect, RasterizeTile, budget, focusX, focusY);
-        // 本帧没烘完：下帧必须继续合成（主循环由 NeedsFrame 续帧），否则旧画面会停住。
-        if (_tiles.HasPendingDirtyTiles)
+        // 本帧没烘完或刚烘完需追帧：下帧继续合成（主循环由 NeedsFrame 续帧），否则旧画面会停住。
+        if (_tiles.HasPendingDirtyTiles || _tiles.CatchUpFramesLeft > 0)
             _fullFramesLeft = Math.Max(_fullFramesLeft, 1);
     }
 
@@ -117,22 +117,33 @@ internal sealed partial class OverlayWindow
     internal void AbsorbDocDeltaWithoutRender(InkEngine app)
     {
         var doc = app.RenderDoc;
-        if (_tilesVersion == doc.Version) return;
-        if (doc.Dirty.Full)
+        if (_tilesVersion != doc.Version)
+        {
+            if (doc.Dirty.Full)
+            {
+                _tiles.MarkAllDirty();
+                _fullFramesLeft = 2;
+            }
+            else if (doc.StructureChangedSinceRender)
+            {
+                _tiles.FlushAppendsAsDirty();
+                foreach (var r in doc.Dirty.Rects) _tiles.MarkDirty(r);
+            }
+            else
+            {
+                foreach (var s in doc.AppendedSinceRender) _tiles.MarkAppend(s);
+            }
+            _tilesVersion = doc.Version;
+        }
+
+        if (app.DocView.FullDirty)
         {
             _tiles.MarkAllDirty();
             _fullFramesLeft = 2;
         }
-        else if (doc.StructureChangedSinceRender)
-        {
-            _tiles.FlushAppendsAsDirty();
-            foreach (var r in doc.Dirty.Rects) _tiles.MarkDirty(r);
-        }
-        else
-        {
-            foreach (var s in doc.AppendedSinceRender) _tiles.MarkAppend(s);
-        }
-        _tilesVersion = doc.Version;
+        foreach (var r in app.DocView.DirtyRects) _tiles.MarkDirty(r);
+        if (app.DocPatch is { } patch)
+            foreach (var r in patch.DirtyRects) _tiles.MarkDirty(r);
     }
 
     public void RenderFrame(InkEngine app)

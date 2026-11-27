@@ -940,6 +940,7 @@ public sealed partial class FullUi
             Row.HistoryDays => HistoryDaysName(_host.GetPref("historyDays")),
             Row.UiSize => UiScalePresets.Name(_host.UiScale),
             Row.WindowOpacity => $"{(int)MathF.Round(_host.State.WindowOpacity * 100f)}%",
+            Row.BarOnlyPpt => BarIdleModeName(_host.State.BarIdleMode),
             Row.Language => Loc.DisplayName(PendingLangPref),
             Row.TouchMode => _host.State.TouchGesturesOn ? "手势" : "单指",
             Row.AiApi => "管理…",
@@ -974,6 +975,13 @@ public sealed partial class FullUi
                               10f, Brush(ctx, MutedCol), center: true);
         }
     }
+
+    private static string BarIdleModeName(BarIdleMode mode) => mode switch
+    {
+        BarIdleMode.StowEdge => "收球贴边",
+        BarIdleMode.PptOnlyTray => "仅 PPT 显示",
+        _ => "保持显示",
+    };
 
     private void ActivateHub(int code)
     {
@@ -1156,20 +1164,19 @@ public sealed partial class FullUi
 
     private Vector2 ComputeShift()
     {
+        if (BandSuppressed) return Vector2.Zero;
         // 面板开着（或开合动画中）一律不平移：模态面板必须纹丝不动，
         // 而且它此刻占的就是整块屏幕——跟着贴边位移会立刻被夹回，看着会跳。
         // 全屏模态（更多 / 使用说明页）不做贴边隐藏的平移：命中矩形和绘制都按屏幕坐标算。
         if (_moreOpen || _more.Running) return Vector2.Zero;
-        if (!_hideEnabled) return Vector2.Zero;
+        if (!EffectiveAutoHide) return Vector2.Zero;
         float t = 1f - _peek.Value;
         if (t <= 0.001f) return Vector2.Zero;
 
+        if (!DockNearBottom) return Vector2.Zero;      // 不够近：不藏
+
         var u = UnionRect();
         float h = u.MaxY - u.MinY;
-        // 判定：面板底边离**屏幕**底边还有多少（负数 = 已经压过屏幕底，也算贴底）。
-        float db = _screen.MaxY - u.MaxY;
-        if (db > Tokens.DockHideDistance) return Vector2.Zero;      // 不够近：不藏
-
         // 位移量按**屏幕**底边（见上面那段论证）。
         float sb = _screen.MaxY - u.MaxY;
         return new Vector2(0, (h - Tokens.DockPeek + sb) * t);
@@ -1197,7 +1204,25 @@ public sealed partial class FullUi
 
     private void UpdatePeek()
     {
-        if (!_hideEnabled) { _peek.To(1f, 0); _peekPendingCollapse = false; return; }
+        if (!EffectiveAutoHide)
+        {
+            if (!(_peek.Running && _peek.Target >= 0.99f)) _peek.To(1f, 0);
+            _peekPendingCollapse = false;
+            return;
+        }
+        if (_autoStowPendingPeek)
+        {
+            _peekPendingCollapse = false;
+            if (_expand.Running)
+            {
+                _peek.To(1f, 0);
+                return;
+            }
+            _autoStowPendingPeek = false;
+            _leftAtMs = double.NegativeInfinity;
+            _peek.To(0f, Tokens.SnapMs);
+            return;
+        }
 
         // **启动之后先不藏**（用户 2026-09-17："在贴边隐藏的情况下，刚启动软件的时候不要隐藏"）。
         //
@@ -1284,6 +1309,7 @@ public sealed partial class FullUi
 
     public bool PointerDown(in UiPointerEvent e)
     {
+        if (BandSuppressed && !_moreOpen && !_aiOpen) return false;
         var p = Local(e);
         _settingsFocusVisible = false;        // 鼠标/触摸一按，键盘焦点环先让位（保留 FocusedId）
         _pressId = e.PointerId;                // 这一按是谁按的（长按期间挡别的指针）
@@ -1563,6 +1589,12 @@ public sealed partial class FullUi
 
     public bool PointerMove(in UiPointerEvent e)
     {
+        if (BandSuppressed && !_moreOpen && !_aiOpen)
+        {
+            if (_hover != -1) { _hover = -1; Invalidate(); }
+            HideTip();
+            return false;
+        }
         // 触摸长按计时 / 提示停留期间：**别的指针**（停着的鼠标、笔悬停）的移动不许搅局。
         // 引擎会把窗口收到的所有移动都转给界面（UiCapturing 分支），少了这一道，
         // 鼠标随手动一下就被当成"手指滑走了"（2026-10-02 自检实测 569px 假移动）。
@@ -1805,6 +1837,15 @@ public sealed partial class FullUi
 
     public bool PointerUp(in UiPointerEvent e)
     {
+        if (BandSuppressed && !_moreOpen && !_aiOpen)
+        {
+            _press = -1;
+            _morePress = -1;
+            _dragging = false;
+            _sliderDragging = false;
+            CancelTipHold();
+            return false;
+        }
         // 色板在这一按里被关掉了：抬起也归它，不再走普通工具条路径。
         if (_penPickerDismissUp)
         {
@@ -1961,6 +2002,12 @@ public sealed partial class FullUi
     private void Toggle()
     {
         bool collapse = _expand.Value > 0.5f;
+        if (!collapse)
+        {
+            _autoStowed = false;
+            _autoStowPendingPeek = false;
+            if (_peek.Value < 0.99f) _peek.To(1f, Tokens.SnapMs);
+        }
         // 系统关掉动画时直接跳终态（教室里老机器上很常见）
         _expand.To(collapse ? 0f : 1f, collapse ? Tokens.CollapseMs : Tokens.ExpandMs);
 
@@ -2002,6 +2049,7 @@ public sealed partial class FullUi
         // **点之前是不是在穿透**：穿透下点笔 / 荧光笔格 = "我要回来写字"，这一次**不许顺手换色**
         //（和键盘 Ctrl+P 同一条：穿透先退出、第二步才谈换色。2026-10-05 用户报的 bug）。
         bool wasPassThrough = st.PassThrough;
+        bool wasDocPan = st.DocPanMode;
 
         // **点了别的格子 = 选择格那次"双击"序列到此为止**。
         // 不这么做的话，"选择格 →（200ms）笔格 →（200ms）选择格"会被算成对选择格的双击，
@@ -2083,11 +2131,11 @@ public sealed partial class FullUi
             //   `SetTool` 是幂等的（工具没变时只做清理），重复调没有副作用。
             case 3:
                 cmd.SetTool(Tool.Pen);
-                if (prevBand == 3 && !wasPassThrough) CycleColor();
+                if (prevBand == 3 && !wasPassThrough && !wasDocPan) CycleColor();
                 break;
             case 4:
                 cmd.SetTool(Tool.Highlighter);
-                if (prevBand == 4 && !wasPassThrough) CycleColor();
+                if (prevBand == 4 && !wasPassThrough && !wasDocPan) CycleColor();
                 break;
             case 5: cmd.SetTool(Tool.Laser); break;
             case 6:
@@ -2288,13 +2336,59 @@ public sealed partial class FullUi
         // 理由是他刚用完笔，回桌面还要接着写板书，再收起来等于多一步。
         if (state.PptMode && !_lastPpt)
         {
+            _autoStowed = false;
+            _autoStowPendingPeek = false;
             _anchor = null;                       // 回默认位置（工作区底边居中）
             _peek.Jump(1f);                       // 贴边隐藏开着的话，也先完整露出来
             _leftAtMs = _host.NowMs;              // 这次"露面"重新计离开时间
             if (_expand.Value < 0.5f) _expand.To(1f, Tokens.ExpandMs);
             else _expand.Jump(1f);
         }
+        else if ((state.DocOpen && !_lastDocOpen) || (state.Board && !_lastBoardOn))
+        {
+            bool needReveal = _autoStowed || _expand.Value < 0.5f || _peek.Value < 0.99f;
+            _autoStowed = false;
+            _autoStowPendingPeek = false;
+            if (needReveal)
+            {
+                if (_peek.Value < 0.99f) _peek.To(1f, Tokens.SnapMs);
+                if (_expand.Value < 0.5f) _expand.To(1f, Tokens.ExpandMs);
+                _leftAtMs = _host.NowMs;
+            }
+        }
+        else if (state.BarIdleMode != BarIdleMode.StowEdge && _autoStowed)
+        {
+            _autoStowed = false;
+            _autoStowPendingPeek = false;
+            if (!_hideEnabled) _peek.To(1f, Tokens.SnapMs);
+        }
+        else if (((!state.PptMode && _lastPpt) || (!state.DocOpen && _lastDocOpen))
+                 && state.BarIdleMode == BarIdleMode.StowEdge
+                 && !state.PptMode && !state.DocOpen && !state.Board)
+        {
+            _autoStowed = true;
+            _autoStowPendingPeek = true;
+            _peekArmed = true;
+            _anchor = null;                          // 归位到底边，保证能贴边隐藏
+            _railHover = false;
+            _railEnterAtMs = _railExitAtMs = double.NegativeInfinity;
+            _rail.To(0f, Tokens.RailMs);
+            _penPickerOpen = false;
+            _textFontMenuOpen = false;
+            _aiMenuOpen = false;
+            if (_expand.Value > 0.01f) _expand.To(0f, Tokens.CollapseMs);
+            else _expand.Jump(0f);
+        }
+        if (state.BarSuppressed)
+        {
+            _penPickerOpen = false;
+            _textFontMenuOpen = false;
+            _aiMenuOpen = false;
+            _railHover = false;
+        }
         _lastPpt = state.PptMode;
+        _lastDocOpen = state.DocOpen;
+        _lastBoardOn = state.Board;
 
         Invalidate();
     }

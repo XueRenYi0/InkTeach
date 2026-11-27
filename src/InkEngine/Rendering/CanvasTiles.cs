@@ -192,6 +192,15 @@ internal sealed class CanvasTileCache : IDisposable
     public bool HasPendingDirtyTiles { get; private set; }
 
     /// <summary>
+    /// 追帧计数器：分帧烘焙刚收尾那一帧后缓冲 B 还留着旧像素，多续一帧把两份后缓冲全补齐。
+    /// </summary>
+    public int CatchUpFramesLeft { get; private set; }
+
+    /// <summary>纯状态转移：计算下一帧的 <see cref="CatchUpFramesLeft"/>。</summary>
+    internal static int NextCatchUpFrames(int current, bool wasPending, bool hasPending)
+        => (hasPending || wasPending) ? 2 : (current > 0 ? current - 1 : 0);
+
+    /// <summary>
     /// 正常书写/擦除时一帧给分块光栅化的预算（毫秒）。
     ///
     /// 取 9ms：60Hz 一帧 16.7ms，留 7ms 给界面、合成、输入和 GPU 提交；
@@ -413,9 +422,14 @@ internal sealed class CanvasTileCache : IDisposable
         RasterMsLastFrame = 0;
         AppendedMsLastFrame = 0;
         StrokesLastFrame = 0;
+        bool wasPending = HasPendingDirtyTiles;
         HasPendingDirtyTiles = false;
 
-        if (visibleCanvas.IsEmpty) return;
+        if (visibleCanvas.IsEmpty)
+        {
+            CatchUpFramesLeft = NextCatchUpFrames(CatchUpFramesLeft, wasPending, false);
+            return;
+        }
 
         int x0 = FirstIdx(visibleCanvas.MinX), x1 = LastIdx(visibleCanvas.MaxX);
         int y0 = FirstIdx(visibleCanvas.MinY), y1 = LastIdx(visibleCanvas.MaxY);
@@ -439,6 +453,7 @@ internal sealed class CanvasTileCache : IDisposable
                 RasterWhole(tile, paint, createMs);
         }
         _dirtyScratch.Clear();
+        CatchUpFramesLeft = NextCatchUpFrames(CatchUpFramesLeft, wasPending, HasPendingDirtyTiles);
 
         Trim();
     }
@@ -710,6 +725,7 @@ internal sealed class CanvasTileCache : IDisposable
         foreach (var t in _tiles.Values) Release(t);
         _tiles.Clear();
         _visible.Clear();
+        CatchUpFramesLeft = 0;
     }
 
     public void Dispose() => Reset();

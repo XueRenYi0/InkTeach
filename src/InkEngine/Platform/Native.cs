@@ -914,14 +914,7 @@ internal static class Native
     public const uint WM_INKTEACH_ACTIVATE = 0x8000 + 0x51;
 
     // ======================================================================
-    //  系统托盘（Shell_NotifyIcon；2026-11-25「工具栏只在 PPT 显示」的兜底入口）
-    //
-    //  为什么需要它：主窗口是 `WS_EX_TOOLWINDOW`（**不占任务栏**）。工具条一旦被
-    //  设置藏起来，屏幕上就没有任何入口能打开设置或退出——老师只能去任务管理器。
-    //  托盘是这类"无主窗口常驻小工具"的标准兜底（微信输入法、PowerToys 都是这么做的）。
-    //
-    //  只在"工具条真的被藏起来"时显示（见 TrayIcon.Update 的 wanted 判据）：
-    //  平时屏幕上就有球和工具条，再挂一个托盘图标是噪音。
+    //  系统托盘（Shell_NotifyIcon；「仅 PPT 显示」桌面零痕迹时的兜底入口）
     // ======================================================================
 
     /// <summary>托盘回调消息（WM_APP + 0x52）。**0x51 已被"激活"占用，别复用**。</summary>
@@ -993,8 +986,7 @@ internal static class Native
 
     /// <summary>
     /// 「任务栏重生了」（explorer.exe 重启 / 登录时还没起来）。**托盘图标会跟着消失**，
-    /// 必须收到这条消息后重新 NIM_ADD——否则老师下次重启资源管理器就再也找不到入口。
-    /// 消息号要用 <see cref="RegisterWindowMessageW"/> 现问（每个会话可能不同）。
+    /// 必须收到这条消息后重新 NIM_ADD。
     /// </summary>
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern uint RegisterWindowMessageW(string name);

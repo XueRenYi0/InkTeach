@@ -220,7 +220,8 @@ public partial class InkEngine
         BoardOpacity = BoardOpacity,
         WindowOpacity = WindowOpacity,
         PageEdgeOn = _pageEdge.Enabled,
-        BarOnlyPpt = BarOnlyPpt,
+        BarIdleMode = BarIdleMode,
+        BarSuppressed = BarSuppressedNow,
         CaptureHideInk = CaptureHideInk,
         SelectMode = SelMode,
         CoordGridDefault = CoordGridDefault,
@@ -938,18 +939,6 @@ public partial class InkEngine
     }
 
     internal void QuitFromUi() => _quit = true;
-
-    /// <summary>
-    /// 托盘「打开设置」（2026-11-25）。**不要动穿透 / 工具**：面板是全屏模态
-    /// （QueryBounds = 整屏 → NCHITTEST 会把点击留给我们），穿透开着也能点；
-    /// 关掉面板后老师还是原来的模式，"为点面板而强行退出穿透"反而会让整屏点不动。
-    /// </summary>
-    internal void ShowSettingsFromTray()
-    {
-        if (Ui != null) UiGuard("ShowSettings", () => Ui.ShowSettings());
-        _dirty = true;
-        NotifyUiStateChanged();
-    }
 
     // ---- 浮层主题（选中操作条 / 小面板用它画）-----------------------------
 

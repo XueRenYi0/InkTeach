@@ -806,6 +806,7 @@ internal sealed partial class OverlayWindow
         _scratch?.Dispose();
         _readoutFormat?.Dispose();
         _readoutFormatSmall?.Dispose();
+        _pageEdgeFmt?.Dispose(); _pageEdgeFmt = null;
         _hudFormat?.Dispose();
         _hudSource?.Dispose();
         _hudTarget?.Dispose();
@@ -819,6 +820,7 @@ internal sealed partial class OverlayWindow
         _ctx?.Dispose();
         _inkVisual?.Dispose();
         _swapVisual?.Dispose();
+        _opacityFx.Dispose();
         _visual?.Dispose();
         _target?.Dispose();
         _dcomp?.Dispose();

@@ -70,17 +70,17 @@ internal sealed class WindowOpacityFx : IDisposable
     {
         if (_effect == null || dcomp == null) return;
         if (MathF.Abs(_applied - opacity) <= 0.001f) return;
-        _applied = opacity;
         try
         {
-            _effect.SetOpacity(_applied).CheckError();
+            _effect.SetOpacity(opacity).CheckError();
             dcomp.Commit().CheckError();
+            _applied = opacity;
         }
         catch
         {
             // 合成器那边不接受（设备丢了 / 正在重建）：标成不可用，
             // 下一帧不再尝试；重建设备资源时会重新 Create。
-            _applied = opacity;
+            Reset();
         }
     }
 

@@ -443,6 +443,7 @@ public partial class InkEngine
     {
         ExitReplayForEdit("进放映");
         PptMode = true;
+        BarTempShown = false;
         PptZoomMenuOpen = false;        // 文档模式的缩放浮层不许跨模式残留（PPT 条没有缩放组）
         SyncPptHotkeys();              // 放映临时全局键：挂上（穿透开着则不挂，见 Engine.PptHotkeys）
         _pptKey = s.Key ?? "";

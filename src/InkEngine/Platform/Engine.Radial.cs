@@ -690,6 +690,7 @@ public partial class InkEngine
         Doc.Selected.Clear();
         foreach (var s in Doc.Strokes) Doc.Selected.Add(s);
         Tool = Tool.Marquee;
+        ExitDocPan("全选");
         NotifyUiStateChanged();
     }
 

@@ -1907,7 +1907,7 @@ public sealed partial class FullUi
     private static bool IsToggleRow(Row kind)
         => kind is Row.DarkTheme or Row.AutoHide or Row.RailPin or Row.DwellShape
            or Row.Pressure or Row.Taper or Row.Predict or Row.Privacy or Row.RestoreInk or Row.PptAutoSave
-           or Row.AutoStart or Row.ClearOnArrow or Row.PageEdge or Row.BarOnlyPpt;
+           or Row.AutoStart or Row.ClearOnArrow or Row.PageEdge;
 
     private bool IsToggleRow(int i) => IsToggleRow(Rows[i].Kind);
 
@@ -2102,7 +2102,7 @@ public sealed partial class FullUi
 
     private static UiActionKind RowActionKind(Row kind) => kind switch
     {
-        Row.UiSize or Row.WindowOpacity or Row.HistoryDays or Row.Language => UiActionKind.Choice,
+        Row.UiSize or Row.WindowOpacity or Row.BarOnlyPpt or Row.HistoryDays or Row.Language => UiActionKind.Choice,
         Row.AiApi => UiActionKind.Navigate,
         _ when IsToggleRow(kind) => UiActionKind.Toggle,
         _ => UiActionKind.Command,
@@ -2247,11 +2247,18 @@ public sealed partial class FullUi
                 _host.Commands.SetPageEdge(!_host.State.PageEdgeOn);
                 return true;
 
-            // 工具栏只在 PPT 显示（2026-11-25，默认关）：引擎持有状态并同步托盘显隐，
-            // 界面只翻转开关。关掉的那一刻工具条立刻回来（不留"什么都没了"的空窗）。
+            // 非课件时工具栏（三档循环：保持显示 → 收球贴边 → 仅 PPT 显示 → 保持显示）。
             case Row.BarOnlyPpt:
-                _host.Commands.SetBarOnlyPpt(!_host.State.BarOnlyPpt);
+            {
+                var next = _host.State.BarIdleMode switch
+                {
+                    BarIdleMode.Off => BarIdleMode.StowEdge,
+                    BarIdleMode.StowEdge => BarIdleMode.PptOnlyTray,
+                    _ => BarIdleMode.Off,
+                };
+                _host.Commands.SetBarIdleMode(next);
                 return true;
+            }
 
             // 语言（2026-11-13）：**不再点一下就直接重启**，改成常规下拉。
             // 选中只落盘 `ui.lang`；底部“重启以应用”才重启。不在当前进程里热切换：

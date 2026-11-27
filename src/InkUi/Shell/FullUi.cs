@@ -357,6 +357,10 @@ public sealed partial class FullUi : IOverlayUi
     /// 见 <see cref="OnStateChanged"/> 里那一段。
     /// </summary>
     private bool _lastPpt;
+    private bool _lastDocOpen;
+    private bool _lastBoardOn;
+    private bool _autoStowed;
+    private bool _autoStowPendingPeek;
 
     /// <summary>上一次看到的穿透状态。用它认**进穿透的那一刻**（边沿）——
     /// 进穿透时把上带收回那条 10 像素色线，穿透期间不许再张，见 <see cref="OnStateChanged"/>。</summary>
@@ -448,10 +452,10 @@ public sealed partial class FullUi : IOverlayUi
         // ⚠ 文档（PDF / 图片）**没有**它：底部已经有翻页条，再来一套就是三套入口。
         (Row.PageEdge, "边缘翻页条", false, false,
          "放映和白板时在屏幕左右中部显示上/下翻页；平时几乎看不见，指针靠近才显形（默认关）"),
-        // 工具栏只在 PPT 显示（2026-11-25，**默认关**）：开 = 不在放映时把主条整个藏起来。
-        // 主窗口不占任务栏，所以藏起来时由**系统托盘图标**兜底（打开设置 / 退出）。
-        (Row.BarOnlyPpt, "工具栏只在 PPT 显示", false, false,
-         "不在放映时隐藏工具条（桌面批注更干净）；托盘图标可打开设置或退出"),
+        // 非课件时工具栏（沿用 "barOnlyPpt" 落盘键，默认 Off）：
+        // Off=保持显示 / StowEdge=退放映或关文档后收球贴边 / PptOnlyTray=仅 PPT/白板/文档显示，桌面零痕迹并常驻托盘。
+        (Row.BarOnlyPpt, "非课件时工具栏", false, false,
+         "退出 PPT 放映或关闭 PDF 后：收球贴边在底边留 8px 把手，仅 PPT 显示则在桌面零痕迹并常驻托盘"),
         (Row.Language, "语言", false, false, "界面语言；切换后重启软件生效"),
         // 停顿成型（2026-09-23 第二十批，见 计划-图形工具.md §四十二）：
         // 手写一笔停住 400ms → 把它变成规整图形。**默认开**（用户定的：
@@ -535,34 +539,30 @@ public sealed partial class FullUi : IOverlayUi
     public string Name => "完整界面";
 
     /// <summary>
-    /// 「工具栏只在 PPT 显示」（2026-11-25）这一刻是不是把主条藏起来了。
-    ///
-    /// ⚠ **全屏模态 / 开合动画期间不许藏**：`Visible=false` 时引擎连 PrepareFrame 都不调，
-    /// 「更多」面板就没法淡入淡出——老师从托盘点「打开设置」会什么都看不见。
-    /// （`_lastPpt` 是 OnStateChanged 缓存的放映状态，别每帧去读 State 快照。）
+    /// 「仅 PPT 显示」这一刻是不是把主条藏成桌面零痕迹。
+    /// 全屏模态（更多 / AI）打开或开合动画期间不藏，否则从托盘点「打开设置」时看不到面板。
     /// </summary>
     private bool ToolbarHidden =>
-        _host != null && _host.State.BarOnlyPpt && !_lastPpt
+        _host != null && _host.State.BarSuppressed
         && !_moreOpen && !_more.Running && !_aiOpen && !_ai.Running;
 
     public bool Visible => !ToolbarHidden;
 
-    /// <summary>
-    /// 工具栏本来就该被设置藏着（不在放映），只是**从托盘打开了设置**，所以 Visible 让了路
-    /// （见 <see cref="ToolbarHidden"/> 的模态豁免）。这种时候**只画「更多」面板**，
-    /// 球 / 主条 / 色带一律不画——用户 2026-11-25：从托盘打开设置之后工具栏出现了，
-    /// "应该只出现设置，不出现工具栏"。
-    /// </summary>
-    private bool BandSuppressed => _host != null && _host.State.BarOnlyPpt && !_lastPpt;
+    /// <summary>工具栏本身此刻被「仅 PPT 显示」隐藏（哪怕模态面板打开，也只画模态面板、不画底栏）。</summary>
+    private bool BandSuppressed => _host != null && _host.State.BarSuppressed;
+
+    /// <summary>自动贴边隐藏是否生效（手动开启贴边隐藏，或退放映/关文档触发的自动收球贴边）。</summary>
+    private bool EffectiveAutoHide => _hideEnabled || _autoStowed;
 
     public bool IsAnimating
     {
         get
         {
-            if (ToolbarHidden) return false;         // 藏起来了就别再每帧要帧
+            if (ToolbarHidden) return false;
             // 贴边隐藏那条"离开一会儿才收"是靠**继续要帧**实现的：
             // 没有帧就没有时机去收（引擎只在有脏区或界面说要动时才渲染）。
             if (_peek.Running) return true;
+            if (_autoStowPendingPeek) return true;
             if (_rail.Running) return true;
             if (_dashFade.Running) return true;      // 换挡那一下要把淡入淡出画完
             if (_more.Running) return true;          // 「更多」面板开合（遮罩淡入淡出跟着它）
@@ -570,6 +570,8 @@ public sealed partial class FullUi : IOverlayUi
             if (_ai.Running) return true;            // AI 面板开合
             if (_settingsFlingActive) return true;   // 设置页双指惯性
             if (_apiFetching) return true;           // AI 服务页：等模型列表返回
+            // 底栏被「仅 PPT 显示」抑制（从托盘开设置）时，不跑底栏/色带/贴边的动画帧。
+            if (BandSuppressed) return false;
             // 动作按钮刚按完那一下的闪光：要继续给帧，否则描边闪不出来。
             if (_host != null && _host.NowMs < _actionFlashUntil) return true;
             // 色带正在"等悬停意图"时也得给帧：不然 120 毫秒到了没人去展开它，
@@ -577,7 +579,7 @@ public sealed partial class FullUi : IOverlayUi
             if (BandVisible()
                 && ((_railHover && _rail.Value < 0.5f) || (!_railHover && _rail.Value > 0f)))
                 return true;
-            if (_hideEnabled && _peekPendingCollapse && _peek.Value > 0f) return true;
+            if (EffectiveAutoHide && _peekPendingCollapse && _peek.Value > 0f) return true;
             // 悬停提示：还在等延迟（1.5s / 快路径 400ms）、或淡入没走完，都要继续给帧——
             // 不给帧的话"到点了"没人去画它。显示完之后它是静态的，不再烧帧。
             if (TipWanted && (!_tipShown || _tipFade.Running)) return true;
@@ -615,6 +617,8 @@ public sealed partial class FullUi : IOverlayUi
         _rail.Jump(0f);
         _dashFade.Jump(1f);
         _lastPpt = host.State.PptMode;
+        _lastDocOpen = host.State.DocOpen;
+        _lastBoardOn = host.State.Board;
         _lastPass = host.State.PassThrough;
         _lastLibraryOpen = host.State.LibraryOpen;
         LoadPrefs();
@@ -628,6 +632,8 @@ public sealed partial class FullUi : IOverlayUi
     /// </summary>
     public void Activate()
     {
+        _autoStowed = false;
+        _autoStowPendingPeek = false;
         _peek.Jump(1f);
         _expand.To(1f, Tokens.ExpandMs);
         Invalidate();
@@ -837,17 +843,13 @@ public sealed partial class FullUi : IOverlayUi
 
     public RectF QueryBounds()
     {
-        // 「工具栏只在 PPT 显示」：不在放映、这一刻也不该出现 → 不占地方（= 点击直通画布）。
-        // 引擎有几条路径绕过 Visible 直接读这份矩形（收藏面板锚点 / 轮盘避让），
-        // 所以这里必须也早退，否则会贴着一条看不见的条摆位置。
-        if (ToolbarHidden) return RectF.Empty;
-
         // 「更多」面板打开（含开合动画）时：我们占**整块屏幕**——这是全屏模态的根
         //（命中测试、裁剪、接输入小窗都按这份矩形走，理由见「更多」面板那一节）。
         // 关掉（动画也跑完）立刻回到主条那一条，一帧都不多占。
         if (_moreOpen || _more.Running) return _screen;
         // AI 面板也是全屏模态（遮罩 + 居中卡片），占用整屏。
         if (_aiOpen || _ai.Running) return _screen;
+        if (ToolbarHidden) return RectF.Empty;
 
         // 占用矩形必须跟着"实际画出来的东西"走：贴边隐藏时它就只剩露头那一条，
         // 输入小窗也跟着缩——这样指针扫过露头才算"碰到面板"，其余位置照旧穿透/画线。
@@ -866,9 +868,9 @@ public sealed partial class FullUi : IOverlayUi
     /// **主条本身**的占用矩形（不含下拉/动作菜单/粗细预览这些临时弹层）。
     /// 收藏面板定位只认它：否则一开菜单，面板会跟着弹层往上跳（见 IOverlayUi.ChromeBounds）。
     /// </summary>
-    public RectF ChromeBounds => ToolbarHidden ? RectF.Empty : FinishBounds(BaseBoundsLocal());
+    public RectF ChromeBounds => BandSuppressed ? RectF.Empty : FinishBounds(BaseBoundsLocal());
 
-    public RectF BarBounds => ToolbarHidden ? RectF.Empty : FinishBounds(BarRect());
+    public RectF BarBounds => BandSuppressed ? RectF.Empty : FinishBounds(BarRect());
 
     private RectF BaseBoundsLocal() => UnionRect();
 
@@ -923,8 +925,10 @@ public sealed partial class FullUi : IOverlayUi
     /// **左/右边缘**（那里 `Shift` 恒为 0、根本藏不动）时，球会被画成那条"露头把手"
     /// ——一个**纯笔色的实心圆**，而且永远"吸不进去"（用户报的正是这个）。
     /// </summary>
-    private bool DockHideEngaged =>
-        _hideEnabled && (_screen.MaxY - UnionRect().MaxY) <= Tokens.DockHideDistance;
+    private bool DockNearBottom =>
+        _anchor == null || (_screen.MaxY - UnionRect().MaxY) <= Tokens.DockHideDistance;
+
+    private bool DockHideEngaged => EffectiveAutoHide && DockNearBottom;
 
     private bool PeekTabShown =>
         DockHideEngaged && Tokens.DockPeek + (Tokens.Ball - Tokens.DockPeek) * _peek.Value <= 12f;

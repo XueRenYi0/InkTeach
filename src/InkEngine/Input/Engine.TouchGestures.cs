@@ -194,7 +194,7 @@ public partial class InkEngine
                 _drawing = true;
                 Native.SetCapture(hWnd);
                 _roamId = id;
-                _roamLast = new Vector2(x, y);
+                _roamLast = new Vector2(screenX, screenY);
                 Console.WriteLine("触摸：单指漫游");
                 return true;
 
@@ -263,7 +263,7 @@ public partial class InkEngine
                 // 的移动不许开船——合成注入里实测到"残留触点在 (1440,1200) 反复发移动，
                 // 把相机拽得乱跳"；真机上同理（多报的触点不该影响漫游）。
                 if (id != _roamId) return true;
-                var p = new Vector2(x, y);
+                var p = new Vector2(screenX, screenY);
                 float dy = p.Y - _roamLast.Y;
                 _roamLast = p;
                 ScrollCanvasBy(dy / DpiScale);      // 和滚轮/上下键同一个函数（1:1 逻辑像素）
@@ -357,6 +357,7 @@ public partial class InkEngine
     {
         if (_touchMode == TouchMode.None && !_touch.Any) return;
         StopTouchFling();
+        StopDocPanFling();
         if (_touchMode == TouchMode.Erase) { Doc.EndErase(); EndStrokeMeasure(); PixelEraseDragging = false; }
         // 触屏呼出的轮盘：手势中断 = 盘也收掉（别留一个没人管的盘在屏幕上）。
         if (RadialPaletteActive && _radialTouchMode) CancelRadialPalette("手势中断");
@@ -482,6 +483,7 @@ public partial class InkEngine
         // _g2StartMid / 轴锁 重新洗一遍）。
         if (_g2IdA != 0 && _touch.Contains(_g2IdA) && _touch.Contains(_g2IdB)) return;
         StopTouchFling();
+        StopDocPanFling();
         _g2IdA = p.IdA;
         _g2IdB = p.IdB;
         _g2ScrollSm = 0f;
@@ -490,7 +492,7 @@ public partial class InkEngine
         _g2UiVy = 0f;
         _g2LastMoveMs = NowMs;
 
-        _g2StartMid = _g2LastMid = (p.A + p.B) * 0.5f;
+        _g2StartMid = _g2LastMid = (p.ScreenA + p.ScreenB) * 0.5f;
         _g2Axis = 0;
         _g2Turned = false;
         _g2Tap = false;
@@ -585,8 +587,8 @@ public partial class InkEngine
             _dirty = true;
             return;
         }
-        float dx = mid.X - _g2LastMid.X, dy = mid.Y - _g2LastMid.Y;
-        _g2LastMid = mid;
+        float dx = midScreen.X - _g2LastMid.X, dy = midScreen.Y - _g2LastMid.Y;
+        _g2LastMid = midScreen;
 
         // 文档：捏合缩放 / 放大后两轴平移（先观察再锁；锁住后这一轮不再换分支）。
         // **传屏幕中点**：画布中点会随相机变化，捏合/平移必须用相机无关的屏幕量。
@@ -594,7 +596,7 @@ public partial class InkEngine
 
         if (_g2Axis == 0)
         {
-            var total = mid - _g2StartMid;
+            var total = midScreen - _g2StartMid;
             float lockPx = TouchGestures.DirLockLogical * DpiScale;
             if (total.Length() < lockPx) return;
             if (MathF.Abs(total.X) >= MathF.Abs(total.Y) * TouchGestures.DirRatio) _g2Axis = 1;
@@ -622,7 +624,7 @@ public partial class InkEngine
             if (!_g2UiScroll && UiVisibleNow && Ui != null)
             {
                 var begin = new UiTouchScrollEvent(UiTouchScrollPhase.Begin,
-                    mid.X / UiUnit, mid.Y / UiUnit, 0f, 0f, NowMs);
+                    midScreen.X / UiUnit, midScreen.Y / UiUnit, 0f, 0f, NowMs);
                 if (Ui.TouchScroll(begin)) _g2UiScroll = true;
             }
             if (_g2UiScroll)
@@ -632,20 +634,21 @@ public partial class InkEngine
                 _g2UiVy = Math.Clamp(_g2UiVy * 0.70f + uiVy * 0.30f,
                                      -TouchFlingMax, TouchFlingMax);
                 Ui?.TouchScroll(new UiTouchScrollEvent(UiTouchScrollPhase.Move,
-                    mid.X / UiUnit, mid.Y / UiUnit, uiDy, _g2UiVy, NowMs));
+                    midScreen.X / UiUnit, midScreen.Y / UiUnit, uiDy, _g2UiVy, NowMs));
                 return;
             }
 
-            float instVy = (use * TouchScrollGain / DpiScale) / (float)dtMs;
+            float gain = DocView.IsOpen && !BoardOn ? 1f : TouchScrollGain;
+            float instVy = (use * gain / DpiScale) / (float)dtMs;
             _g2FlingVy = Math.Clamp(_g2FlingVy * 0.70f + instVy * 0.30f,
                                     -TouchFlingMax, TouchFlingMax);
-            ScrollCanvasBy(use * TouchScrollGain / DpiScale);
+            ScrollCanvasBy(use * gain / DpiScale);
             return;
         }
 
         _g2FlingVy = 0f;                       // 横滑翻页不带纵向惯性
         if (_g2Turned || dx == 0f) return;
-        float totalX = mid.X - _g2StartMid.X;
+        float totalX = midScreen.X - _g2StartMid.X;
         if (MathF.Abs(totalX) < TouchGestures.PageTurnLogical * DpiScale) return;
         _g2Turned = true;                      // 一次手势只翻一页（抬手再滑才是下一页）
         bool next = totalX < 0;                // 往左滑 = 下一页

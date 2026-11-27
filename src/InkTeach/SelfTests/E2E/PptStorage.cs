@@ -1406,21 +1406,28 @@ internal sealed partial class App
                   && MathF.Abs((gL.MaxY - gL.MinY) - wantH) < 1.5f,
                   $"左 {gL.MinX:F0} 右 {gR.MaxX:F0} 高 {gL.MaxY - gL.MinY:F0}（应 {wantH:F0}）");
 
-            // 按下 = 翻页：左组上格 = 上一页、下格 = 下一页；中格（页码）不翻页。
+            // 按下 = 翻页：第 1 页点上格置灰禁用（吞点击且不发 Prev）；点下格翻到第 2 页后再点上格 = 上一页；中格（页码）不翻页。
             int nc0 = fake.NextCalls, pc0 = fake.PrevCalls;
             var upCell = PageEdgeCellRect(left: true, index: 0);
             var downCell = PageEdgeCellRect(left: true, index: 2);
             var pageCell = PageEdgeCellRect(left: true, index: 1);
-            bool ateUp = PageEdgePress((upCell.MinX + upCell.MaxX) * 0.5f,
-                                       (upCell.MinY + upCell.MaxY) * 0.5f);
-            Check("边缘翻页条：点上格 = 上一页", ateUp && fake.PrevCalls == pc0 + 1,
-                  $"吃掉={ateUp} PrevCalls={fake.PrevCalls}（应 {pc0 + 1}）");
+            bool ateUp1 = PageEdgePress((upCell.MinX + upCell.MaxX) * 0.5f,
+                                        (upCell.MinY + upCell.MaxY) * 0.5f);
+            Check("边缘翻页条：第 1 页点上格置灰禁用（不发 Prev）", ateUp1 && fake.PrevCalls == pc0,
+                  $"吃掉={ateUp1} PrevCalls={fake.PrevCalls}（应 {pc0}）");
             _pageEdge.Release();
             bool ateDown = PageEdgePress((downCell.MinX + downCell.MaxX) * 0.5f,
                                          (downCell.MinY + downCell.MaxY) * 0.5f);
             Check("边缘翻页条：点下格 = 下一页", ateDown && fake.NextCalls == nc0 + 1,
                   $"吃掉={ateDown} NextCalls={fake.NextCalls}（应 {nc0 + 1}）");
             _pageEdge.Release();
+            Step();
+            bool ateUp2 = PageEdgePress((upCell.MinX + upCell.MaxX) * 0.5f,
+                                        (upCell.MinY + upCell.MaxY) * 0.5f);
+            Check("边缘翻页条：第 2 页点上格 = 上一页", ateUp2 && fake.PrevCalls == pc0 + 1,
+                  $"吃掉={ateUp2} PrevCalls={fake.PrevCalls}（应 {pc0 + 1}）");
+            _pageEdge.Release();
+            Step();
             int nc1 = fake.NextCalls, pc1 = fake.PrevCalls;
             bool atePage = PageEdgePress((pageCell.MinX + pageCell.MaxX) * 0.5f,
                                          (pageCell.MinY + pageCell.MaxY) * 0.5f);

@@ -459,9 +459,9 @@ internal sealed partial class App
             // 无窗口自检：不建覆盖层、不注入鼠标、不抢前台；用户在用电脑时也能跑。
             return SettingsAudit.Run();
         }),
-        new("--traytest", "工具栏只在 PPT 显示 + 托盘兜底（纯判定，不碰真实托盘）", args =>
+        new("--traytest", "退放映/关文档后收球贴边（无窗口状态机与持久化自检）", args =>
         {
-            // 纯判定，不建窗口：托盘图标会真在用户托盘里留一格，自检不该碰。
+            // 纯状态机自检，不建窗口。
             ExitCode = SelfTests.TrayTest.Run();
             _quit = true;
             return null;

@@ -95,6 +95,7 @@ public partial class InkEngine
     {
         // 同 FlipPage：文本编辑中跳页，先把文本框提交。
         if (_textBoxEditing) EndTextBoxEditFromUi(true);
+        StopDocPanFling();
         if (BoardOn)
         {
             int idx = Math.Clamp(page - 1, 0, Math.Max(0, BoardPageCount - 1));
@@ -664,7 +665,7 @@ public partial class InkEngine
         // ⚠ **和白板无关**：纸不是白板，改板色/关白板都动不了它；关文档它自己收。
         // ⚠ 但"白板"是**另一张纸、盖在文档上面**——打开文档先把白板收掉，
         //    不然新打开的文档会被盖在白板底下看不见（用户要的是"先看见文档"）。
-        if (BoardOn) SetBoardFromUi(false);
+        if (BoardOn) SetBoardFromUi(false); BarTempShown = false;
 
         // 先进页空间（切槽 + 相机就位），再排页——页的锚点是固定的，不依赖当时视口。
         DocStoreKey = storeKey;
@@ -760,7 +761,7 @@ public partial class InkEngine
 
         // 白板是独立槽：关文档前先退出白板，回到文档页，避免出现
         // “BoardOn 还是 true、但 Doc.PageKey 已经不是 BoardPageKey”的混合状态。
-        if (BoardOn) SetBoardFromUi(false);
+        if (BoardOn) SetBoardFromUi(false); BarTempShown = false;
 
         SaveDocInk();                       // 关闭时兜底存一次（节流之外的那一下）
         SaveDocResumeOnClose();             // 阅读位置也兜底存一次（卡片还开着时保留旧位置）
@@ -796,5 +797,4 @@ public partial class InkEngine
         SetInkStatus($"已关闭文档：{title}");
         Console.WriteLine($"[文档] 已关闭：{title}（批注已存；页位图 / 解码缓存 / PDF 文档都已释放）");
     }
-
 }

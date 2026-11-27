@@ -271,7 +271,7 @@ internal sealed class TouchGestures
             var first = _c[0].DownMs <= _c[1].DownMs ? _c[0] : _c[1];
             var second = ReferenceEquals(first, _c[0]) ? _c[1] : _c[0];
             double joinMs = second.DownMs - first.DownMs;
-            float pairDist = Vector2.Distance(first.Down, second.Down);
+            float pairDist = Vector2.Distance(first.ScreenDown, second.ScreenDown);
             bool pairNear = pairDist <= PairMaxLogical * dpi;
             // 150ms 内：只要两指落点别太远就认（快速双指滑动，第一指已经动也算）。
             // 150~300ms：第一笔还没画长才认，避免写字中途晚到的掌根把字撤掉。
@@ -295,13 +295,13 @@ internal sealed class TouchGestures
     {
         var c = _c.Find(k => k.Id == id);
         if (c == null) return;
-        float d = Vector2.Distance(new Vector2(x, y), c.Pos);
+        var nextScreen = !float.IsNaN(screenX) && !float.IsNaN(screenY)
+            ? new Vector2(screenX, screenY)
+            : new Vector2(x, y);
+        float d = Vector2.Distance(nextScreen, c.Screen);
         c.Path += d;
         c.Pos = new Vector2(x, y);
-        if (!float.IsNaN(screenX) && !float.IsNaN(screenY))
-            c.Screen = new Vector2(screenX, screenY);
-        else
-            c.Screen = new Vector2(x, y);       // 没有屏幕值时退回画布（只在 100% 等价）
+        c.Screen = nextScreen;
         if (!c.Moved && c.Path > CleanMoveLogical * dpi) c.Moved = true;
     }
 

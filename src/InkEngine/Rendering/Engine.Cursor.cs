@@ -544,6 +544,7 @@ public partial class InkEngine
         // 不这么做的话，编辑宿主还挂在上/下一页的文本框上，翻过去以后继续输入会
         // 写到一个“文档里已经不在眼前”的框里，看起来就是 PDF 翻页出问题。
         if (_textBoxEditing) EndTextBoxEditFromUi(true);
+        StopDocPanFling();
         if (!BoardOn && DocView.IsOpen) DismissDocResume("翻页");
         float want;
         int docTarget = -1;
@@ -796,5 +797,4 @@ public partial class InkEngine
         }
         return _windows.Count > 0 ? _windows[0] : null;
     }
-
 }

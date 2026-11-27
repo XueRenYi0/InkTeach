@@ -1600,19 +1600,26 @@ internal sealed partial class OverlayWindow
             for (int i = 0; i < 3; i++)
             {
                 var cell = app.PageEdgeCellRect(left, i);
-                bool hot = hover == (left ? 100 : 200) + i;
                 bool isPage = i == 1;
+                bool disabled = i == 0 && app.BarPageNow <= 1;
+                bool hot = !isPage && !disabled && hover == (left ? 100 : 200) + i;
+                bool pressed = hot && app._pageEdge.Capturing;
 
-                // 圆角小方块：底色 + 1px 描边。悬停时底色换成 Hover（同 PPT 条的手感）。
+                // 圆角小方块：先画 Panel 底，再叠加悬停/按下高亮（避免把低 alpha Hover 强拉成不透明黑）。
                 float radius = PageEdge.Radius * dpi;
                 var box = new Vortice.RawRectF(cell.MinX, cell.MinY, cell.MaxX, cell.MaxY);
 
                 var panel = theme.Panel;
-                _scratch.Color = hot
-                    ? new Color4(theme.Hover.R, theme.Hover.G, theme.Hover.B,
-                                 MathF.Max(theme.Hover.A, 0.9f) * alpha)
-                    : new Color4(panel.R, panel.G, panel.B, MathF.Max(panel.A, 0.88f) * alpha);
+                _scratch.Color = new Color4(panel.R, panel.G, panel.B, MathF.Max(panel.A, 0.88f) * alpha);
                 _ctx.FillRoundedRectangle(new RoundedRectangle(box, radius, radius), _scratch);
+
+                if (hot)
+                {
+                    _scratch.Color = pressed
+                        ? new Color4(theme.Text.R, theme.Text.G, theme.Text.B, 0.12f * alpha)
+                        : new Color4(theme.Hover.R, theme.Hover.G, theme.Hover.B, theme.Hover.A * alpha);
+                    _ctx.FillRoundedRectangle(new RoundedRectangle(box, radius, radius), _scratch);
+                }
 
                 var border = theme.PanelBorder;
                 _scratch.Color = new Color4(border.R, border.G, border.B,
@@ -1652,8 +1659,10 @@ internal sealed partial class OverlayWindow
                     var tipY = up ? cy - rise : cy + rise;
                     var wingY = up ? cy + rise : cy - rise;
 
-                    var ink = hot ? theme.Text : theme.TextMuted;
-                    _scratch.Color = new Color4(ink.R, ink.G, ink.B, ink.A * alpha);
+                    var ink = disabled ? theme.TextMuted
+                            : hot ? theme.Text : theme.TextMuted;
+                    float inkAlpha = (disabled ? ink.A * 0.38f : ink.A) * alpha;
+                    _scratch.Color = new Color4(ink.R, ink.G, ink.B, inkAlpha);
                     float lw = 1.5f * dpi;
                     _ctx.DrawLine(new Vector2(cx - half, wingY), new Vector2(cx, tipY), _scratch, lw);
                     _ctx.DrawLine(new Vector2(cx, tipY), new Vector2(cx + half, wingY), _scratch, lw);

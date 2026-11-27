@@ -188,7 +188,7 @@ public partial class InkEngine
             return true;
         }
         var target = ToolOf(a);
-        if (Tool != target) { SwitchTool(target); return true; }     // 单击：立即切（要快）
+        if (Tool != target || DocPanMode) { SwitchTool(target); return true; }     // 单击：立即切（要快）
         // 已经在这个工具上 → 松手后 400ms 执行"连按动作"（等一等看是不是双击）
         g.WantsRepeat = true;
         return true;
@@ -486,7 +486,13 @@ public partial class InkEngine
         var target = ToolOf(a);
         // 橡皮：回到"上次用的那一种形态"（整笔/面积），不是永远回整笔擦
         if (target == Tool.Eraser) target = _eraserKind;
-        if (Tool != target) { SwitchTool(target); return; }
+        if (Tool != target || DocPanMode)
+        {
+            SwitchTool(target);
+            ApplyCursor();
+            NotifyUiStateChanged();
+            return;
+        }
         DoToolKeyRepeat(a);
     }
 
@@ -515,6 +521,7 @@ public partial class InkEngine
     internal IntPtr HandleWheel(IntPtr wParam)
     {
         StopTouchFling();                      // 滚轮/触控板接管：先刹住双指惯性
+        StopDocPanFling();
         int delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF);
         Native.GetCursorPos(out var cursor);
         // Ctrl + 滚轮 = **文档缩放**（2026-11-16；参考 Acrobat / Edge 的阅读器）。

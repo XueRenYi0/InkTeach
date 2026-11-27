@@ -315,9 +315,9 @@ public partial class InkEngine
         _stepSnap = ShapeSnapKind.None;      // 「直棱柱」那颗胶囊跟着半成品一起作废
         ShapeAnchorSnap.Clear();             // 关键点吸附的小圆环同理（切工具就收）
         // 换工具 = 退出"文档手掌"（2026-11-15：手掌不是工具，点任何工具格 = 我要写字了）。
-        // 放在 Tool = t 之前：ExitDocPan 只碰手掌/光标，不看 Tool。
-        ExitDocPan("换工具");
+        // 先改 Tool 再调 ExitDocPan：ExitDocPan 中的 ApplyCursor() 会立即切到新工具的光标。
         Tool = t;
+        ExitDocPan("换工具");
         // 一次性图形：任何主动换工具都取消它；面板选卡会在 SetShapePresetFromUi 里重新置上。
         _shapeOneShot = false;
         _shapeFromPanel = false;
@@ -562,7 +562,7 @@ public partial class InkEngine
     /// </summary>
     protected virtual void Shutdown()
     {
-        // 托盘图标**必须先删**：NIM_DELETE 要一个还活着的 hwnd（下面那个 foreach 会销毁窗口）。
+        // 托盘图标必须先删：NIM_DELETE 要一个还活着的 hwnd（下面那个 foreach 会销毁窗口）。
         _tray?.Dispose();
         _tray = null;
 

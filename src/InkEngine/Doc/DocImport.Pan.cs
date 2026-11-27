@@ -49,7 +49,7 @@ public partial class InkEngine
     {
         if (DocPanMode == on) return;
         DocPanMode = on;
-        if (!on) EndDocPan();
+        if (!on) { EndDocPan(allowFling: false); StopDocPanFling(); }
         SetInkStatus(on ? "手掌：拖动画布上下看页（再点一次回到工具）" : "手掌已关：回到工具");
         Console.WriteLine($"[文档] 手掌{(on ? "开" : "关")}");
         _dirty = true;
@@ -65,11 +65,13 @@ public partial class InkEngine
     {
         // 按住空格开的那一份也跟着作废：否则松手时还去关一个已经换人的手掌。
         _docTouch.PanBySpace = false;
-        if (!DocPanMode && !_docPanDragging) return;
+        if (!DocPanMode && !_docPanDragging && !DocPanFlingActive) return;
         DocPanMode = false;
-        EndDocPan();
+        EndDocPan(allowFling: false);
+        StopDocPanFling();
         _dirty = true;
         ApplyCursor();
+        NotifyUiStateChanged();
         Console.WriteLine($"[文档] 手掌关闭（{why}）");
     }
 
@@ -81,6 +83,8 @@ public partial class InkEngine
     {
         // 手掌开始 = 用户要自己拖着看：恢复提示先收（不跳）。
         DismissDocResume("手掌");
+        StopTouchFling();
+        _docTouch.PanFling.Begin(NowMs);
         // 翻页动画还在跑就先停在当前帧：否则"手里在拖、相机自己在飞"，两边打架。
         _camAnimating = false;
         _docPanDragging = true;
@@ -102,6 +106,7 @@ public partial class InkEngine
         _docPanLastScreenX = screenX;
         _docPanLastScreenY = screenY;
         if (MathF.Abs(dx) < 0.01f && MathF.Abs(dy) < 0.01f) return;
+        _docTouch.PanFling.Sample(dx / DpiScale, dy / DpiScale, NowMs);
 
         // 手指/笔往下拖 = 内容跟着往下走 = 相机偏移变大（screen = canvas + ViewOffsetY）。
         if (MathF.Abs(dy) >= 0.01f) ViewOffsetY = ClampOffset(ViewOffsetY + dy);
@@ -121,10 +126,18 @@ public partial class InkEngine
     }
 
     /// <summary>抬手：结束拖动（UI 通知一次，让页码/按钮回到静止态）。</summary>
-    private void EndDocPan()
+    private void EndDocPan(bool allowFling = false)
     {
-        if (!_docPanDragging) return;
+        if (!_docPanDragging)
+        {
+            if (!allowFling) StopDocPanFling();
+            return;
+        }
         _docPanDragging = false;
+        if (allowFling && DocView.IsOpen && !PassThrough)
+            _docTouch.PanFling.Release(NowMs, allowX: ViewScale > 1.0005f);
+        else
+            StopDocPanFling();
         _dirty = true;
         NotifyUiStateChanged();
     }
@@ -161,7 +174,7 @@ public partial class InkEngine
     internal bool DocPanUpFromPointer(uint id)
     {
         if (!_docPanDragging || id != _activePointer) return false;
-        EndDocPan();
+        EndDocPan(allowFling: true);
         return true;
     }
 
@@ -174,8 +187,36 @@ public partial class InkEngine
     internal void DocPanDragForTest(float screenX, float screenY)
         => UpdateDocPan(screenX, screenY);
 
-    internal void DocPanReleaseForTest() => EndDocPan();
+    internal void DocPanReleaseForTest() => EndDocPan(allowFling: true);
     internal bool DocPanDraggingForTest => _docPanDragging;
+    internal bool DocPanFlingActive => _docTouch.PanFling.Active;
+    internal void StopDocPanFling() => _docTouch.PanFling.Stop();
+
+    private void StepDocPanFling()
+    {
+        if (!DocPanFlingActive) return;
+        if (!DocView.IsOpen || PassThrough || BoardOn) { StopDocPanFling(); return; }
+        if (!_docTouch.PanFling.Step(NowMs, out float stepX, out float stepY))
+        {
+            NotifyUiStateChanged();
+            return;
+        }
+        if (MathF.Abs(stepX) < 1e-4f && MathF.Abs(stepY) < 1e-4f) return;
+        float beforeX = ViewOffsetX, beforeY = ViewOffsetY;
+        ViewOffsetY = ClampOffset(ViewOffsetY + stepY * DpiScale);
+        if (ViewScale > 1.0005f) ViewOffsetX = ClampOffsetX(ViewOffsetX + stepX * DpiScale);
+        bool stopY = MathF.Abs(stepY) > 1e-4f && MathF.Abs(ViewOffsetY - beforeY) < 0.01f;
+        bool stopX = ViewScale <= 1.0005f || (MathF.Abs(stepX) > 1e-4f && MathF.Abs(ViewOffsetX - beforeX) < 0.01f);
+        _docTouch.PanFling.ClampStoppedAxes(stopX, stopY);
+        _dirty = true;
+        NoteDocResumeChange();
+        int page = BarPageNow;
+        if (page != _docPanLastPage || !DocPanFlingActive)
+        {
+            _docPanLastPage = page;
+            NotifyUiStateChanged();
+        }
+    }
 
     // ======================================================================
     //  双指：文档捏合缩放 / 放大后平移（2026-11-16）
@@ -212,6 +253,8 @@ public partial class InkEngine
 
         /// <summary>触控板捏合（WM_GESTURE / GID_ZOOM）的基线；见 <see cref="DocPadGestureState"/>。</summary>
         public readonly DocPadGestureState PadPinch = new();
+        /// <summary>手掌拖页松手后的惯性。</summary>
+        public readonly DocPanFling PanFling = new();
     }
 
     /// <summary>
@@ -336,6 +379,17 @@ public partial class InkEngine
 
         if (_docTouch.Pinch)
         {
+            if (MathF.Abs(sdy) >= 0.01f)
+            {
+                ViewOffsetY = ClampOffset(ViewOffsetY + sdy);
+                _dirty = true;
+                NoteDocResumeChange();
+            }
+            if (ViewScale > 1.0005f && MathF.Abs(sdx) >= 0.01f)
+            {
+                ViewOffsetX = ClampOffsetX(ViewOffsetX + sdx);
+                _dirty = true;
+            }
             DocPinchZoomFromTouch(_docTouch.PinchZoom0, _docTouch.PinchDist0, d1,
                                   midScreen.X, midScreen.Y);
             return true;
@@ -548,15 +602,20 @@ public partial class InkEngine
         && (BoardOn || (PptMode && !DocView.IsOpen))
         && !ReplayActive && !CaptureActive && !ColorPickActive
         && !LibraryPlacementMode && !FeedbackQrVisible && !_textBoxEditing
-        && (PptMode || !PassThrough);
+        && (PptMode || !PassThrough)
+        && !UiLooksFullscreen(UiRectPhysical(), ScreenRectPhysical());
+
+    /// <summary>翻页条所在屏幕物理矩形（多屏下跟随放映窗或主屏）。</summary>
+    private RectF PageEdgeScreenRect()
+        => _pageEdge.ResolveScreenRect(NowMs, PptMode, _windows, _primaryW, _primaryH, ScreenRectPhysical());
 
     /// <summary>某一边的整组矩形（物理屏幕坐标；绘制 / 命中 / 脏区都读它）。</summary>
     internal RectF PageEdgeGroupRect(bool left)
-        => PageEdge.GroupRect(ScreenRectPhysical(), left, UiUnit);
+        => PageEdge.GroupRect(PageEdgeScreenRect(), left, UiUnit);
 
     /// <summary>某一边第 <paramref name="index"/> 格（0 上翻 / 1 页码 / 2 下翻）。</summary>
     internal RectF PageEdgeCellRect(bool left, int index)
-        => PageEdge.CellRect(ScreenRectPhysical(), left, index, UiUnit);
+        => PageEdge.CellRect(PageEdgeScreenRect(), left, index, UiUnit);
 
     /// <summary>
     /// 两边的整组**外接矩形**（物理屏幕坐标）。⚠ 它横跨整屏，**只能用于诊断/报告**，
@@ -573,7 +632,7 @@ public partial class InkEngine
 
     /// <summary>这一下点在某一边的整组上吗（**只有看得见的那一块算**——同 PptBarContains）。</summary>
     internal bool PageEdgeContains(float x, float y)
-        => PageEdgeVisible && PageEdge.SideAt(x, y, ScreenRectPhysical(), UiUnit) != 0;
+        => PageEdgeVisible && PageEdge.SideAt(x, y, PageEdgeScreenRect(), UiUnit) != 0;
 
     /// <summary>
     /// 按下：返回 true = 这一下归翻页条（引擎别再当笔画 / 别漏给下层）。
@@ -585,14 +644,14 @@ public partial class InkEngine
     internal bool PageEdgePress(float x, float y)
     {
         if (!PageEdgeVisible) return false;
-        var screen = ScreenRectPhysical();
+        var screen = PageEdgeScreenRect();
         float dpi = UiUnit;
         int side = PageEdge.SideAt(x, y, screen, dpi);
         if (side == 0) return false;
 
         _pageEdge.Press(x, y, screen, dpi);
         int cell = PageEdge.CellAt(x, y, screen, left: side < 0, dpi);
-        if (cell == 0) BarPrev();
+        if (cell == 0) { if (BarPageNow > 1) BarPrev(); }
         else if (cell == 2) BarNext();
         _dirty = true;
         return true;
@@ -602,7 +661,7 @@ public partial class InkEngine
     internal bool PageEdgePointerMove(float x, float y)
     {
         if (!_pageEdge.Enabled) return false;
-        var screen = ScreenRectPhysical();
+        var screen = PageEdgeScreenRect();
         _pageEdge.Track(x, y, screen, UiUnit);
         return PageEdgeVisible && PageEdge.SideAt(x, y, screen, UiUnit) != 0;
     }
@@ -622,7 +681,7 @@ public partial class InkEngine
     /// </summary>
     internal void StepPageEdge()
     {
-        var screen = ScreenRectPhysical();
+        var screen = PageEdgeScreenRect();
         bool vis = PageEdgeVisible;
         int hoverBefore = _pageEdge.HoverCell;
         _pageEdge.Step(NowMs, vis, screen, UiUnit);

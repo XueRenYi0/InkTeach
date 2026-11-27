@@ -694,38 +694,54 @@ public partial class InkEngine
     internal float BoardPatternStepLogical = 40f;
 
     // ======================================================================
-    //  「工具栏只在 PPT 显示」（2026-11-25 用户定）
+    //  「非课件时工具栏」（沿用 "barOnlyPpt" 落盘键，默认 Off）
     //
-    //  开 = **不在放映时把主条（球 + 按钮带 + 色带）整个藏起来**，只在 PPT 放映中显示。
-    //  这样桌面批注时屏幕上只剩笔迹，一点界面都不挡。
-    //
-    //  兜底入口：主窗口是 `WS_EX_TOOLWINDOW`（不占任务栏），藏起来后屏幕上没有任何
-    //  入口能打开设置/退出——所以这时必须有一个**系统托盘图标**（见 TrayIcon）。
-    //
-    //  状态放引擎而不是界面：界面可见性和托盘显隐要读**同一份**判断，
-    //  写两份必然出现"工具条藏了、托盘也没出来"这种锁死。
+    //  Off         = 保持显示
+    //  StowEdge    = 退出 PPT 放映或关闭 PDF/图片文档后，自动收球贴边（底边留 8px 把手）
+    //  PptOnlyTray = 仅 PPT/白板/文档显示，桌面零痕迹并常驻系统托盘
     // ======================================================================
 
-    /// <summary>「工具栏只在 PPT 显示」开着吗（落盘 "barOnlyPpt"；默认关）。</summary>
-    internal bool BarOnlyPpt;
+    /// <summary>「非课件时工具栏」档位（落盘 "barOnlyPpt"；默认 Off）。</summary>
+    internal BarIdleMode BarIdleMode = BarIdleMode.Off;
 
-    /// <summary>这一刻该不该藏工具条（开 + 不在放映）。界面只读这一个。</summary>
-    internal bool BarSuppressedNow => BarOnlyPpt && !PptMode;
+    /// <summary>「仅 PPT 显示」下托盘单击临时呼出态。</summary>
+    internal bool BarTempShown;
 
-    /// <summary>托盘要不要露出来：只有工具条真被藏起来时才需要（平时屏幕上有球和条）。</summary>
-    internal bool WantTray => BarSuppressedNow;
+    /// <summary>这一刻工具栏是否被「仅 PPT 显示」藏成桌面零痕迹。</summary>
+    internal bool BarSuppressedNow =>
+        BarIdleMode == BarIdleMode.PptOnlyTray && !PptMode && !BoardOn && !DocView.IsOpen && !BarTempShown;
 
-    internal void SetBarOnlyPptFromUi(bool on)
+    /// <summary>这一刻系统托盘是否应常驻图标（非课件态下一直留着，即使临时呼出了工具栏）。</summary>
+    internal bool WantTray =>
+        BarIdleMode == BarIdleMode.PptOnlyTray && !PptMode && !BoardOn && !DocView.IsOpen;
+
+    internal static BarIdleMode ParseBarIdleMode(string v) => v switch
     {
-        if (BarOnlyPpt == on) return;
-        BarOnlyPpt = on;
-        // 默认关：只写"开过"那一种情况（老规矩）。
-        SetUiPref("barOnlyPpt", on ? "1" : null);
+        "1" => BarIdleMode.PptOnlyTray,
+        "stow" => BarIdleMode.StowEdge,
+        _ => BarIdleMode.Off,
+    };
+
+    internal static string StoreBarIdleMode(BarIdleMode mode) => mode switch
+    {
+        BarIdleMode.PptOnlyTray => "1",
+        BarIdleMode.StowEdge => "stow",
+        _ => null,
+    };
+
+    internal void SetBarIdleModeFromUi(BarIdleMode mode)
+    {
+        if (BarIdleMode == mode) return;
+        BarIdleMode = mode;
+        BarTempShown = false;
+        SetUiPref("barOnlyPpt", StoreBarIdleMode(mode));
+        if (BarSuppressedNow && !PassThrough && !BoardOn && !DocView.IsOpen)
+            SetPassThrough(true);
         _dirty = true;
         NotifyUiStateChanged();
     }
 
-    /// <summary>自检用：手动推一次界面状态快照（`SetBarOnlyPptFromUi` 会推，这里给测试用）。</summary>
+    /// <summary>自检用：手动推一次界面状态快照（`SetBarIdleModeFromUi` 会推，这里给测试用）。</summary>
     internal void NotifyUiStateForTest() => NotifyUiStateChanged();
 
     /// <summary>底纹间距（画布像素 = 物理像素）。</summary>
@@ -1860,6 +1876,7 @@ public partial class InkEngine
         float cy = ScreenToCanvasY(anchorScreenY);
 
         _camAnimating = false;                 // 缩放和翻页动画不能同时抢相机
+        StopDocPanFling();
         ViewScale = zoom;
         ViewOffsetX = anchorScreenX - cx * zoom;
         ViewOffsetY = anchorScreenY - cy * zoom;
@@ -2536,13 +2553,6 @@ public partial class InkEngine
     internal bool _dirty = true;
     internal bool _drawing;
 
-    /// <summary>
-    /// 系统托盘图标（「工具栏只在 PPT 显示」的兜底入口；2026-11-25）。
-    /// **自检模式不建**：几十个自检进程各往托盘里塞一个图标，用户托盘就废了。
-    /// 显不显由主循环每帧 <see cref="TrayIcon.Update"/> 按 <see cref="WantTray"/> 决定。
-    /// </summary>
-    private TrayIcon _tray;
-
     /// <summary>书写中包含"刚按下还没收到点"的那一小段（`_drawing`），只读给渲染层判预算。</summary>
     internal bool IsDrawingNow => _drawing;
 
@@ -2567,6 +2577,7 @@ public partial class InkEngine
         TouchFling = 1 << 13,
     }
     private FrameDrive _frameDrive;
+    private TrayIcon _tray;
     /// <summary>最近一次"用户动作"（按下/按键）的时间：用来识别"没人操作却一直出帧"。</summary>
     private double _lastActivityMs;
     private double _idleWarnAtMs;

@@ -145,6 +145,9 @@ internal struct SkipScene
     /// <summary>屏幕坐标的浮层并集（页码条 / 回放条 / 计时卡 / 点名卡 / 恢复卡）。逐窗和窗口屏幕矩形相交。</summary>
     public RectF ScreenOverlay;
 
+    /// <summary>左右边缘翻页条各自物理矩形（不能合成跨屏横带，逐窗各自判交）。</summary>
+    public RectF PageEdgeLeft, PageEdgeRight;
+
     /// <summary>界面的**逻辑**矩形（逻辑屏幕坐标，即 UiQueryBoundsNow 的口径）；空 = 界面这一帧不画。</summary>
     public RectF UiLogicalRect;
 
@@ -200,6 +203,8 @@ internal static class WindowSkipScheduler
         s.HasGlobalOverlay = HasScreenWideOverlay(app);
         s.CanvasOverlay = CanvasOverlayBounds(app);
         s.ScreenOverlay = ScreenOverlayBounds(app);
+        s.PageEdgeLeft = app.PageEdgeVisible ? app.PageEdgeGroupRect(left: true) : RectF.Empty;
+        s.PageEdgeRight = app.PageEdgeVisible ? app.PageEdgeGroupRect(left: false) : RectF.Empty;
         s.UiLogicalRect = UiLogicalRect(app);
         return s;
     }
@@ -260,13 +265,6 @@ internal static class WindowSkipScheduler
     {
         var r = RectF.Empty;
         if (app.PageBarVisible) r.Add(app.PptBarRect());
-        // 左右边缘翻页条（屏幕左右中部）：**两块分开并**——合成外接矩形会变成
-        // 横跨整屏的一条带子，副屏跳过判断就会以为"这一帧全屏都有浮层"。
-        if (app.PageEdgeVisible)
-        {
-            r.Add(app.PageEdgeGroupRect(left: true));
-            r.Add(app.PageEdgeGroupRect(left: false));
-        }
         if (app.ReplayActive) r.Add(app.ReplayBarRect());
         if (app.TimerCardOpen) r.Add(app.TimerCardRect());
         if (app.RollCardOpen) r.Add(app.RollCardRect());
@@ -285,7 +283,9 @@ internal static class WindowSkipScheduler
         var vis = w.VisibleCanvasRect;
         bool globalOverlay = scene.HasGlobalOverlay
             || (!scene.CanvasOverlay.IsEmpty && scene.CanvasOverlay.Intersects(vis))
-            || ScreenTouches(w, scene.ScreenOverlay);
+            || ScreenTouches(w, scene.ScreenOverlay)
+            || ScreenTouches(w, scene.PageEdgeLeft)
+            || ScreenTouches(w, scene.PageEdgeRight);
         // 界面的逻辑矩形 → 这扇窗的物理像素（和 `PrepareUi` 同一条换算：Dpi/96 × UiScale）。
         RectF uiPhys = RectF.Empty;
         if (!scene.UiLogicalRect.IsEmpty)
@@ -339,6 +339,7 @@ internal static class WindowSkipScheduler
         mem.LastPaper = !app.BoardOn && app.DocView.IsOpen && !app.PassThrough;
         mem.LastDocHidden = app.PassThrough || (app.BoardOn && app.BoardOpacity >= 0.999f);
         mem.LastFrozenDoc = app.BoardFrozenDocActive;
+        mem.LastWindowOpacity = app.WindowOpacity;
         mem.HasBaseline = true;
     }
 
@@ -385,6 +386,7 @@ internal static class WindowSkipScheduler
         if ((!app.BoardOn && app.DocView.IsOpen && !app.PassThrough) != mem.LastPaper) return true;
         if ((app.PassThrough || (app.BoardOn && app.BoardOpacity >= 0.999f)) != mem.LastDocHidden) return true;
         if (app.BoardFrozenDocActive != mem.LastFrozenDoc) return true;
+        if (MathF.Abs(app.WindowOpacity - mem.LastWindowOpacity) > 0.001f) return true;
         return false;
     }
 }
@@ -433,6 +435,7 @@ internal sealed class WindowRenderMemory
     internal bool LastPaper;
     internal bool LastDocHidden;
     internal bool LastFrozenDoc;
+    internal float LastWindowOpacity = 1f;
 
     /// <summary>取这扇窗的记忆（没有就建一份）。</summary>
     internal static WindowRenderMemory For(OverlayWindow w)

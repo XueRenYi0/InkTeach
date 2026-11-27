@@ -173,14 +173,13 @@ public interface IOverlayUi
     bool HandleEscape() => false;
 
     /// <summary>
-    /// 用户又双击了一次 exe（或从快捷方式启动）。已有实例收到后：
-    /// 退出穿透，并把收起的工具条展开。默认空实现，给只需要“提到前面”的界面用。
+    /// 第二个进程又启动了一次或后台待命被叫醒：退出穿透，并把收起的工具条展开。
+    /// 默认空实现，给只需要“提到前面”的界面用。
     /// </summary>
     void Activate() { }
 
     /// <summary>
-    /// **托盘兜底入口**（2026-11-25）：把「更多 → 设置」打开。
-    /// 只在「工具栏只在 PPT 显示」把工具条藏起来时才用得到——那时屏幕上没有别的入口。
+    /// **托盘兜底入口**：打开「更多 → 设置（常规页）」。
     /// 默认空实现（无界面 / 自检宿主不需要）。
     /// </summary>
     void ShowSettings() { }
@@ -601,13 +600,10 @@ public interface IEngineCommands
     void SetPageEdge(bool on);
 
     /// <summary>
-    /// **工具栏只在 PPT 显示**（2026-11-25，默认关）。开 = 不在放映时把主条（球 + 按钮带 +
-    /// 色带）整个藏起来，桌面批注时屏幕上只剩笔迹。
-    ///
-    /// 兜底入口是**系统托盘图标**（主窗口不占任务栏，藏起来后屏幕上没有别的入口）：
-    /// 单击 = 打开设置，右键 = 打开设置 / 退出。由引擎持有状态并同步托盘显隐。
+    /// **非课件时工具栏**（沿用 "barOnlyPpt" 落盘键，默认 Off）：
+    /// Off = 保持显示；StowEdge = 退放映/关文档后收球贴边；PptOnlyTray = 仅 PPT/白板/文档显示，桌面零痕迹并常驻托盘。
     /// </summary>
-    void SetBarOnlyPpt(bool on);
+    void SetBarIdleMode(BarIdleMode mode);
 
     /// <summary>
     /// 「设置 → 导出日志…」（2026-10-16 用户定）：把运行日志（+环境摘要）打包成 zip，
@@ -1215,6 +1211,9 @@ public static class LibraryCategoryIds
     public const string Trash = ShapeLibrary.TrashCategory;
 }
 
+/// <summary>非课件（桌面态）时工具栏的显隐策略。</summary>
+public enum BarIdleMode { Off = 0, StowEdge = 1, PptOnlyTray = 2 }
+
 /// <summary>
 /// 引擎状态的只读快照，界面拿来显示。
 ///
@@ -1412,8 +1411,11 @@ public readonly struct UiState
     /// </summary>
     public float WindowOpacity { get; init; }
 
-    /// <summary>「工具栏只在 PPT 显示」开着吗（设置页那一行的开关）。</summary>
-    public bool BarOnlyPpt { get; init; }
+    /// <summary>「非课件时工具栏」当前档位（Off / StowEdge / PptOnlyTray）。</summary>
+    public BarIdleMode BarIdleMode { get; init; }
+
+    /// <summary>「仅 PPT 显示」下工具栏这一刻是否处于桌面零痕迹隐藏态。</summary>
+    public bool BarSuppressed { get; init; }
 
     /// <summary>
     /// 屏幕左右边缘的整页翻页条开着吗（2026-11-25；**默认关**，老用户升级后完全无感）。

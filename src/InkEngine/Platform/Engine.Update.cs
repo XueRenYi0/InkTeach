@@ -442,8 +442,37 @@ public partial class InkEngine
     internal void ActivateFromExternal()
     {
         Console.WriteLine("启动：收到第二个实例的激活请求");
+        if (BarSuppressedNow) BarTempShown = true;
         if (PassThrough) SetPassThroughFromUi(false, toPen: true);
         if (Ui != null) UiGuard("Activate", () => Ui.Activate());
+        NotifyUiStateChanged();
+    }
+
+    internal void ToggleBarFromTray()
+    {
+        BarTempShown = !BarTempShown;
+        NotifyUiStateChanged();
+        if (BarTempShown)
+        {
+            if (Ui != null) UiGuard("Activate", () => Ui.Activate());
+        }
+        else if (BarSuppressedNow && !PassThrough && !BoardOn && !DocView.IsOpen)
+        {
+            SetPassThrough(true);
+        }
+        _dirty = true;
+    }
+
+    internal void ExitPptOnlyFromTray()
+    {
+        SetBarIdleModeFromUi(BarIdleMode.Off);
+        if (Ui != null) UiGuard("Activate", () => Ui.Activate());
+    }
+
+    internal void ShowSettingsFromTray()
+    {
+        if (Ui != null) UiGuard("ShowSettings", () => Ui.ShowSettings());
+        _dirty = true;
         NotifyUiStateChanged();
     }
 
@@ -506,6 +535,7 @@ public partial class InkEngine
 
         if (on)
         {
+            BarTempShown = false;
             SetPassThrough(false);          // 开白板顺手关穿透（原样）
             CaptureBoardFreeze();           // 先记下 PDF/图片停在哪一页（切槽前！）
             int from = Doc.PageKey;
@@ -524,6 +554,8 @@ public partial class InkEngine
         {
             LeaveBoardSlot();
             BoardOn = false;
+            if (BarSuppressedNow && !PassThrough && !DocView.IsOpen)
+                SetPassThrough(true);
         }
         Doc.InvalidateAll();
         _dirty = true;
@@ -927,8 +959,24 @@ public partial class InkEngine
     /// 每次渲染前调用一次：让接输入小窗跟着界面这一刻占的地方走。
     /// 界面隐藏或没占地方时把它藏起来——藏起来就等于"不存在于输入里"。
     /// </summary>
+    /// <summary>
+    /// 穿透模式下指针离开小窗时，若 WM_POINTERLEAVE 被希沃白板或其它置顶窗口吃掉，
+    /// `_uiHover` 会永久卡在 true、贴边隐藏再也不收。按光标实际位置兜底清一次。
+    /// </summary>
+    private void ClearStalePassThroughUiHover()
+    {
+        if (PassThrough && _uiHover && !UiCapturing && Ui != null
+            && Native.GetCursorPos(out var pt) && !UiContains(pt.X, pt.Y))
+        {
+            _uiHover = false;
+            UiGuard("PointerLeave", () => Ui.PointerLeave());
+            _dirty = true;
+        }
+    }
+
     private void UpdateUiInputWindow()
     {
+        ClearStalePassThroughUiHover();
         // 截图 / 吸管期间界面是收起的（见 PrepareUi 开头那段）：接输入小窗也一起收——
         // 不然"看不见的工具条"那一条还会把点击吃掉（截图拖框、吸管取色正好要用那一片）。
         bool uiActive = UiVisibleNow && !CaptureActive && !ColorPickActive && !LibraryPlacementMode;
@@ -1093,14 +1141,23 @@ public partial class InkEngine
             case Native.WM_POINTERUP:
             {
                 uint id = (uint)(wParam.ToInt64() & 0xFFFF);
+                uint ptype = 0;
                 if (ReadPointer(id, out float sx, out float sy, out float pressure,
-                                out bool inverted, out uint ptype))
+                                out bool inverted, out ptype))
                 {
                     StampInput(); _cntUp++;
                     UiPointerUp(sx, sy, pressure, ptype == Native.PT_PEN, inverted,
                                 ptype == Native.PT_TOUCH, id);
                 }
-                if (!UiCapturing) Native.ReleaseCapture();
+                if (!UiCapturing)
+                {
+                    Native.ReleaseCapture();
+                    if (ptype == Native.PT_TOUCH)
+                    {
+                        _uiHover = false;
+                        UiGuard("PointerLeave", () => Ui.PointerLeave());
+                    }
+                }
                 _dirty = true;
                 ApplyCursor();
                 return IntPtr.Zero;
@@ -1111,6 +1168,7 @@ public partial class InkEngine
                 _uiPointers.Clear();
                 UiCapturing = false;
                 _uiHover = false;
+                UiGuard("PointerLeave", () => Ui.PointerLeave());
                 _dirty = true;
                 return IntPtr.Zero;
 

@@ -156,30 +156,13 @@ internal sealed partial class OverlayWindow
             _fullFramesLeft = 2;
         }
 
-        if (pages.IsOpen)
-        {
-            // 白板打开后冻结页要一直留着（即使用户先把透明度拉满、或临时进穿透）：
-            // 否则再回来时页图已被 ReleaseAll 放掉，只剩占位。
-            bool keepFrozen = app.BoardFrozenDocPage >= 0;
-            if (hidden && keepFrozen) { pages.ReleaseAllExceptPinned(); app.DocPatch?.ReleaseAll(); }
-            else if (hidden) { pages.ReleaseAll(); pages.StopWanting(); app.DocPatch?.ReleaseAll(); }
-            else
-            {
-                int adopted = pages.SyncWindow(VisibleCanvasRect.MinY, VisibleCanvasRect.MaxY,
-                                               1, DocMemory.CacheMarginScreens);
-                if (adopted > 0)
-                    Console.WriteLine($"[文档] 页缓存 {pages.ResidentPages} 页 / "
-                        + $"{pages.ResidentBytes / 1048576.0:F1} MB");
+        // 窗口级只做一次 DocView 窗口同步；仅直接单测 RenderFrame 时兜底调一次。
+        if (app.DocViewSyncedFrame != app.FrameCounter)
+            app.SyncDocViewWindow(VisibleCanvasRect.MinY, VisibleCanvasRect.MaxY);
 
-                // 高清补丁（PDF >100%）的同步**不在这里**：由引擎每帧调一次
-                // （`InkEngine.SyncDocPatch`，排在相机推给各窗口之后）——一个窗口算一次就够，
-                // 而且必须挑**压在页上**的那个窗口（2026-11-16 评审 P0-2）。
-            }
-        }
-
+        // ⚠ 多屏下只标记、不清单：由引擎在所有窗口都处理完之后统一清除（见 `InkEngine.RenderAll`）。
         if (pages.FullDirty)
         {
-            pages.FullDirty = false;
             _tiles.MarkAllDirty();
             _fullFramesLeft = 2;
         }
@@ -190,7 +173,6 @@ internal sealed partial class OverlayWindow
                 _tiles.MarkDirty(r);
                 _pageDirtyNow.Add(CanvasRectToWindow(r));
             }
-            pages.DirtyRects.Clear();
         }
 
         // 补丁的脏区并进同一条路（装上新补丁 / 放掉旧补丁 / 换倍率都走这里）：
@@ -345,6 +327,9 @@ internal sealed partial class OverlayWindow
 
     /// <summary>本帧时间预算用完、还有可见脏块没烘完（引擎据此在下一个 VBlank 续烘）。</summary>
     internal bool HasPendingDirtyTiles => _tiles.HasPendingDirtyTiles;
+
+    /// <summary>分帧烘焙刚收尾后的追帧（需要把双缓冲另一帧也补齐）。</summary>
+    internal bool HasTileCatchUp => _tiles.CatchUpFramesLeft > 1;
 
     /// <summary>
     /// 空闲瘦身转发：放掉视口外的分块（见 <see cref="CanvasTileCache.TrimOffscreen"/>）。
